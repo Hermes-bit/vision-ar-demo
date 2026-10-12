@@ -134,6 +134,7 @@ function drawReports() {
       .addTo(layers.reports);
 }
 function drawRoutes() {
+  drawRealPosition();
   layers.routes.clearLayers();
   layers.marks.clearLayers();
   const sel = S.nav?.route || S.routes[S.selected];
@@ -298,17 +299,41 @@ function setMode(mode) {
   setSim(false);
   if (n.watch !== null) { navigator.geolocation.clearWatch(n.watch); n.watch = null; }
   n.mode = mode;
+  drawRealPosition();
   if (mode === "gps") {
     if (!navigator.geolocation) { toast("Pas de GPS sur cet appareil."); n.mode = "sim"; return render(); }
-    n.gpsInfo = "Recherche du GPS…";
-    n.watch = navigator.geolocation.watchPosition(onGps, () => { n.gpsInfo = "GPS refusé ou indisponible"; renderNavLive(); },
-                                                  {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
+    n.gpsInfo = "Recherche de votre position… (autorisez la localisation si le téléphone le demande)";
+    n.gpsProblem = null;
+    n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
   }
   render();
 }
+function onGpsError(err) {
+  const n = S.nav;
+  if (!n) return;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  n.gpsProblem = err.code === 1
+    ? `La localisation est refusée. ${ios ? "Réglages → Confidentialité → Service de localisation → Safari (ou Vision AR) → « Lorsque l'app est active »"
+                                         : "Paramètres du navigateur → Autorisations du site → Position → Autoriser"}, puis réessayez.`
+    : "Position introuvable pour l'instant (à l'intérieur, le GPS capte mal). Réessayez à l'extérieur.";
+  n.gpsInfo = "";
+  renderNavLive();
+}
 function onGps(pos) {
   const n = S.nav, p = {lat: pos.coords.latitude, lon: pos.coords.longitude}, acc = pos.coords.accuracy;
+  n.real = {...p, acc};
   n.gpsInfo = acc > 30 ? `Signal GPS faible (± ${Math.round(acc)} m)` : `GPS ± ${Math.round(acc)} m`;
+  drawRealPosition();
+  // Hors de la zone couverte : on le dit clairement, sans tenter de recalcul impossible
+  try {
+    nearestNode(net, p.lat, p.lon);
+    n.gpsProblem = null;
+  } catch {
+    const km = haversineM(p.lat, p.lon, MAIRIE.lat, MAIRIE.lon) / 1000;
+    n.gpsProblem = `Vous êtes à ${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km de Gennevilliers. ` +
+      "Le mode GPS réel ne guide que sur place, dans la zone couverte. Ailleurs, utilisez la simulation (avec la vue caméra 📷 si vous voulez).";
+    return renderNavLive();
+  }
   // point le plus proche du tracé, sans revenir loin en arrière
   const g = n.route.geometry;
   let best = null;
@@ -318,6 +343,9 @@ function onGps(pos) {
     if (!best || pr.d < best.d) best = {d: pr.d, along: n.cum[i - 1] + pr.t * (n.cum[i] - n.cum[i - 1])};
   }
   if (best && best.d <= 30) { n.off = 0; return moveTo(Math.max(n.pos, best.along)); }
+  n.gpsInfo += ` — à ${Math.round(best?.d ?? 0)} m de l'itinéraire`;
+  map.panTo([p.lat, p.lon]);
+  renderNavLive();
   if (acc <= 40 && ++n.off >= 3) {                       // vraiment hors du tracé : nouveau calcul
     n.off = 0;
     try {
@@ -331,6 +359,16 @@ function onGps(pos) {
       renderNavLive();
     }
   }
+}
+let realMarker = null;
+function drawRealPosition() {
+  const r = S.nav?.real;
+  if (!r || S.nav.mode !== "gps") { realMarker?.remove(); realMarker = null; return; }
+  if (!realMarker) realMarker = L.layerGroup().addTo(map);
+  realMarker.clearLayers();
+  L.circle([r.lat, r.lon], {radius: r.acc, color: "#E07A00", weight: 1, fillColor: "#FFB020", fillOpacity: .15, interactive: false}).addTo(realMarker);
+  L.circleMarker([r.lat, r.lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#E07A00", fillOpacity: 1})
+    .bindTooltip("Ma position GPS").addTo(realMarker);
 }
 let wakeLock = null;
 async function requestWakeLock() {
@@ -389,6 +427,9 @@ function screenNav() {
     ${n.mode === "sim" ? `<div class="row"><button class="outl small grow" id="play">${n.timer ? "⏸ Pause" : n.arrived ? "Arrivé" : "▶ Marcher"}</button>
         <div class="seg grow">${[1, 5, 20].map(f => `<button data-speed="${f}" class="${n.factor === f ? "on" : ""}">×${f}</button>`).join("")}</div>
         <button class="outl small" id="rewind" aria-label="Recommencer">↺</button></div>`
+      : n.gpsProblem ? `<div class="msg">📍 ${esc(n.gpsProblem)}</div>
+          <div class="actions"><button class="outl small" data-mode="sim">Revenir à la simulation</button>
+          ${n.real ? `<button class="outl small" id="showMe">Voir ma position</button>` : ""}</div>`
       : `<p class="muted">${esc(n.gpsInfo || "")} — marchez, les consignes suivent votre position.</p>`}
     ${S.message ? `<div class="msg">${esc(S.message)}</div>` : ""}
     <div class="actions"><button class="outl" id="toReport">⚠ Signaler</button>
@@ -503,6 +544,7 @@ function bind() {
   all("[data-mode]", b => b.onclick = () => setMode(b.dataset.mode));
   all("[data-speed]", b => b.onclick = () => { S.nav.factor = +b.dataset.speed; setSim(!!S.nav.timer); });
   on("play", "onclick", () => setSim(!S.nav.timer));
+  on("showMe", "onclick", () => map.setView([S.nav.real.lat, S.nav.real.lon], 15));
   on("rewind", "onclick", () => { S.nav.arrived = false; S.nav.said.clear(); moveTo(0); });
   on("hudBtn", "onclick", () => { S.hud = true; renderHud(); });
   on("arBtn", "onclick", () => openAR({
