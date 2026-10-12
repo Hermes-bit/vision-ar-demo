@@ -165,7 +165,7 @@ function computeRoute() {
     try {
       S.routes = computeRoutes(net, {origin: S.origin, destination: S.dest, profile: profileJson(), compare_shortest: true}, reports()).routes;
       S.selected = 0;
-      map.fitBounds(L.latLngBounds(S.routes[0].geometry.map(p => [p.lat, p.lon])), {padding: [30, 30]});
+      map.fitBounds(L.latLngBounds(S.routes[0].geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 24], paddingBottomRight: [24, 24]});
     } catch (e) {
       if (!(e instanceof RoutingError)) throw e;
       S.message = e.message;
@@ -388,8 +388,8 @@ function screenNav() {
         <button class="outl small" id="rewind" aria-label="Recommencer">↺</button></div>`
       : `<p class="muted">${esc(n.gpsInfo || "")} — marchez, les consignes suivent votre position.</p>`}
     ${S.message ? `<div class="msg">${esc(S.message)}</div>` : ""}
-    <button class="outl full" id="toReport">Signaler un obstacle</button>
-    <button class="big dark" id="stop">Arrêter le guidage</button>`;
+    <div class="actions"><button class="outl" id="toReport">⚠ Signaler</button>
+      <button class="big dark" id="stop">Arrêter</button></div>`;
 }
 function screenReport() {
   return `<h2>Signaler un obstacle</h2><p>Le signalement est placé à votre position actuelle.</p>
@@ -401,7 +401,13 @@ function screenReport() {
 function navCard() {
   let el = document.querySelector(".navcard");
   if (S.screen !== "nav") { el?.remove(); return; }
-  if (!el) { el = document.createElement("div"); el.className = "navcard"; el.setAttribute("aria-live", "polite"); document.body.append(el); }
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "navcard";
+    el.setAttribute("aria-live", "polite");
+    document.body.append(el);
+    sizes.observe(el);
+  }
   const st = navState();
   el.innerHTML = `<span class="arr" aria-hidden="true">${ARROW[st.next.maneuver] || "↑"}</span>
     <div><div class="d">${st.arrived ? "Vous êtes arrivé" : short(st.toManeuver)}</div><div class="s">${esc(st.spoken)}</div>
@@ -413,9 +419,9 @@ function renderHud() {
   if (h.hidden) return;
   const st = navState(), m = st.next.maneuver, r = S.nav.route, acc = S.hc ? "var(--yellow)" : "var(--cyan)";
   let body;
-  if (st.arrived) body = `<div style="font-size:44px;color:${acc}">Vous êtes arrivé</div><div></div>`;
+  if (st.arrived) body = `<div class="big" style="color:${acc}">Vous êtes arrivé</div><div></div>`;
   else if (S.hc) body = `<div class="main"><span class="arr" style="color:var(--yellow)">${ARROW[m] || "↑"}</span>
-      <div><div style="color:var(--yellow);font-size:40px">${VERB[m] || "TOUT DROIT"}</div><div style="font-size:60px">${short(st.toManeuver)}</div></div></div>`;
+      <div><div class="verb" style="color:var(--yellow)">${VERB[m] || "TOUT DROIT"}</div><div class="dist">${short(st.toManeuver)}</div></div></div>`;
   else body = `<div class="main"><span class="arr" style="color:var(--cyan)">${ARROW[m] || "↑"}</span>
       <div><div class="dist" style="color:var(--cyan)">${short(st.toManeuver)}</div><div class="street">${esc(st.next.street)}</div></div></div>`;
   if (!st.arrived) body += st.next.alerts.length && st.toManeuver < 60
@@ -444,9 +450,29 @@ function renderNavLive() {
   if (S.screen === "nav") { $("panel").innerHTML = screenNav(); bind(); navCard(); }
   renderHud();
   if (S.nav?.marker) S.nav.marker.setLatLng([S.nav.here.lat, S.nav.here.lon]);
-  if (S.screen === "nav" && S.nav && !map.getBounds().pad(-0.2).contains([S.nav.here.lat, S.nav.here.lon]))
-    map.panTo([S.nav.here.lat, S.nav.here.lon]);
+  if (S.screen === "nav" && S.nav) followPosition();
 }
+// Partie de la carte réellement visible : ni sous le bandeau bleu, ni sous le panneau
+function visiblePadding() {
+  const css = getComputedStyle(document.documentElement);
+  const px = name => parseFloat(css.getPropertyValue(name)) || 0;
+  const side = matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
+  return {paddingTopLeft: [24, px("--card-h") + 24], paddingBottomRight: [24, (side ? 0 : px("--panel-h")) + 24]};
+}
+function followPosition() {
+  map.panInside([S.nav.here.lat, S.nav.here.lon], {...visiblePadding(), animate: true});
+}
+// Mesure en continu la hauteur du panneau et du bandeau (rotation, clavier, contenu)
+const sizes = new ResizeObserver(() => {
+  const root = document.documentElement.style;
+  root.setProperty("--panel-h", `${S.screen === "nav" ? $("panel").offsetHeight : 0}px`);
+  const card = document.querySelector(".navcard");
+  root.setProperty("--card-h", `${card ? card.offsetTop + card.offsetHeight : 0}px`);
+  map.invalidateSize();
+});
+sizes.observe($("panel"));
+sizes.observe($("map"));
+
 function go(screen) { S.screen = screen; S.message = null; render(); }
 function saveProfile() { store.set("va-profile", {mobilities: [...S.mobilities], maxSlope: S.maxSlope, steps: S.steps}); }
 
@@ -465,7 +491,12 @@ function bind() {
   all("[data-place]", p => p.onclick = () => { S.dest = S.places[+p.dataset.place]; S.query = S.dest.label; S.places = []; computeRoute(); });
   all("[data-pick]", b => b.onclick = () => { S.pick = b.dataset.pick; render(); });
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
-  on("start", "onclick", () => { startNav(S.routes[S.selected]); go("nav"); map.setView([S.nav.here.lat, S.nav.here.lon], 18); });
+  on("start", "onclick", () => {
+    startNav(S.routes[S.selected]);
+    go("nav");
+    map.setView([S.nav.here.lat, S.nav.here.lon], 18, {animate: false});
+    requestAnimationFrame(followPosition);
+  });
   all("[data-mode]", b => b.onclick = () => setMode(b.dataset.mode));
   all("[data-speed]", b => b.onclick = () => { S.nav.factor = +b.dataset.speed; setSim(!!S.nav.timer); });
   on("play", "onclick", () => setSim(!S.nav.timer));
