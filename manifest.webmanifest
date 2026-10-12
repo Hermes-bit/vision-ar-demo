@@ -1,0 +1,17 @@
+{
+  "name": "Vision AR — guidage piéton accessible",
+  "short_name": "Vision AR",
+  "description": "Itinéraires piétons accessibles (pentes, marches, bordures) — démonstration sur Gennevilliers.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F4F1EA",
+  "theme_color": "#1F4FD1",
+  "icons": [
+    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

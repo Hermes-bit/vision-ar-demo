@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vision AR</title>
+<meta name="description" content="Guidage piéton accessible — démonstration sur Gennevilliers">
+<meta name="theme-color" content="#1F4FD1">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vision AR">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.min.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="map" aria-label="Plan"></div>
+<section id="panel" aria-live="polite"></section>
+<div id="hud" hidden></div>
+<div id="toast" role="status" hidden></div>
+<script src="vendor/leaflet/leaflet.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

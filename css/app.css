@@ -1,0 +1,105 @@
+/* Vision AR — démo mobile. Palette et tailles reprises de l'appli Android
+   (ui/Theme.kt, ui/Screens.kt) : contrastes ≥ 4,5:1, cibles tactiles ≥ 56 px. */
+:root {
+  --ink: #0F1419; --paper: #F4F1EA; --surface: #fff; --blue: #1F4FD1; --on-blue: #fff;
+  --ok: #0B5A36; --okbg: #E3F2EA; --warnbg: #FDF0CC; --warn: #6B4A00; --line: #79747E; --muted: #555;
+  --chip-on: #DCE2F9; --cyan: #6FE3FF; --amber: #FFC93C; --yellow: #FFE600;
+  --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #F4F1EA; --paper: #0F1419; --surface: #1C2228; --blue: #9DB4FF; --on-blue: #0F1419;
+          --ok: #8FD9B0; --okbg: #12301f; --warnbg: #3a2e0a; --warn: #FFD98A; --line: #8b8792; --muted: #b8b4ad;
+          --chip-on: #2b3a6b; }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }   /* sinon un display: flex plus bas l'emporte sur l'attribut hidden */
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { background: var(--paper); color: var(--ink); font-family: Roboto, "Segoe UI", system-ui, -apple-system, sans-serif; }
+button, input { font: inherit; color: inherit; }
+h2 { font-size: 26px; line-height: 30px; margin: 0; font-weight: 700; }
+p { margin: 0; }
+
+/* Mise en page : plan en haut, panneau en bas ; selon l'écran l'un ou l'autre domine */
+#map { position: fixed; left: 0; right: 0; top: 0; height: 42vh; z-index: 0; background: #ddd; }
+#panel { position: fixed; left: 0; right: 0; bottom: 0; top: 42vh; overflow-y: auto; background: var(--paper);
+  padding: 18px 18px calc(18px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 14px;
+  border-radius: 18px 18px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,.12); z-index: 500; }
+body.full #map { display: none; }
+body.full #panel { top: 0; border-radius: 0; padding-top: calc(18px + var(--safe-top)); }
+body.nav #map { height: 100vh; }
+body.nav #panel { top: auto; max-height: 46vh; }
+
+.row { display: flex; align-items: center; gap: 8px; }
+.grow { flex: 1; }
+.muted { color: var(--muted); font-size: 14px; }
+.chip-sel { width: 100%; min-height: 56px; border: 1px solid var(--line); border-radius: 10px; background: transparent;
+  font-size: 17px; text-align: left; padding: 0 16px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.chip-sel.on { background: var(--chip-on); border-color: transparent; }
+.chip-sel.on::before { content: "✓"; font-weight: 700; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 28px; overflow: hidden; }
+.seg button { flex: 1; min-height: 44px; border: 0; background: transparent; font-size: 15px; cursor: pointer; }
+.seg button.on { background: var(--blue); color: var(--on-blue); font-weight: 700; }
+.card { background: var(--surface); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.card b.t { font-size: 18px; }
+.big { min-height: 56px; border: 0; border-radius: 14px; background: var(--blue); color: var(--on-blue); font-size: 18px;
+  font-weight: 700; width: 100%; cursor: pointer; }
+.big:disabled { opacity: .45; cursor: not-allowed; }
+.big.dark { background: var(--ink); color: var(--paper); font-weight: 500; border-radius: 28px; font-size: 17px; }
+.outl { min-height: 56px; border: 1px solid var(--line); border-radius: 28px; background: transparent; color: var(--blue);
+  font-size: 16px; padding: 0 18px; cursor: pointer; }
+.outl.full { width: 100%; }
+.outl.small { min-height: 44px; font-size: 15px; padding: 0 14px; }
+.msg { background: var(--warnbg); color: var(--warn); border-radius: 12px; padding: 14px; font-size: 16px; }
+input[type=text] { width: 100%; min-height: 56px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface);
+  font-size: 17px; padding: 0 14px; }
+.place { min-height: 56px; padding: 10px 12px; font-size: 16px; border-radius: 8px; cursor: pointer; display: flex;
+  flex-direction: column; justify-content: center; background: var(--surface); }
+.place small { color: var(--muted); font-size: 12px; }
+.switch { appearance: none; width: 52px; height: 32px; border-radius: 16px; background: #E6E0E9; border: 2px solid var(--line);
+  position: relative; cursor: pointer; flex: none; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: var(--line);
+  top: 6px; left: 6px; transition: .15s; }
+.switch:checked { background: var(--blue); border-color: var(--blue); }
+.switch:checked::after { background: #fff; width: 24px; height: 24px; top: 2px; left: 22px; }
+input[type=range] { width: 100%; accent-color: var(--blue); }
+.rcard { background: var(--surface); border-radius: 12px; padding: 14px 16px; cursor: pointer; border: 3px solid transparent;
+  display: flex; flex-direction: column; gap: 8px; }
+.rcard.sel { border-color: var(--blue); }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: 13px; font-weight: 700; border-radius: 6px; padding: 4px 8px; }
+.tag.ok { background: var(--okbg); color: var(--ok); }
+.tag.ko { background: var(--warnbg); color: var(--warn); }
+
+/* Guidage */
+.navcard { position: fixed; left: 12px; right: 12px; top: calc(12px + var(--safe-top)); z-index: 600; background: #1F4FD1;
+  color: #fff; border-radius: 14px; padding: 14px 16px; display: flex; align-items: center; gap: 14px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+.navcard .arr { font-size: 54px; line-height: 1; min-width: 48px; text-align: center; }
+.navcard .d { font-size: 32px; font-weight: 700; }
+.navcard .s { font-size: 16px; }
+.navcard .alert { margin-top: 6px; background: var(--amber); color: #0F1419; border-radius: 8px; padding: 3px 8px;
+  font-size: 14px; font-weight: 700; display: inline-block; }
+.stats { display: flex; gap: 14px; font-size: 18px; font-weight: 700; }
+.stats span { font-weight: 400; color: var(--muted); font-size: 14px; display: block; }
+
+/* Vue lunettes : le noir est transparent sur un guide d'onde */
+#hud { position: fixed; inset: 0; z-index: 1000; background: #000; color: #fff; padding: calc(28px + var(--safe-top)) 24px 28px;
+  display: flex; flex-direction: column; justify-content: space-between; font-weight: 700; }
+#hud .main { display: flex; align-items: center; gap: 18px; }
+#hud .arr { font-size: 110px; line-height: 1; }
+#hud .dist { font-size: 56px; }
+#hud .street { font-size: 24px; font-weight: 400; }
+#hud .alert { border: 3px solid var(--amber); border-radius: 16px; padding: 12px; color: var(--amber); font-size: 30px; }
+#hud .alert span { display: block; color: #fff; font-size: 20px; font-weight: 400; }
+#hud .chips { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#hud .chips i { font-style: normal; border: 2px solid var(--cyan); color: var(--cyan); border-radius: 10px; padding: 6px 12px; font-size: 18px; }
+#hud .close { color: #777; font-size: 14px; font-weight: 400; text-align: center; }
+
+#toast { position: fixed; left: 16px; right: 16px; bottom: calc(20px + var(--safe-bottom)); z-index: 1100; background: #0F1419;
+  color: #fff; border-radius: 12px; padding: 14px 16px; font-size: 15px; box-shadow: 0 6px 18px rgba(0,0,0,.3); }
+
+.legend { background: #fff; color: #0F1419; padding: 6px 8px; border-radius: 8px; font-size: 11px; line-height: 1.5; }
+.legend i { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.poi { font-size: 18px; text-shadow: 0 0 3px #fff; }
+.me { width: 22px; height: 22px; border-radius: 50%; background: #1F4FD1; border: 4px solid #fff; box-shadow: 0 0 0 2px rgba(31,79,209,.4); }
+.leaflet-container { font: inherit; }
