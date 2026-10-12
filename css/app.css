@@ -148,3 +148,52 @@ input[type=range] { width: 100%; accent-color: var(--blue); }
 .poi { font-size: 18px; text-shadow: 0 0 3px #fff; }
 .me { width: 22px; height: 22px; border-radius: 50%; background: #1F4FD1; border: 4px solid #fff; box-shadow: 0 0 0 2px rgba(31,79,209,.4); }
 .leaflet-container { font: inherit; }
+
+/* ---- Vue caméra (réalité augmentée) — d'après la maquette « À droite dans 6 m » ---- */
+#ar { position: fixed; inset: 0; z-index: 1050; background: #20303c; overflow: hidden; color: #fff; }
+#ar video, #ar canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#ar.no-camera { background: linear-gradient(#9ec9e6 0 46%, #8d8a86 46% 100%); }
+#ar .ar-ui { position: absolute; inset: 0; pointer-events: none;
+  padding: calc(12px + var(--safe-top)) calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) calc(12px + var(--safe-left)); }
+#ar .ar-ui button { pointer-events: auto; }
+#ar .ar-chip, #ar .ar-step, #ar .ar-bottom, #ar .ar-tools button, #ar .ar-note {
+  background: rgba(28, 38, 48, .82); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+#ar .ar-chip { position: absolute; top: calc(12px + var(--safe-top)); left: calc(12px + var(--safe-left));
+  border-radius: 20px; padding: 8px 14px; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+#ar .ar-chip i { width: 10px; height: 10px; border-radius: 50%; background: #2fd27a; }
+#ar .ar-alert { position: absolute; top: calc(58px + var(--safe-top)); left: calc(12px + var(--safe-left));
+  width: min(300px, 46vw); background: rgba(240, 82, 88, .93); border-radius: 14px; padding: 12px 14px;
+  display: flex; gap: 12px; align-items: center; }
+#ar .ar-alert svg { width: 38px; height: 38px; flex: none; fill: none; stroke: #fff; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+#ar .ar-alert b { display: block; font-size: 17px; }
+#ar .ar-alert span { font-size: 14px; opacity: .92; }
+#ar .ar-step { position: absolute; top: calc(12px + var(--safe-top)); left: 50%; transform: translateX(-50%);
+  width: min(420px, calc(100% - 24px - var(--safe-left) - var(--safe-right))); border-radius: 16px; padding: 12px 16px;
+  display: flex; gap: 14px; align-items: center; }
+#ar .ar-icon { width: 52px; height: 52px; flex: none; border-radius: 50%; background: rgba(57, 208, 255, .18);
+  display: grid; place-items: center; }
+#ar .ar-icon svg { width: 32px; height: 32px; fill: none; stroke: #39d0ff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+#ar .ar-step b { display: block; font-size: clamp(20px, 6vw, 24px); }
+#ar .ar-step span { display: block; font-size: 15px; opacity: .85; margin-top: 2px; overflow-wrap: anywhere; }
+#ar .ar-bottom { align-self: stretch; border-radius: 16px; padding: 14px 18px; display: flex; flex-wrap: wrap;
+  gap: 4px 16px; justify-content: space-between; align-items: baseline; font-size: 15px; }
+#ar .ar-bottom > b { font-size: 16px; }
+#ar .ar-bottom em { font-style: normal; }
+#ar .ar-bottom em.ok { color: #2fd27a; }
+#ar .ar-bottom em.warn { color: #ffc93c; }
+#ar .ar-foot { position: absolute; left: calc(12px + var(--safe-left)); right: calc(12px + var(--safe-right));
+  bottom: calc(12px + var(--safe-bottom)); display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+#ar .ar-tools { display: flex; flex-direction: column; gap: 10px; }
+#ar .ar-tools button { width: 52px; height: 52px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); color: #fff;
+  font-size: 20px; cursor: pointer; }
+#ar .ar-tools button.on { background: rgba(31, 79, 209, .9); }
+#ar .ar-note { align-self: center; border-radius: 10px; padding: 6px 12px; font-size: 13px; }
+/* Écran large (paysage, tablette) : la consigne se place à droite de l'alerte */
+@media (min-width: 601px) {
+  #ar .ar-step { left: max(calc(50% - 210px), calc(24px + var(--safe-left) + min(300px, 46vw))); transform: none; }
+}
+/* En portrait étroit, la consigne passe sous le profil pour ne rien chevaucher */
+@media (max-width: 600px) {
+  #ar .ar-step { top: calc(58px + var(--safe-top)); }
+  #ar .ar-alert { top: calc(150px + var(--safe-top)); width: auto; right: auto; max-width: calc(100% - 24px); }
+}

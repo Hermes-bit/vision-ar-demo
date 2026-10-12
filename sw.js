@@ -1,9 +1,9 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication pour que les téléphones prennent la mise à jour.
-const VERSION = "vision-ar-v2";
+const VERSION = "vision-ar-v3";
 const MAX_TILES = 600;
 const APP = [
-  "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js",
+  "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js", "js/ar.js",
   "data/gennevilliers.json", "vendor/leaflet/leaflet.min.js", "vendor/leaflet/leaflet.min.css",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png", "icons/favicon-32.png",
 ];

@@ -1,6 +1,7 @@
 // Vision AR — démo web mobile (installable sur l'écran d'accueil).
 // Écrans repris de l'appli Android (phone/ui/Screens.kt) ; itinéraires calculés
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
+import {openAR} from "./ar.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel"], ["electric_wheelchair", "Fauteuil électrique"],
@@ -323,6 +324,7 @@ function onGps(pos) {
       const res = computeRoutes(net, {origin: p, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
       say("Nouvel itinéraire.", true);
       startNav(res.routes[0]);
+      S.nav.rerouted = {at: Date.now(), title: "Hors de l'itinéraire"};
       setMode("gps");
     } catch (e) {
       n.gpsInfo = e instanceof RoutingError ? e.message : String(e);
@@ -380,6 +382,7 @@ function routeCard(r, i) {
 function screenNav() {
   const n = S.nav, st = navState(), mins = Math.ceil(st.remaining / speed() / 60);
   return `<div class="row"><div class="stats grow"><div>${short(st.remaining)}<span>restants</span></div><div>${mins} min<span>à ${fmt1(speed() * 3.6)} km/h</span></div></div>
+      <button class="outl small" id="arBtn" aria-label="Vue caméra">📷</button>
       <button class="outl small" id="hudBtn" aria-label="Vue lunettes">👓</button>
       <button class="outl small" id="voiceBtn" aria-label="${S.voice ? "Couper la voix" : "Activer la voix"}">${S.voice ? "🔊" : "🔇"}</button></div>
     <div class="seg"><button data-mode="sim" class="${n.mode === "sim" ? "on" : ""}">Simulation</button><button data-mode="gps" class="${n.mode === "gps" ? "on" : ""}">GPS réel</button></div>
@@ -502,6 +505,12 @@ function bind() {
   on("play", "onclick", () => setSim(!S.nav.timer));
   on("rewind", "onclick", () => { S.nav.arrived = false; S.nav.said.clear(); moveTo(0); });
   on("hudBtn", "onclick", () => { S.hud = true; renderHud(); });
+  on("arBtn", "onclick", () => openAR({
+    state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
+                           mobility: primary(), mode: S.nav.mode, playing: !!S.nav.timer},
+    togglePlay: () => setSim(!S.nav.timer),
+    toast,
+  }));
   on("voiceBtn", "onclick", () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) speechSynthesis?.cancel(); renderNavLive(); });
   on("toReport", "onclick", () => { setSim(false); go("report"); });
   on("stop", "onclick", () => { stopNav(); S.nav = null; wakeLock?.release?.(); go("route"); });
@@ -514,6 +523,7 @@ function bind() {
       try {
         const res = computeRoutes(net, {origin: at, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
         startNav(res.routes[0]);
+        S.nav.rerouted = {at: Date.now(), title: b.dataset.report === "elevator_out" ? "Ascenseur en panne" : "Trottoir bloqué"};
         if (S.nav.mode === "gps") setMode("gps");          // relance le suivi GPS sur le nouveau tracé
         S.message += " Itinéraire recalculé depuis votre position.";
       } catch (e) {
@@ -544,3 +554,7 @@ fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
 }).catch(err => {
   $("panel").innerHTML = `<h2>Vision AR</h2><div class="msg">Impossible de charger le plan : ${esc(err.message)}</div>`;
 });
+
+// Accès pour les tests automatiques uniquement (adresse terminée par ?debug)
+if (new URLSearchParams(location.search).has("debug"))
+  window.__va = {S, posAt, navState, moveTo, get net() { return net; }, addReport, reports};

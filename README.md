@@ -16,7 +16,12 @@ pentes, marches, bordures de trottoir, feux sonores, revêtement.
    - **Simulation** : la position avance seule le long de l'itinéraire (×1, ×5, ×20) ;
    - **GPS réel** : sur place à Gennevilliers, les consignes suivent votre position
      et l'itinéraire est recalculé si vous vous en écartez.
-4. 👓 affiche la vue des lunettes connectées ; 🔊 coupe ou active la voix.
+4. 📷 ouvre la **vue caméra** : la rue filmée, avec l'itinéraire dessiné au sol,
+   la prochaine consigne et les étiquettes (travaux signalés, trottoir abaissé,
+   marche, montée…). En simulation, la vue suit le sens de l'itinéraire ; en GPS
+   réel, elle suit la boussole (🧭 pour basculer). Les étiquettes viennent des
+   données, pas d'une reconnaissance d'image : précision de quelques mètres.
+5. 👓 affiche la vue des lunettes connectées ; 🔊 coupe ou active la voix.
 
 Tout fonctionne sur le téléphone, même hors ligne une fois ouvert (sauf la
 recherche d'adresse et le fond de carte non encore vu). Les signalements
