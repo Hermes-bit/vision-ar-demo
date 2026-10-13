@@ -119,8 +119,9 @@ function buzz(kind) {
   if (window.VisionARNative) { window.VisionARNative.vibrate(JSON.stringify(pattern)); return; }
   if (navigator.vibrate) { navigator.vibrate(pattern); return; }
   if (!IOS) return;
-  let t = 0;
-  pattern.forEach((ms, i) => { if (i % 2 === 0) setTimeout(iosTap, t); t += Math.max(ms, 120); });
+  iosTap();
+  let t = Math.max(pattern[0], 120);
+  pattern.forEach((ms, i) => { if (i % 2 === 0 && i > 0) setTimeout(iosTap, t); if (i > 0) t += Math.max(ms, 120); });
 }
 const hapticsNote = () => window.VisionARNative || navigator.vibrate ? "" : IOS
   ? "Sur iPhone, Safari ne donne pas accès au vibreur : de petits « tics » sont tentés (iOS 18 et plus), sans garantie. La voix reste le repère principal."
@@ -194,6 +195,7 @@ function removeReport(id) {
   drawReports();
   toast("Signalement retiré.");
   if (S.screen === "route" && S.dest) computeRoute();
+  if (S.screen === "settings") render();
 }
 function drawReports() {
   layers.reports.clearLayers();
@@ -585,6 +587,60 @@ function screenProfile() {
   <p class="fine">${icon("shield-check")} Démonstration sur Gennevilliers. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
     Réseau © OpenStreetMap (ODbL), pentes © IGN.</p>`;
 }
+// ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
+const APP_VERSION = "22";
+function screenSettings() {
+  const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
+  const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
+      ${value ? `<span class="set-val">${value}</span>` : ""}${chevron ? icon("chevron-right") : ""}</button>`;
+  const sw = (id, ic, label, on) => `<label class="setting">${icon(ic)}<span class="grow">${label}</span>
+      <input type="checkbox" class="switch" id="${id}" ${on ? "checked" : ""}></label>`;
+  const info = (ic, title, body) => `<details class="set-info"><summary>${icon(ic)}<span class="grow">${title}</span>${icon("chevron-right")}</summary>
+      <div class="set-text">${body}</div></details>`;
+  const mine = reports();
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  return `<header class="hero">
+    <div class="brand"><button class="icon-btn" id="settingsBack" aria-label="Retour">${icon("arrow-left")}</button>
+      <span class="grow">Paramètres</span></div></header>
+  <section class="card">
+    <div class="set-row static">${icon("map-pin")}<span class="grow">Ville</span><span class="set-val">Gennevilliers</span></div>
+    ${sess ? `<div class="set-row static">${icon("user-round")}<span class="grow">Compte</span><span class="set-val">Bonjour ${esc(sess.name.split(" ")[0])}&nbsp;!</span></div>` : ""}
+    ${row("setProfile", mob?.[2] || "accessibility", "Mon profil de mobilité", esc(mob?.[1] || ""))}
+  </section>
+  <section class="card"><h3>${icon("navigation")} Guidage</h3>
+    ${sw("setVoice", "volume-2", "Consignes à la voix", S.voice)}
+    ${sw("setHaptics", "vibrate", "Vibrations de direction", S.haptics)}
+    ${row("testHaptics", "vibrate", "Tester la vibration", "", false)}
+    ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
+  </section>
+  <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
+  <section class="card"><h3>${icon("triangle-alert")} Mes signalements</h3>
+    ${mine.length ? mine.map(r => {
+      const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
+      return `<div class="set-row static">${icon(k[2])}<span class="grow">${k[1]}${r.blocking ? " — bloquant" : ""}
+        <small>expire le ${new Date(r.expires).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"})}</small></span>
+        <button class="icon-btn" data-unreport="${r.id}" aria-label="Retirer ce signalement">${icon("trash-2")}</button></div>`;
+    }).join("") : `<p class="fine">Aucun signalement sur ce téléphone.</p>`}
+  </section>
+  <section class="card">
+    ${standalone ? "" : row("setInstall", "smartphone", "Installer sur l'écran d'accueil")}
+    ${row("setShare", "share-2", "Partager l'appli")}
+    ${row("setLogout", "log-out", "Se déconnecter", "", false)}
+  </section>
+  <section class="card">
+    ${info("shield-check", "Confidentialité", `<p>Vos itinéraires sont calculés sur ce téléphone. Votre compte, votre profil et vos signalements restent
+      enregistrés sur ce téléphone : rien n'est envoyé à Geomessen. La position GPS ne sert qu'au guidage et n'est pas conservée.</p>
+      <p>La recherche d'adresse interroge le service public de la Géoplateforme (IGN) avec le texte saisi.</p>`)}
+    ${info("file-text", "Conditions d'utilisation", `<p>Vision AR est une démonstration. Les itinéraires sont indicatifs : restez attentif à
+      l'environnement, aux traversées et aux obstacles non signalés. Les données d'accessibilité peuvent être incomplètes.</p>`)}
+    ${info("database", "Sources de données", `<p>Réseau piéton et lieux : © les contributeurs d'OpenStreetMap (licence ODbL).<br>
+      Relief et pentes : © IGN (Géoplateforme, altimétrie).<br>Recherche d'adresse : Géoplateforme IGN.<br>
+      Fond de carte : © OpenStreetMap.</p>`)}
+    ${info("scale", "Mentions légales", `<p>Vision AR — Geomessen Burkina Faso.<br>Icônes : Lucide (licence ISC). Police : Atkinson Hyperlegible
+      (licence SIL OFL).</p>`)}
+  </section>
+  <p class="fine set-version">Vision AR version ${APP_VERSION} · Geomessen Burkina Faso</p>`;
+}
 function screenRoute() {
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
@@ -690,8 +746,8 @@ function renderHud() {
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
-  document.body.className = authScreen ? "full auth-screen" : S.screen === "profile" ? "full" : nav ? "nav-ar" : "sheet";
-  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute}[S.screen]();
+  document.body.className = authScreen ? "full auth-screen" : S.screen === "profile" || S.screen === "settings" ? "full" : nav ? "nav-ar" : "sheet";
+  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings}[S.screen]();
   if (authScreen) bindAuth($("panel"), authCtx); else bind();
   renderHud();
   syncLayers();
@@ -708,6 +764,17 @@ function render() {
       document.body.append(mc);
     }
   } else mc?.remove();
+  let ms = $("mapSettings");
+  if (S.screen === "route") {
+    if (!ms) {
+      ms = document.createElement("button");
+      ms.id = "mapSettings"; ms.className = "map-settings";
+      ms.setAttribute("aria-label", "Paramètres");
+      ms.innerHTML = icon("settings");
+      ms.onclick = () => go("settings");
+      document.body.append(ms);
+    }
+  } else ms?.remove();
   syncGuard();
   layoutSheet();
   setTimeout(() => map.invalidateSize(), 0);
@@ -822,6 +889,7 @@ function stepBack() {
   if (S.screen === "nav") return confirmQuit();
   if (S.screen === "route" && S.dest) return closeRoutes();
   if (S.screen === "route") return go("profile");
+  if (S.screen === "settings") return go("route");
 }
 function forward() {
   if (S.screen === "welcome") { resetForm(); return go("login"); }
@@ -927,6 +995,30 @@ function bind() {
   all("[data-pick]", b => b.onclick = () => { S.pick = b.dataset.pick; render(); });
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
   on("start", "onclick", startGuidance);
+  // Paramètres
+  on("settingsBack", "onclick", () => go("route"));
+  on("setProfile", "onclick", () => go("profile"));
+  on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
+  on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
+  on("testHaptics", "onclick", () => {
+    const was = S.haptics; S.haptics = true; buzz("left"); S.haptics = was;
+    toast(window.VisionARNative || navigator.vibrate ? "2 impulsions : « tournez à gauche »." :
+      IOS ? "Sur iPhone, Safari ne donne pas accès au vibreur : si rien ne vibre, c'est cette limite. La voix reste disponible." :
+      "Ce navigateur ne permet pas les vibrations.", 6000);
+  });
+  on("setInstall", "onclick", async () => {
+    if (installPrompt) { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; return render(); }
+    toast(IOS ? "Bouton Partager de Safari, puis « Sur l'écran d'accueil »." : "Menu ⋮ du navigateur, puis « Ajouter à l'écran d'accueil ».", 6000);
+  });
+  on("setShare", "onclick", async () => {
+    const url = "https://hermes-bit.github.io/vision-ar-demo/";
+    try {
+      if (navigator.share) await navigator.share({title: "Vision AR", text: "Guidage piéton accessible — Geomessen", url});
+      else { await navigator.clipboard.writeText(url); toast("Lien copié."); }
+    } catch { /* partage annulé */ }
+  });
+  on("setLogout", "onclick", () => { logout(); resetForm(); Object.assign(S, {dest: null, routes: [], query: ""}); go("welcome"); });
+  all("[data-unreport]", b => b.onclick = () => removeReport(+b.dataset.unreport));
 }
 
 // Vue lunettes : toucher pour fermer, appui long pour le contraste élevé
