@@ -299,14 +299,6 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 .me span { width: 18px; height: 18px; border-radius: 50%; background: #007489; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(15, 37, 55, .4); }
 @keyframes pulse { 50% { box-shadow: 0 0 0 10px rgba(0, 174, 204, 0); background: rgba(0, 174, 204, .4); } }
 @media (prefers-reduced-motion: reduce) { .me { animation: none; } * { transition: none !important; } }
-.legend { background: rgba(255, 255, 255, .95); color: #0F2537; padding: 8px 10px; border-radius: 12px; font-size: 12px; line-height: 1.3;
-  box-shadow: var(--shadow); display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 260px; }
-.legend b { width: 100%; font-size: 12px; }
-.legend span { display: inline-flex; align-items: center; gap: 5px; }
-.legend i { display: inline-block; width: 18px; height: 5px; border-radius: 3px; }
-.legend i.dash { background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 9px); }
-.legend i.dots { background: radial-gradient(circle, var(--c) 1.6px, transparent 1.8px) 0 50% / 6px 6px repeat-x; height: 6px; }
-body.zoomed-out .legend { display: none; }
 .leaflet-control-attribution { border-radius: 8px 0 0 0; font-size: 11px; }
 
 /* ---- Vue lunettes : le noir est transparent sur un guide d'onde ------------------------------------- */

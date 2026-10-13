@@ -22,7 +22,6 @@ const POI = {elevator: ["elevator", "Ascenseur"], accessible_toilet: ["toilet", 
 const KIND_LABEL = {sidewalk: "Trottoir", crossing: "Passage piéton", footway: "Chemin piéton", street: "Rue",
   path: "Sentier", steps: "Escalier", pedestrian: "Voie piétonne", elevator: "Ascenseur", ramp: "Rampe"};
 // Pentes sur la carte : teintes distinguables par les daltoniens, contraste >= 3:1 sur le fond OSM
-const SLOPE = [[2, "#1F8A70", "≤ 2 %"], [5, "#A86F00", "2 à 5 %"], [8, "#D9480F", "5 à 8 %"], [Infinity, "#7B2D8E", "> 8 %"]];
 const C = {route: "#00AECC", routeCase: "#00495A", alt: "#6B7C8F", primary: "#007489", unknown: "#5C6B7A", step: "#0F2537"};
 const MAIRIE = {label: "Mairie de Gennevilliers", lat: 48.925459, lon: 2.294045};
 const GEOCODER = "https://data.geopf.fr/geocodage/search/";
@@ -139,31 +138,13 @@ function toast(text, ms = 3500) {
 const map = L.map("map", {zoomControl: false, preferCanvas: true}).setView([MAIRIE.lat, MAIRIE.lon], 16);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19,
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · relief © IGN'}).addTo(map);
-const layers = {net: L.layerGroup(), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
+const layers = {pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 
-function slopeColor(e) {
-  if (e.has_step) return C.step;
-  if (e.slope_pct === null) return C.unknown;
-  return SLOPE.find(([max]) => Math.abs(e.slope_pct) <= max)[1];
-}
-function edgePopup(e) {
-  const src = {dem: "relief IGN", osm: "OpenStreetMap", survey: "relevé terrain"}[e.slope_source] || "";
-  const line = (ic, label, value) => `<div class="pp-row">${icon(ic)}<span>${label}</span><b>${value}</b></div>`;
-  return `<div class="pp"><div class="pp-title">${esc(e.name) || KIND_LABEL[e.kind] || e.kind}</div>
-    ${line("ruler", "Longueur", `${fmt1(e.length_m)} m`)}
-    ${line("mountain", "Pente", e.slope_pct === null ? "inconnue" : `${e.slope_pct > 0 ? "+" : ""}${fmt1(e.slope_pct)} %`)}
-    ${src ? `<div class="pp-src">source : ${src}</div>` : ""}
-    ${e.has_step ? line("stairs", "Marche", "oui") : ""}
-    ${e.is_crossing ? line("accessibility", "Bordures", e.kerb_lowered === null ? "inconnues" : e.kerb_lowered ? "abaissées" : "hautes") +
-                      line("volume-2", "Feu sonore", e.sound_signal === null ? "inconnu" : e.sound_signal ? "oui" : "non") : ""}</div>`;
-}
 const pin = (ic, cls) => L.divIcon({className: "", html: `<div class="pin ${cls}">${icon(ic)}</div>`,
   iconSize: [34, 42], iconAnchor: [17, 40], popupAnchor: [0, -36]});
 function drawNetwork() {
-  for (const e of net.edges)
-    L.polyline(e.shape, {color: slopeColor(e), weight: e.is_crossing ? 5 : 4, opacity: .9, lineCap: "round",
-      dashArray: e.has_step ? "1 7" : e.slope_pct === null ? "5 6" : null}).bindPopup(() => edgePopup(e)).addTo(layers.net);
+  // Le réseau piéton et ses pentes servent au calcul des itinéraires (base de données) : ils ne sont plus dessinés
   for (const [kind, lat, lon, name, status] of net.pois) {
     if (!POI[kind]) continue;
     L.marker([lat, lon], {icon: pin(POI[kind][0], "pin-poi"), title: POI[kind][1]})
@@ -172,17 +153,9 @@ function drawNetwork() {
       .addTo(layers.pois);
   }
   L.geoJSON(net.zone.boundary, {style: {color: C.primary, weight: 2, fill: false, dashArray: "6 8", opacity: .7}, interactive: false}).addTo(map);
-  const legend = L.control({position: "bottomleft"});
-  legend.onAdd = () => {
-    const d = L.DomUtil.create("div", "legend");
-    d.innerHTML = `<b>Pente</b>${SLOPE.map(([, c, l]) => `<span><i style="background:${c}"></i>${l}</span>`).join("")}
-      <span><i class="dash" style="--c:${C.unknown}"></i>inconnue</span><span><i class="dots" style="--c:${C.step}"></i>marche</span>`;
-    return d;
-  };
-  legend.addTo(map);
   syncLayers = () => {
     const show = map.getZoom() >= 16 && S.screen !== "nav";
-    for (const l of [layers.net, layers.pois]) show ? l.addTo(map) : l.remove();
+    show ? layers.pois.addTo(map) : layers.pois.remove();
     document.body.classList.toggle("zoomed-out", !show);
   };
   map.on("zoomend", syncLayers);
