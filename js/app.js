@@ -99,21 +99,6 @@ function say(text, urgent = false) {
 //   2 = à gauche, 3 = à droite, 5 rapides = mauvais sens / demi-tour, 1 longue = arrivé
 const HAPTIC = {left: [160, 140, 160], right: [160, 140, 160, 140, 160], uturn: [70, 60, 70, 60, 70, 60, 70, 60, 70], arrive: [700], tick: [40]};
 const IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-// Appli installée sur iPhone (barre d'état « black-translucent ») : certaines versions d'iOS arrêtent la
-// fenêtre une soixantaine de pixels avant le bas de l'écran, ce qui laisse une bande vide. On mesure
-// l'écart et l'interface est prolongée jusqu'en bas (--ios-gap, 0 partout ailleurs).
-function fixIosGap() {
-  let gap = 0;
-  if (IOS && (navigator.standalone || matchMedia("(display-mode: standalone)").matches)) {
-    const portrait = innerHeight >= innerWidth;
-    const full = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-    gap = Math.max(0, Math.min(120, full - innerHeight));
-  }
-  document.documentElement.style.setProperty("--ios-gap", `${gap}px`);
-}
-fixIosGap();
-addEventListener("resize", fixIosGap);
-addEventListener("orientationchange", () => setTimeout(fixIosGap, 300));
 let iosSwitch = null;
 function iosTap() {
   // Safari (iPhone) n'a pas navigator.vibrate ; depuis iOS 18, basculer un interrupteur natif
