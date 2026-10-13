@@ -12,16 +12,17 @@ pentes, marches, bordures de trottoir, feux sonores, revêtement.
 2. L'installer sur l'écran d'accueil :
    - Android : menu ⋮ → « Ajouter à l'écran d'accueil » (ou le bouton « Installer » de l'appli) ;
    - iPhone : bouton Partager → « Sur l'écran d'accueil ».
-3. Choisir son profil, une destination, puis « Démarrer le guidage » :
-   - **Simulation** : la position avance seule le long de l'itinéraire (×1, ×5, ×20) ;
-   - **GPS réel** : sur place à Gennevilliers, les consignes suivent votre position
-     et l'itinéraire est recalculé si vous vous en écartez.
-4. 📷 ouvre la **vue caméra** : la rue filmée, avec l'itinéraire dessiné au sol,
-   la prochaine consigne et les étiquettes (travaux signalés, trottoir abaissé,
-   marche, montée…). En simulation, la vue suit le sens de l'itinéraire ; en GPS
-   réel, elle suit la boussole (🧭 pour basculer). Les étiquettes viennent des
-   données, pas d'une reconnaissance d'image : précision de quelques mètres.
-5. 👓 affiche la vue des lunettes connectées ; 🔊 coupe ou active la voix.
+3. Choisir son profil et son **thème** (Verre : clair, ruban lumineux ; Néon : sombre, repères flottants),
+   une destination, puis « Démarrer le guidage ».
+4. Le guidage s'affiche **dans la caméra** : itinéraire dessiné au sol (ruban et chevrons), bulle de
+   consigne accrochée au prochain virage, repères des obstacles, bordures abaissées, marches, ascenseurs,
+   toilettes adaptées… En haut : marches, heure d'arrivée, distance. En bas : mini-carte en dôme avec
+   boussole, et la barre de commandes :
+   - ⚙ réglages : **Simulation** (la position avance seule, ×1 ×5 ×20) ou **GPS réel** (sur place à
+     Gennevilliers), orientation (sens de l'itinéraire ou boussole), thème, arrêt ;
+   - **Plan** : agrandit la carte ; bouton central : **signaler un obstacle** ; **Lunettes** : vue des
+     lunettes connectées ; 🔊 : voix.
+   Les repères viennent des données, pas d'une reconnaissance d'image : précision de quelques mètres.
 
 Tout fonctionne sur le téléphone, même hors ligne une fois ouvert (sauf la
 recherche d'adresse et le fond de carte non encore vu). Les signalements

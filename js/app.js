@@ -1,7 +1,7 @@
 // Vision AR — démo web mobile (installable sur l'écran d'accueil).
 // Écrans repris de l'appli Android (phone/ui/Screens.kt) ; itinéraires calculés
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
-import {openAR} from "./ar.js";
+import {arOpen, closeAR, openAR} from "./ar.js";
 import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
@@ -44,6 +44,23 @@ const S = {
 };
 let net = null;
 let installPrompt = null;
+let syncLayers = () => {};
+
+// ---- Thème : « verre » (clair, ruban lumineux) ou « neon » (sombre, repères flottants) ----------
+S.theme = store.get("va-theme", matchMedia("(prefers-color-scheme: dark)").matches ? "neon" : "verre");
+function applyTheme() {
+  document.documentElement.dataset.theme = S.theme;
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = S.theme === "neon" ? "#061019" : "#E9EEF5";
+}
+function setTheme(t) {
+  S.theme = t;
+  store.set("va-theme", t);
+  applyTheme();
+}
+applyTheme();
+const THEME_CHOICES = [["verre", "Verre", "Clair, ruban lumineux"], ["neon", "Néon", "Sombre, repères flottants"]];
+const themeCards = attr => THEME_CHOICES.map(([v, l, d]) => `<button class="theme-card ${S.theme === v ? "on" : ""}" ${attr}="${v}">
+  <span class="preview pv-${v}"><i></i><i></i><i></i></span><b>${l}</b><small>${d}</small></button>`).join("");
 
 // ---- Profil -> requête (core/UserProfile.kt) --------------------------------------
 const primary = () => PRIORITY.find(m => S.mobilities.has(m)) || "pedestrian";
@@ -131,13 +148,13 @@ function drawNetwork() {
     return d;
   };
   legend.addTo(map);
-  const sync = () => {
-    const show = map.getZoom() >= 16;
+  syncLayers = () => {
+    const show = map.getZoom() >= 16 && S.screen !== "nav";
     for (const l of [layers.net, layers.pois]) show ? l.addTo(map) : l.remove();
     document.body.classList.toggle("zoomed-out", !show);
   };
-  map.on("zoomend", sync);
-  sync();
+  map.on("zoomend", syncLayers);
+  syncLayers();
 }
 function drawReports() {
   layers.reports.clearLayers();
@@ -154,20 +171,42 @@ function drawRoutes() {
   layers.routes.clearLayers();
   layers.marks.clearLayers();
   const sel = S.nav?.route || S.routes[S.selected];
-  for (const r of S.routes) if (r !== sel)
-    L.polyline(r.geometry.map(p => [p.lat, p.lon]), {color: C.alt, weight: 5, opacity: .85, dashArray: "1 9", lineCap: "round"}).addTo(layers.routes);
+  const nav = S.screen === "nav";
+  for (const r of S.routes) if (r !== sel) {
+    const ll = r.geometry.map(p => [p.lat, p.lon]);
+    L.polyline(ll, nav ? {color: "#E8457C", weight: 5, opacity: .9, lineCap: "round"}
+                       : {color: C.alt, weight: 5, opacity: .85, dashArray: "1 9", lineCap: "round"}).addTo(layers.routes);
+    if (nav && sel) {
+      const diff = Math.round((r.duration_s - sel.duration_s) / 60);
+      const label = `${diff >= 0 ? "+" : "−"} ${Math.abs(diff)} min${r.accessible ? "" : " · non accessible"}`;
+      L.marker(ll[Math.floor(ll.length / 2)], {icon: L.divIcon({className: "", html: `<div class="alt-tag">${label}</div>`, iconSize: null}),
+        interactive: false}).addTo(layers.routes);
+    }
+  }
   if (sel) {
     const ll = sel.geometry.map(p => [p.lat, p.lon]);
-    L.polyline(ll, {color: C.routeCase, weight: 11, opacity: .9, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
-    L.polyline(ll, {color: C.route, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
+    L.polyline(ll, {color: C.routeCase, weight: nav ? 10 : 11, opacity: nav ? .35 : .9, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
+    if (nav) gradientLine(ll).forEach(l => l.addTo(layers.routes));
+    else L.polyline(ll, {color: C.route, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
   }
   if (!S.nav) L.marker([S.origin.lat, S.origin.lon], {icon: L.divIcon({className: "", html: '<div class="start-dot"></div>', iconSize: [24, 24]}),
     title: "Départ"}).addTo(layers.marks);
   if (S.dest) L.marker([S.dest.lat, S.dest.lon], {icon: pin("flag", "pin-dest"), title: "Arrivée"}).addTo(layers.marks);
   if (S.nav) {
-    S.nav.marker = L.marker([S.nav.here.lat, S.nav.here.lon], {icon: L.divIcon({className: "", html: '<div class="me"><span></span></div>', iconSize: [28, 28]}),
-      zIndexOffset: 1000}).addTo(layers.marks);
+    S.nav.marker = L.marker([S.nav.here.lat, S.nav.here.lon], {icon: L.divIcon({className: "",
+      html: '<div class="puck"><i class="cone"></i><span></span></div>', iconSize: [90, 90]}), zIndexOffset: 1000}).addTo(layers.marks);
   }
+}
+// Ligne en dégradé (Leaflet n'en fait pas) : une succession de tronçons de teintes voisines
+function gradientLine(ll) {
+  const stops = [[47, 128, 237], [18, 181, 195], [61, 220, 151]], n = Math.min(30, ll.length - 1), out = [];
+  for (let k = 0; k < n; k++) {
+    const a = Math.floor(k * (ll.length - 1) / n), b = Math.floor((k + 1) * (ll.length - 1) / n);
+    const t = k / Math.max(1, n - 1) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(t)), f = t - i;
+    const c = stops[i].map((v, j) => Math.round(v + (stops[i + 1][j] - v) * f));
+    out.push(L.polyline(ll.slice(a, b + 1), {color: `rgb(${c})`, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round"}));
+  }
+  return out;
 }
 map.on("click", e => {
   if (S.screen !== "route") return;
@@ -369,6 +408,7 @@ function onGps(pos) {
       const res = computeRoutes(net, {origin: p, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
       say("Nouvel itinéraire.", true);
       startNav(res.routes[0]);
+      S.routes = res.routes; S.selected = 0;
       S.nav.rerouted = {at: Date.now(), title: "Hors de l'itinéraire"};
       setMode("gps");
     } catch (e) {
@@ -415,6 +455,7 @@ function screenProfile() {
     ${sw("steps", "stairs", "J'accepte quelques marches", S.steps)}
     ${sw("voice", "volume-2", "Consignes à la voix", S.voice)}
   </section>
+  <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
   <button class="btn primary" id="cont">Continuer ${icon("chevron-right")}</button>
   ${standalone ? "" : `<div class="install">${icon("smartphone")}<div class="grow"><b>Installer l'appli</b>
       <span>${installPrompt ? "Ajoutez Vision AR à votre écran d'accueil." : ios ? "Bouton Partager, puis « Sur l'écran d'accueil »." : "Menu ⋮ du navigateur, puis « Ajouter à l'écran d'accueil »."}</span></div>
@@ -464,51 +505,45 @@ function routeCard(r, i) {
       <span class="${r.max_slope_pct > 5 ? "bad" : "good"}">${icon("mountain")} pente max ${fmt1(r.max_slope_pct)} %</span></div>
     ${notes.length ? `<div class="tags">${notes.join("")}</div>` : ""}</div>`;
 }
-function screenNav() {
-  const n = S.nav, st = navState(), mins = Math.ceil(st.remaining / speed() / 60);
-  const eta = new Date(Date.now() + st.remaining / speed() * 1000).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
-  const tool = (id, ic, label, on = false) => `<button class="tool ${on ? "on" : ""}" id="${id}">${icon(ic)}<span>${label}</span></button>`;
-  return `<div class="handle" aria-hidden="true"></div>
-    <div class="trip-stats"><div><b>${mins} min</b><span>arrivée ${eta}</span></div><div><b>${short(st.remaining)}</b><span>restants</span></div>
-      <div class="tools">${tool("arBtn", "camera", "Caméra")}${tool("hudBtn", "glasses", "Lunettes")}${
-        tool("voiceBtn", S.voice ? "volume-2" : "volume-x", S.voice ? "Voix" : "Muet", S.voice)}</div></div>
-    <div class="seg"><button data-mode="sim" class="${n.mode === "sim" ? "on" : ""}">${icon("play")} Simulation</button>
-      <button data-mode="gps" class="${n.mode === "gps" ? "on" : ""}">${icon("locate-fixed")} GPS réel</button></div>
-    ${n.mode === "sim" ? `<div class="sim"><button class="btn soft" id="play">${n.timer ? icon("pause") + " Pause" : n.arrived ? icon("flag") + " Arrivé" : icon("play") + " Marcher"}</button>
-        <div class="seg speed" role="group" aria-label="Vitesse de simulation">${[1, 5, 20].map(f => `<button data-speed="${f}" class="${n.factor === f ? "on" : ""}">×${f}</button>`).join("")}</div>
-        <button class="icon-btn" id="rewind" aria-label="Recommencer">${icon("rotate-ccw")}</button></div>`
-      : n.gpsProblem ? `<div class="msg warn">${icon("map-pin")}<span>${esc(n.gpsProblem)}</span></div>
-          <div class="actions"><button class="btn soft small" data-mode="sim">${icon("play")} Simulation</button>
-          ${n.real ? `<button class="btn soft small" id="showMe">${icon("locate-fixed")} Ma position</button>` : ""}</div>`
-      : `<p class="muted gps">${icon("locate-fixed")} ${esc(n.gpsInfo || "")} — marchez, les consignes suivent votre position.</p>`}
-    ${S.message ? `<div class="msg ok">${icon("check")}<span>${esc(S.message)}</span></div>` : ""}
-    <div class="actions"><button class="btn warn" id="toReport">${icon("triangle-alert")} Signaler</button>
-      <button class="btn dark" id="stop">${icon("x")} Arrêter</button></div>`;
-}
-function screenReport() {
-  return `<header class="hero compact"><button class="icon-btn" id="back" aria-label="Retour au guidage">${icon("arrow-left")}</button>
-    <h1>Signaler un obstacle</h1><p class="lead">Il sera placé à votre position actuelle et l'itinéraire en tiendra compte.</p></header>
-  <label class="setting strong">${icon("ban")}<span class="grow">Je ne peux pas passer</span>
-    <input type="checkbox" class="switch" id="blk" ${S.blocking ? "checked" : ""}></label>
-  <div class="tiles">${REPORT_KINDS.map(([k, l, ic]) => `<button class="tile report" data-report="${k}">
-      <span class="tile-ic">${icon(ic)}</span><span class="tile-label">${l}</span></button>`).join("")}</div>
-  ${S.message ? `<div class="msg ok">${icon("check")}<span>${esc(S.message)}</span></div>` : ""}
-  <button class="btn primary" id="back2">${icon("navigation")} Retour au guidage</button>`;
-}
-function navCard() {
-  let el = document.querySelector(".navcard");
-  if (S.screen !== "nav") { el?.remove(); return; }
-  if (!el) {
-    el = document.createElement("div");
-    el.className = "navcard";
-    el.setAttribute("aria-live", "polite");
-    document.body.append(el);
-    sizes.observe(el);
+// Commandes et état exposés à l'écran de guidage en réalité augmentée (js/ar.js)
+const navApi = {
+  map,
+  state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
+    mobility: primary(), mode: S.nav.mode, factor: S.nav.factor, playing: !!S.nav.timer, voice: S.voice, theme: S.theme,
+    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem},
+  togglePlay: () => setSim(!S.nav.timer),
+  pause: () => setSim(false),
+  setMode: m => setMode(m),
+  setFactor: f => { S.nav.factor = f; setSim(!!S.nav.timer); },
+  rewind: () => { S.nav.arrived = false; S.nav.said.clear(); moveTo(0); },
+  toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) speechSynthesis?.cancel(); },
+  openHud: () => { S.hud = true; renderHud(); },
+  setTheme,
+  report: (kind, blocking) => doReport(kind, blocking),
+  stop: () => { stopNav(); S.nav = null; wakeLock?.release?.(); closeAR(); go("route"); },
+};
+// Signalement : enregistré sur ce téléphone ; s'il bloque, nouvel itinéraire depuis la position
+function doReport(kind, blocking) {
+  // On signale ce qu'on a devant soi : l'obstacle est placé 10 m plus loin sur l'itinéraire.
+  // (À sa propre position, il bloquerait les trottoirs autour de soi et aucun détour ne serait possible.)
+  const here = S.nav.here, at = posAt(Math.min(S.nav.total, S.nav.pos + 10));
+  addReport(kind, blocking, at);
+  let msg = "Merci, obstacle enregistré sur ce téléphone.";
+  if (blocking) {
+    try {
+      const res = computeRoutes(net, {origin: here, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
+      startNav(res.routes[0]);
+      S.routes = res.routes; S.selected = 0;
+      S.nav.rerouted = {at: Date.now(), title: kind === "elevator_out" ? "Ascenseur en panne" : "Trottoir bloqué"};
+      if (S.nav.mode === "gps") setMode("gps");
+      msg += " Itinéraire recalculé depuis votre position.";
+    } catch (e) {
+      if (!(e instanceof RoutingError)) throw e;
+      msg += " Aucun détour accessible n'a été trouvé : l'itinéraire actuel est conservé, avancez prudemment.";
+    }
   }
-  const st = navState();
-  el.innerHTML = `<span class="nc-ic">${icon(MAN_ICON[st.arrived ? "arrive" : st.next.maneuver] || "arrow-up")}</span>
-    <div class="nc-txt"><div class="d">${st.arrived ? "Vous êtes arrivé" : short(st.toManeuver)}</div><div class="s">${esc(st.spoken)}</div>
-    ${!st.arrived && st.next.alerts.length ? `<span class="nc-alert">${icon("triangle-alert")} ${esc(st.next.alerts.join(" · "))}</span>` : ""}</div>`;
+  drawRoutes(); drawReports();
+  return msg;
 }
 function renderHud() {
   const h = $("hud");
@@ -529,12 +564,14 @@ function renderHud() {
 }
 
 function render() {
-  document.body.className = S.screen === "profile" || S.screen === "report" ? "full" : S.screen === "nav" ? "nav" : "";
-  $("panel").innerHTML = {profile: screenProfile, route: screenRoute, nav: screenNav, report: screenReport}[S.screen]();
+  const nav = S.screen === "nav";
+  document.body.className = S.screen === "profile" ? "full" : nav ? "nav-ar" : "";
+  $("panel").innerHTML = nav ? "" : {profile: screenProfile, route: screenRoute}[S.screen]();
   bind();
-  navCard();
   renderHud();
+  syncLayers();
   if (net) { drawRoutes(); drawReports(); }
+  if (nav && !arOpen()) openAR(navApi);                 // dans le geste de l'usager : caméra et boussole autorisées
   setTimeout(() => map.invalidateSize(), 0);
 }
 function renderKeepFocus() {
@@ -544,32 +581,10 @@ function renderKeepFocus() {
   if (q2 && q) { q2.focus(); q2.setSelectionRange(pos, pos); }
 }
 function renderNavLive() {
-  if (S.screen === "nav") { $("panel").innerHTML = screenNav(); bind(); navCard(); }
   renderHud();
   if (S.nav?.marker) S.nav.marker.setLatLng([S.nav.here.lat, S.nav.here.lon]);
-  if (S.screen === "nav" && S.nav) followPosition();
+  if (S.screen === "nav" && S.nav) map.panTo([S.nav.here.lat, S.nav.here.lon], {animate: false});
 }
-// Partie de la carte réellement visible : ni sous le bandeau bleu, ni sous le panneau
-function visiblePadding() {
-  const css = getComputedStyle(document.documentElement);
-  const px = name => parseFloat(css.getPropertyValue(name)) || 0;
-  const side = matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
-  return {paddingTopLeft: [24, px("--card-h") + 24], paddingBottomRight: [24, (side ? 0 : px("--panel-h")) + 24]};
-}
-function followPosition() {
-  map.panInside([S.nav.here.lat, S.nav.here.lon], {...visiblePadding(), animate: true});
-}
-// Mesure en continu la hauteur du panneau et du bandeau (rotation, clavier, contenu)
-const sizes = new ResizeObserver(() => {
-  const root = document.documentElement.style;
-  root.setProperty("--panel-h", `${S.screen === "nav" ? $("panel").offsetHeight : 0}px`);
-  const card = document.querySelector(".navcard");
-  root.setProperty("--card-h", `${card ? card.offsetTop + card.offsetHeight : 0}px`);
-  map.invalidateSize();
-});
-sizes.observe($("panel"));
-sizes.observe($("map"));
-
 function go(screen) { S.screen = screen; S.message = null; render(); }
 function saveProfile() { store.set("va-profile", {mobilities: [...S.mobilities], maxSlope: S.maxSlope, steps: S.steps}); }
 
@@ -577,6 +592,7 @@ function bind() {
   const on = (id, ev, fn) => { const e = $(id); if (e) e[ev] = fn; };
   const all = (sel, fn) => document.querySelectorAll(sel).forEach(fn);
   all("[data-mob]", b => b.onclick = () => { const m = b.dataset.mob; S.mobilities.has(m) ? S.mobilities.delete(m) : S.mobilities.add(m); render(); });
+  all("[data-theme-pick]", b => b.onclick = () => { setTheme(b.dataset.themePick); render(); });
   on("slope", "oninput", e => { S.maxSlope = +e.target.value; $("slopeLbl").textContent = `${S.maxSlope} %`; });
   on("steps", "onchange", e => { S.steps = e.target.checked; });
   on("voice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
@@ -591,44 +607,8 @@ function bind() {
   on("start", "onclick", () => {
     startNav(S.routes[S.selected]);
     go("nav");
-    map.setView([S.nav.here.lat, S.nav.here.lon], 18, {animate: false});
-    requestAnimationFrame(followPosition);
+    map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
   });
-  all("[data-mode]", b => b.onclick = () => setMode(b.dataset.mode));
-  all("[data-speed]", b => b.onclick = () => { S.nav.factor = +b.dataset.speed; setSim(!!S.nav.timer); });
-  on("play", "onclick", () => setSim(!S.nav.timer));
-  on("showMe", "onclick", () => map.setView([S.nav.real.lat, S.nav.real.lon], 15));
-  on("rewind", "onclick", () => { S.nav.arrived = false; S.nav.said.clear(); moveTo(0); });
-  on("hudBtn", "onclick", () => { S.hud = true; renderHud(); });
-  on("arBtn", "onclick", () => openAR({
-    state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
-                           mobility: primary(), mode: S.nav.mode, playing: !!S.nav.timer},
-    togglePlay: () => setSim(!S.nav.timer),
-    toast,
-  }));
-  on("voiceBtn", "onclick", () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) speechSynthesis?.cancel(); renderNavLive(); });
-  on("toReport", "onclick", () => { setSim(false); go("report"); });
-  on("stop", "onclick", () => { stopNav(); S.nav = null; wakeLock?.release?.(); go("route"); });
-  on("blk", "onchange", e => { S.blocking = e.target.checked; });
-  all("[data-report]", b => b.onclick = () => {
-    const at = S.nav.here;
-    addReport(b.dataset.report, S.blocking, at);
-    S.message = "Merci, obstacle enregistré sur ce téléphone.";
-    if (S.blocking) {
-      try {
-        const res = computeRoutes(net, {origin: at, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
-        startNav(res.routes[0]);
-        S.nav.rerouted = {at: Date.now(), title: b.dataset.report === "elevator_out" ? "Ascenseur en panne" : "Trottoir bloqué"};
-        if (S.nav.mode === "gps") setMode("gps");          // relance le suivi GPS sur le nouveau tracé
-        S.message += " Itinéraire recalculé depuis votre position.";
-      } catch (e) {
-        S.message += " " + (e instanceof RoutingError ? e.message : e);
-      }
-    }
-    render();
-  });
-  on("back", "onclick", () => go("nav"));
-  on("back2", "onclick", () => go("nav"));
 }
 
 // Vue lunettes : toucher pour fermer, appui long pour le contraste élevé
@@ -653,4 +633,4 @@ fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
 
 // Accès pour les tests automatiques uniquement (adresse terminée par ?debug)
 if (new URLSearchParams(location.search).has("debug"))
-  window.__va = {S, posAt, navState, moveTo, get net() { return net; }, addReport, reports};
+  window.__va = {S, posAt, navState, moveTo, get net() { return net; }, addReport, reports, navApi};
