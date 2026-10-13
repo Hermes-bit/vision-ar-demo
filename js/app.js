@@ -796,6 +796,7 @@ function layoutSheet(offset = null) {
   if (S.screen !== "route" || sideLayout()) { p.style.removeProperty("--sheet-y"); root.setProperty("--sheet-h", "0px"); return; }
   const max = sheetRange(), y = offset ?? (sheetCollapsed ? max : 0);
   p.style.setProperty("--sheet-y", `${Math.max(0, Math.min(max, y))}px`);
+  p.classList.toggle("collapsed", offset === null && sheetCollapsed);   // abaissé : seul le titre reste visible
   root.setProperty("--sheet-h", `${Math.round(p.offsetHeight - Math.max(0, Math.min(max, y)))}px`);
   const h = $("sheetHandle");
   if (h) {

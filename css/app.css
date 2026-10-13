@@ -92,6 +92,13 @@ body.sheet #map { height: 100vh; height: 100dvh; }
 body.sheet #panel { top: auto; min-height: 50vh; min-height: 50dvh; max-height: calc(100vh - 96px - var(--safe-top)); max-height: calc(100dvh - 96px - var(--safe-top));
   transform: translateY(var(--sheet-y, 0px)); transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
 body.sheet.dragging #panel { transition: none; }
+/* Panneau abaissé : la poignée et le titre seulement ; le reste s'efface au lieu d'être coupé */
+body.sheet #panel > :not(.sheet-head) { transition: opacity .2s ease; }
+body.sheet #panel.collapsed > :not(.sheet-head) { opacity: 0; visibility: hidden; }
+/* Bas d'écran : le panneau se fond dans la couleur du fond (sur iPhone, la bande sous l'appli a cette couleur) */
+body.sheet { background: var(--bg); }
+body.sheet::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: calc(12px + var(--safe-bottom)); z-index: 501;
+  pointer-events: none; background: linear-gradient(to bottom, transparent, var(--bg)); }
 body.sheet .leaflet-bottom { bottom: calc(var(--sheet-h, 0px) + 6px); transition: bottom .3s; }
 @media (prefers-reduced-motion: reduce) { body.sheet #panel { transition: none; } }
 body.full #panel { top: 0; border-radius: 0; box-shadow: none; background: var(--bg-grad), var(--bg); padding-top: calc(var(--gutter) + var(--safe-top));
