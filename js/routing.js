@@ -88,7 +88,7 @@ export function loadNetwork(data) {
   const nodes = data.nodes.map(([lat, lon], id) => ({id, lat, lon}));
   const edges = data.edges.map((e, id) => ({
     id, source: e[0], target: e[1], length_m: e[2], slope_pct: e[3], cross_slope_pct: e[4], width_m: e[5],
-    has_step: (e[6] & 1) !== 0, is_crossing: (e[6] & 2) !== 0, oneway: (e[6] & 4) !== 0,
+    has_step: (e[6] & 1) !== 0, is_crossing: (e[6] & 2) !== 0, oneway: (e[6] & 4) !== 0, beside_sidewalk: (e[6] & 8) !== 0,
     surface: data.surfaces[e[7]], kerb_lowered: e[8] === -1 ? null : e[8] === 1,
     sound_signal: e[9] === -1 ? null : e[9] === 1, name: data.names[e[10]], kind: data.kinds[e[11]],
     slope_source: data.slope_sources[e[12]] || null, shape: data.shapes[id],
@@ -105,6 +105,7 @@ export function loadNetwork(data) {
 const UPHILL_FACTOR = 0.12, DOWNHILL_FACTOR = 0.04, CROSS_SLOPE_FACTOR = 0.10;
 const ROUGH_SURFACE_FACTOR = 0.5, UNKNOWN_DATA_FACTOR = 0.25;
 const STEP_PENALTY_M = 40.0, NO_SOUND_SIGNAL_PENALTY_M = 30.0, OBSTACLE_PENALTY_M = 80.0;
+const ROADWAY_FACTOR = 2.0;   // marcher sur la chaussée quand un trottoir longe la rue : +200 %
 const ROUGH_SURFACES = new Set(["sett", "cobblestone", "gravel", "unpaved", "grass", "sand", "dirt"]);
 
 export function arcCost(edge, profile, forward = true, obstacleBlocking = false, obstacleNearby = false) {
@@ -130,6 +131,10 @@ export function arcCost(edge, profile, forward = true, obstacleBlocking = false,
   if (profile.avoid_rough_surfaces && ROUGH_SURFACES.has(edge.surface)) {
     factor += ROUGH_SURFACE_FACTOR;
     reasons.push("revêtement irrégulier");
+  }
+  if (edge.beside_sidewalk) {
+    factor += ROADWAY_FACTOR;
+    reasons.push("sur la chaussée");
   }
   let unknown = slope === null || (isWheelchair(profile) && (edge.width_m === null || edge.cross_slope_pct === null));
   if (edge.is_crossing && profile.needs_lowered_kerb && edge.kerb_lowered === null) unknown = true;
@@ -317,7 +322,8 @@ export function engineRoute(net, origin, destination, profile, reports = [], met
       const c = arcCost(edge, profile, forward, blocking, nearby);
       if (c.cost === null) continue;
       const leg = {edge, forward, cost: c.cost, reasons: c.reasons};
-      const nxt = legTo(leg), nd = d + (metric === "effort" ? c.cost : edge.length_m + (edge.is_crossing ? CROSSING_PENALTY_M : 0.0));
+      const nxt = legTo(leg), nd = d + (metric === "effort" ? c.cost
+        : edge.length_m * (edge.beside_sidewalk ? 1.0 + ROADWAY_FACTOR : 1.0) + (edge.is_crossing ? CROSSING_PENALTY_M : 0.0));
       if (nd < (dist.has(nxt) ? dist.get(nxt) : Infinity)) {
         dist.set(nxt, nd);
         prev.set(nxt, leg);
