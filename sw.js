@@ -1,6 +1,6 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
-const VERSION = "vision-ar-v12";
+const VERSION = "vision-ar-v13";
 const MAX_TILES = 600;
 const APP = [
   "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js", "js/ar.js", "js/icons.js", "js/auth.js",
@@ -24,6 +24,7 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
+  if (url.origin === location.origin && url.pathname.includes("/icons/")) return;   // icônes : jamais interceptées (écran d'accueil iOS)
   if (url.origin === location.origin) {
     // Fichiers de l'appli : le réseau d'abord (toujours la dernière version), le cache hors ligne
     e.respondWith(fetch(e.request, {cache: "no-cache"}).then(res => {
