@@ -4,6 +4,7 @@
 import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
 import {MODE, linesText, loadTransit, makeStreetFinder, searchPlaces, stopTarget, wheelText} from "./transit.js";
 import {clearSamples, exportZip, listSamples} from "./obstacles.js";
+import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
@@ -25,8 +26,12 @@ const KIND_LABEL = {sidewalk: "Trottoir", crossing: "Passage piéton", footway: 
   path: "Sentier", steps: "Escalier", pedestrian: "Voie piétonne", elevator: "Ascenseur", ramp: "Rampe"};
 // Pentes sur la carte : teintes distinguables par les daltoniens, contraste >= 3:1 sur le fond OSM
 const C = {route: "#00AECC", routeCase: "#00495A", alt: "#6B7C8F", primary: "#007489", unknown: "#5C6B7A", step: "#0F2537"};
-const MAIRIE = {label: "Mairie de Gennevilliers", lat: 48.925459, lon: 2.294045};
-const GEOCODER = "https://data.geopf.fr/geocodage/search/";
+// Ville / quartier choisi dans les Paramètres (js/zones.js)
+const ZONE_ID = (() => { try { const z = JSON.parse(localStorage.getItem("va-zone")); return ZONES[z] ? z : "gennevilliers"; } catch { return "gennevilliers"; } })();
+const ZONE = ZONES[ZONE_ID];
+const MAIRIE = ZONE.start;                                   // point de départ par défaut de la zone
+const GEOCODER = "https://data.geopf.fr/geocodage/search/";       // France (IGN)
+const PHOTON = "https://photon.komoot.io/api/";                    // ailleurs (OpenStreetMap)
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -146,7 +151,7 @@ const IGN_WMTS = layer => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTi
 const OSM_ATTR = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 const BASEMAPS = {
   osm: {label: "OpenStreetMap", sub: "Plan détaillé : trottoirs, passages piétons, commerces",
-        url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19, attribution: `${OSM_ATTR} · relief © IGN`},
+        url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19, attribution: OSM_ATTR + (ZONE.france ? " · relief © IGN" : "")},
   ign: {label: "Plan IGN", sub: "Carte officielle française, lisible et sobre",
         url: IGN_WMTS("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png"), maxZoom: 19, attribution: "© IGN · réseau © OpenStreetMap"},
   ortho: {label: "Photos aériennes", sub: "Vue du ciel (IGN), comme le mode satellite",
@@ -174,9 +179,11 @@ function loadMaplibre() {
   }
   return maplibreLoading;
 }
+const basemapAvailable = k => ZONE.france || !["ign", "ortho"].includes(k);
 let baseLayer = null, basemapRequest = 0;
 async function setBasemap(key) {
   if (key === "voyager") key = "liberty";                 // ancien fond CARTO (clé désormais exigée)
+  if (!basemapAvailable(key)) key = "osm";               // fonds IGN : France seulement
   const b = BASEMAPS[key] || BASEMAPS.osm, request = ++basemapRequest;
   S.basemap = BASEMAPS[key] ? key : "osm";
   store.set("va-basemap", S.basemap);
@@ -428,8 +435,8 @@ function useMyPosition() {
     try {
       nearestNode(net, p.lat, p.lon);
     } catch {
-      return toast("Vous êtes hors de la zone couverte (Gennevilliers) : le départ reste fixé sur le plan. " +
-                   "Le guidage ne fonctionne que sur place, à Gennevilliers.", 6000);
+      return toast(`Vous êtes hors de la zone couverte (${zoneLabel(ZONE)}) : le départ reste fixé sur le plan. ` +
+                   "Le guidage ne fonctionne que sur place. Changez de ville dans les Paramètres si besoin.", 6000);
     }
     S.origin = p;
     map.setView([p.lat, p.lon], 17);
@@ -447,16 +454,20 @@ function search(q) {
       sub: `${r.typeLabel}${r.rue ? " · " + r.rue : ""} · ${short(r.dist)}`})) : [];
     S.places = local;
     renderKeepFocus();
-    // 2) adresses (Géoplateforme IGN), ajoutées à la suite
+    // 2) adresses (Géoplateforme IGN en France, Photon / OpenStreetMap ailleurs), ajoutées à la suite
     try {
-      const url = `${GEOCODER}?${new URLSearchParams({q, limit: 6, index: "address,poi", lat: S.origin.lat, lon: S.origin.lon})}`;
+      const url = ZONE.france
+        ? `${GEOCODER}?${new URLSearchParams({q, limit: 6, index: "address,poi", lat: S.origin.lat, lon: S.origin.lon})}`
+        : `${PHOTON}?${new URLSearchParams({q, limit: 8, lang: "fr", lat: S.origin.lat, lon: S.origin.lon})}`;
       const data = await fetch(url).then(r => r.json());
       if (S.query !== q) return;                            // la saisie a changé entre-temps
       const addr = (data.features || []).map(f => {
         const p = f.properties, [lon, lat] = f.geometry.coordinates;
-        const label = p.label || [p.toponym, (p.city || [])[0]].filter(Boolean).join(", ");
-        return {label, lat, lon, type: p._type, sub: `${p._type === "poi" ? "Lieu" : "Adresse"} · ${short(haversineM(S.origin.lat, S.origin.lon, lat, lon))}`};
-      }).filter(a => haversineM(S.origin.lat, S.origin.lon, a.lat, a.lon) < 15000);   // pas de « Calmels-et-le-Viala » à 550 km
+        const type = ZONE.france ? p._type : (p.name && p.osm_key !== "highway" && p.osm_key !== "place" ? "poi" : "address");
+        const label = ZONE.france ? p.label || [p.toponym, (p.city || [])[0]].filter(Boolean).join(", ")
+          : [p.name || [p.housenumber, p.street].filter(Boolean).join(" "), p.district || p.city].filter(Boolean).join(", ");
+        return {label, lat, lon, type, sub: `${type === "poi" ? "Lieu" : "Adresse"} · ${short(haversineM(S.origin.lat, S.origin.lon, lat, lon))}`};
+      }).filter(a => a.label).filter(a => haversineM(S.origin.lat, S.origin.lon, a.lat, a.lon) < 15000);   // pas de « Calmels-et-le-Viala » à 550 km
       S.places = [...local, ...addr].filter((p, i, all) => all.findIndex(o => norm2(o.label) === norm2(p.label) && haversineM(o.lat, o.lon, p.lat, p.lon) < 150) === i).slice(0, 10);
     } catch {
       if (!local.length) toast("Recherche d'adresse impossible (hors ligne ?) : touchez le plan pour choisir l'arrivée.");
@@ -647,7 +658,7 @@ function onGps(pos, precise = false) {
     n.gpsProblem = null;
   } catch {
     const km = haversineM(p.lat, p.lon, MAIRIE.lat, MAIRIE.lon) / 1000;
-    n.gpsProblem = `Vous êtes à ${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km de Gennevilliers. ` +
+    n.gpsProblem = `Vous êtes à ${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km de ${ZONE.name}. ` +
       "Le guidage ne fonctionne que sur place, dans la zone couverte.";
     return renderNavLive();
   }
@@ -779,8 +790,8 @@ function screenProfile() {
   ${standalone ? "" : `<div class="install">${icon("smartphone")}<div class="grow"><b>Installer l'appli</b>
       <span>${installPrompt ? "Ajoutez Vision AR à votre écran d'accueil." : ios ? "Bouton Partager, puis « Sur l'écran d'accueil »." : "Menu ⋮ du navigateur, puis « Ajouter à l'écran d'accueil »."}</span></div>
       ${installPrompt ? `<button class="btn soft small" id="install">${icon("download")} Installer</button>` : ""}</div>`}
-  <p class="fine">${icon("shield-check")} Démonstration sur Gennevilliers. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
-    Réseau © OpenStreetMap (ODbL), pentes © IGN.</p>`;
+  <p class="fine">${icon("shield-check")} Démonstration : ${esc(zoneLabel(ZONE))}. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
+    Réseau © OpenStreetMap (ODbL)${ZONE.france ? ", pentes © IGN" : ""}.</p>`;
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
@@ -799,7 +810,7 @@ function screenSettings() {
     <div class="brand"><button class="icon-btn" id="settingsBack" aria-label="Retour">${icon("arrow-left")}</button>
       <span class="grow">Paramètres</span></div></header>
   <section class="card">
-    <div class="set-row static">${icon("map-pin")}<span class="grow">Ville</span><span class="set-val">Gennevilliers</span></div>
+    ${row("setZone", "map-pin", "Ville", esc(zoneLabel(ZONE)))}
     ${sess ? `<div class="set-row static">${icon("user-round")}<span class="grow">Compte</span><span class="set-val">Bonjour ${esc(sess.name.split(" ")[0])}&nbsp;!</span></div>` : ""}
     ${row("setProfile", mob?.[2] || "accessibility", "Mon profil de mobilité", esc(mob?.[1] || ""))}
   </section>
@@ -812,7 +823,7 @@ function screenSettings() {
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
   <section class="card"><h3>${icon("map")} Fond de carte</h3>
-    ${Object.entries(BASEMAPS).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
+    ${Object.entries(BASEMAPS).filter(([k]) => basemapAvailable(k)).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
       <span class="grow">${b.label}<small>${b.sub}</small></span>${S.basemap === k ? `<span class="set-check">${icon("check")}</span>` : ""}</button>`).join("")}
     <p class="fine">${icon("info")} Le vrai fond Google Maps ou Plans (Apple, utilisé par Citymapper) demande leurs propres outils : une
       clé Google avec compte de facturation, ou un compte développeur Apple (99 €/an). « Style Plans » en est l'équivalent gratuit.</p>
@@ -848,16 +859,31 @@ function screenSettings() {
   <section class="card">
     ${info("shield-check", "Confidentialité", `<p>Vos itinéraires sont calculés sur ce téléphone. Votre compte, votre profil et vos signalements restent
       enregistrés sur ce téléphone : rien n'est envoyé à Geomessen. La position GPS ne sert qu'au guidage et n'est pas conservée.</p>
-      <p>La recherche d'adresse interroge le service public de la Géoplateforme (IGN) avec le texte saisi.</p>`)}
+      <p>La recherche d'adresse interroge ${ZONE.france ? "le service public de la Géoplateforme (IGN)" : "le service Photon (OpenStreetMap)"} avec le texte saisi.</p>`)}
     ${info("file-text", "Conditions d'utilisation", `<p>Vision AR est une démonstration. Les itinéraires sont indicatifs : restez attentif à
       l'environnement, aux traversées et aux obstacles non signalés. Les données d'accessibilité peuvent être incomplètes.</p>`)}
     ${info("database", "Sources de données", `<p>Réseau piéton et lieux : © les contributeurs d'OpenStreetMap (licence ODbL).<br>
-      Relief et pentes : © IGN (Géoplateforme, altimétrie).<br>Recherche d'adresse : Géoplateforme IGN.<br>
+      ${ZONE.france ? "Relief et pentes : © IGN (Géoplateforme, altimétrie).<br>Recherche d'adresse : Géoplateforme IGN.<br>"
+        : "Pentes : non disponibles (à relever sur place).<br>Recherche d'adresse : Photon (komoot), données OpenStreetMap.<br>"}
       Fond de carte : © OpenStreetMap.</p>`)}
     ${info("scale", "Mentions légales", `<p>Vision AR — Geomessen Burkina Faso.<br>Icônes : Lucide (licence ISC). Police : Atkinson Hyperlegible
       (licence SIL OFL).</p>`)}
   </section>
   <p class="fine set-version">Vision AR version ${APP_VERSION} · Geomessen Burkina Faso</p>`;
+}
+function screenZones() {
+  const byCountry = {};
+  for (const [id, z] of Object.entries(ZONES)) (byCountry[z.country] ||= []).push([id, z]);
+  return `<header class="hero">
+    <div class="brand"><button class="icon-btn" id="zonesBack" aria-label="Retour">${icon("arrow-left")}</button>
+      <span class="grow">Ville</span></div>
+    <p class="lead">Choisissez le pays, la ville et le quartier où vous vous déplacez.</p></header>
+  ${Object.entries(byCountry).map(([country, list]) => `<section class="card"><h3>${icon("globe")} ${esc(country)}</h3>
+    ${list.map(([id, z]) => `<button class="set-row" data-zone="${id}" aria-pressed="${id === ZONE_ID}">${icon("map-pin")}
+      <span class="grow">${esc(z.city)}${z.area ? `<small>Quartier : ${esc(z.area)}</small>` : "<small>Toute la ville</small>"}</span>
+      ${id === ZONE_ID ? `<span class="set-check">${icon("check")}</span>` : icon("chevron-right")}</button>`).join("")}
+  </section>`).join("")}
+  <p class="fine">${icon("info")} D'autres villes et quartiers seront ajoutés au fur et à mesure de la collecte des données.</p>`;
 }
 function screenRoute() {
   const chosen = S.routes[S.selected];
@@ -902,7 +928,9 @@ function routeCard(r, i) {
     <div class="rc-meta">
       <span>${icon("route")} ${short(r.length_m)}</span>
       <span class="${r.steps_count ? "bad" : "good"}">${icon("stairs")} ${r.steps_count ? r.steps_count + " marche(s)" : "aucune marche"}</span>
-      <span class="${r.max_slope_pct > 5 ? "bad" : "good"}">${icon("mountain")} pente max ${fmt1(r.max_slope_pct)} %</span></div>
+      ${net && r.edge_ids.every(id => net.edges[id]?.slope_pct === null)
+        ? `<span>${icon("mountain")} pente à vérifier</span>`
+        : `<span class="${r.max_slope_pct > 5 ? "bad" : "good"}">${icon("mountain")} pente max ${fmt1(r.max_slope_pct)} %</span>`}</div>
     ${notes.length ? `<div class="tags">${notes.join("")}</div>` : ""}</div>`;
 }
 // Commandes et état exposés à l'écran de guidage en réalité augmentée (js/ar.js)
@@ -982,8 +1010,8 @@ function renderHud() {
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
-  document.body.className = authScreen ? "full auth-screen" : S.screen === "profile" || S.screen === "settings" ? "full" : nav ? "nav-ar" : "sheet";
-  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings}[S.screen]();
+  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : "sheet";
+  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
   if (authScreen) bindAuth($("panel"), authCtx); else bind();
   renderHud();
   syncLayers();
@@ -1154,6 +1182,7 @@ function stepBack() {
   if (S.screen === "route" && S.dest) return closeRoutes();
   if (S.screen === "route") return go("profile");
   if (S.screen === "settings") return go("route");
+  if (S.screen === "zones") return go("settings");
 }
 function forward() {
   if (S.screen === "welcome") { resetForm(); return go("login"); }
@@ -1264,6 +1293,13 @@ function bind() {
   on("setProfile", "onclick", () => go("profile"));
   on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
+  on("setZone", "onclick", () => go("zones"));
+  on("zonesBack", "onclick", () => go("settings"));
+  all("[data-zone]", b => b.onclick = () => {
+    if (b.dataset.zone === ZONE_ID) return go("settings");
+    store.set("va-zone", b.dataset.zone);
+    location.reload();                                     // tout l'état dépend de la zone : on repart proprement
+  });
   all("[data-basemap]", b => b.onclick = () => { setBasemap(b.dataset.basemap); render(); });
   on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
@@ -1330,11 +1366,11 @@ function hideLoader() {
   if (!l) return;
   setTimeout(() => { l.classList.add("done"); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
 }
-fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
+fetch(ZONE.data).then(r => r.json()).then(data => {
   net = loadNetwork(data);
   setTimeout(autoOrigin, 0);
   streetOf = makeStreetFinder(net);
-  fetch("data/transit.json").then(r => r.json()).then(d => { transit = loadTransit(d); refreshTransit(true); }).catch(() => {});
+  fetch(ZONE.transit).then(r => r.json()).then(d => { transit = loadTransit(d); refreshTransit(true); }).catch(() => {});
   drawNetwork();
   render();
   if (S.screen === "route") computeRoute();

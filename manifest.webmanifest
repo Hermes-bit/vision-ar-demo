@@ -1,7 +1,7 @@
 {
   "name": "Vision AR — Geomessen Burkina Faso",
   "short_name": "Vision AR",
-  "description": "Itinéraires piétons accessibles (pentes, marches, bordures) — démonstration sur Gennevilliers.",
+  "description": "Itinéraires piétons accessibles (pentes, marches, bordures) — Gennevilliers (France) et Ouagadougou (Burkina Faso).",
   "lang": "fr",
   "start_url": "./",
   "scope": "./",
