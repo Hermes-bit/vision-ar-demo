@@ -79,13 +79,20 @@ p { margin: 0; }
   padding: 8px calc(var(--gutter) + var(--safe-right)) calc(var(--gutter) + var(--safe-bottom)) calc(var(--gutter) + var(--safe-left));
   border-radius: 24px 24px 0 0; box-shadow: 0 -8px 30px rgba(15, 37, 55, .16); z-index: 500; }
 #panel > * { flex: none; }
-.handle { width: 44px; height: 5px; border-radius: 3px; background: var(--hair); margin: 2px auto 2px; }
+/* Poignée du panneau : grande zone tactile (48 px), petite barre visible */
+.handle { display: block; width: 96px; height: 28px; margin: -4px auto 0; border: 0; background: transparent; position: relative; cursor: grab; }
+.handle::before { content: ""; position: absolute; left: 50%; top: 11px; width: 48px; height: 6px; margin-left: -24px; border-radius: 3px;
+  background: var(--line); opacity: .7; }
+.sheet-head { touch-action: none; user-select: none; -webkit-user-select: none; }
 body.full #map { display: none; }
-/* Recherche et choix d'itinéraire : le plan continue SOUS le panneau en verre (on voit les rues à travers) */
-@media (orientation: portrait), (max-width: 767px) and (min-height: 601px) {
-  body:not(.full):not(.nav-ar) #map { height: 100vh; height: 100dvh; }
-  body:not(.full):not(.nav-ar) .leaflet-bottom { bottom: calc(60vh + 20px); bottom: calc(60dvh + 20px); }
-}
+/* Recherche et choix d'itinéraire : le plan occupe tout l'écran, SOUS le panneau en verre ;
+   le panneau prend la hauteur de son contenu et se réduit d'un glissement (voir layoutSheet) */
+body.sheet #map { height: 100vh; height: 100dvh; }
+body.sheet #panel { top: auto; max-height: calc(100vh - 96px - var(--safe-top)); max-height: calc(100dvh - 96px - var(--safe-top));
+  transform: translateY(var(--sheet-y, 0px)); transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+body.sheet.dragging #panel { transition: none; }
+body.sheet .leaflet-bottom { bottom: calc(var(--sheet-h, 0px) + 6px); transition: bottom .3s; }
+@media (prefers-reduced-motion: reduce) { body.sheet #panel { transition: none; } }
 body.full #panel { top: 0; border-radius: 0; box-shadow: none; background: var(--bg-grad), var(--bg); padding-top: calc(var(--gutter) + var(--safe-top));
   padding-left: max(calc(var(--gutter) + var(--safe-left)), calc((100% - 620px) / 2));
   padding-right: max(calc(var(--gutter) + var(--safe-right)), calc((100% - 620px) / 2)); }
@@ -106,6 +113,9 @@ body.nav .leaflet-bottom { bottom: var(--panel-h); }
     border-radius: 0; box-shadow: 6px 0 24px rgba(15, 37, 55, .14); padding-top: calc(var(--gutter) + var(--safe-top)); }
   body.full #panel { width: auto; right: 0; }
   body.nav .leaflet-bottom { bottom: 0; }
+  body.sheet #map { left: var(--side); }
+  body.sheet #panel { top: 0; max-height: none; transform: none !important; }
+  body.sheet .leaflet-bottom { bottom: 0; }
   .navcard { left: calc(var(--side) + 12px) !important; }
   .handle { display: none; }
 }

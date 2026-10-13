@@ -222,16 +222,21 @@ function computeRoute() {
     try {
       S.routes = computeRoutes(net, {origin: S.origin, destination: S.dest, profile: profileJson(), compare_shortest: true}, reports()).routes;
       S.selected = 0;
-      // l'itinéraire est cadré dans la partie du plan que le panneau ne couvre pas
-      const panelTop = $("panel").getBoundingClientRect().top || innerHeight * 0.6;
-      const under = panelTop > 0 && panelTop < innerHeight - 40 && $("map").getBoundingClientRect().bottom > panelTop + 40 ? innerHeight - panelTop : 0;
-      map.fitBounds(L.latLngBounds(S.routes[0].geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 80], paddingBottomRight: [24, under + 24]});
     } catch (e) {
       if (!(e instanceof RoutingError)) throw e;
       S.message = e.message;
     }
   }
   render();
+  if (S.routes.length) requestAnimationFrame(fitRoute);
+}
+// L'itinéraire est cadré dans la partie du plan que le panneau ne couvre pas (après son affichage)
+function fitRoute() {
+  const r = S.routes[S.selected] || S.routes[0];
+  if (!r || S.screen !== "route") return;
+  const panelTop = $("panel").getBoundingClientRect().top;
+  const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
+  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, under + 24]});
 }
 function useMyPosition() {
   if (!navigator.geolocation) return toast("La localisation n'est pas disponible sur cet appareil.");
@@ -467,9 +472,12 @@ function screenProfile() {
 }
 function screenRoute() {
   const chosen = S.routes[S.selected];
-  return `<div class="handle" aria-hidden="true"></div>
-  <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
-    <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
+  return `<div class="sheet-head">
+    <button class="handle" id="sheetHandle" aria-expanded="${!sheetCollapsed}"
+      aria-label="${sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
+    <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
+      <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
+  </div>
   <div class="trip">
     <div class="trip-row"><span class="trip-dot start" aria-hidden="true"></span>
       <div class="grow"><small>Départ</small><b>${esc(S.origin.label)}</b></div>
@@ -569,7 +577,7 @@ function renderHud() {
 
 function render() {
   const nav = S.screen === "nav";
-  document.body.className = S.screen === "profile" ? "full" : nav ? "nav-ar" : "";
+  document.body.className = S.screen === "profile" ? "full" : nav ? "nav-ar" : "sheet";
   $("panel").innerHTML = nav ? "" : {profile: screenProfile, route: screenRoute}[S.screen]();
   bind();
   renderHud();
@@ -588,8 +596,68 @@ function render() {
     }
   } else mc?.remove();
   syncGuard();
+  layoutSheet();
   setTimeout(() => map.invalidateSize(), 0);
 }
+
+// ---- Panneau du bas : se réduit d'un geste pour laisser voir le plan ------------------------------
+// Deux positions : ouvert (hauteur de son contenu) ou réduit (titre seul). On le fait glisser par
+// sa poignée ou son titre ; toucher la poignée bascule de l'un à l'autre.
+let sheetCollapsed = false;
+const sideLayout = () => matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
+function sheetRange() {
+  const p = $("panel"), head = p.querySelector(".sheet-head");
+  if (!head) return 0;
+  const peek = head.offsetTop + head.offsetHeight + parseFloat(getComputedStyle(p).paddingBottom) + 4;
+  return Math.max(0, p.offsetHeight - peek);             // de combien on peut le descendre
+}
+function layoutSheet(offset = null) {
+  const p = $("panel"), root = document.documentElement.style;
+  if (S.screen !== "route" || sideLayout()) { p.style.removeProperty("--sheet-y"); root.setProperty("--sheet-h", "0px"); return; }
+  const max = sheetRange(), y = offset ?? (sheetCollapsed ? max : 0);
+  p.style.setProperty("--sheet-y", `${Math.max(0, Math.min(max, y))}px`);
+  root.setProperty("--sheet-h", `${Math.round(p.offsetHeight - Math.max(0, Math.min(max, y)))}px`);
+  const h = $("sheetHandle");
+  if (h) {
+    h.setAttribute("aria-expanded", String(!sheetCollapsed));
+    h.setAttribute("aria-label", sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan");
+  }
+}
+function setSheet(collapsed) {
+  sheetCollapsed = collapsed;
+  document.body.classList.remove("dragging");
+  layoutSheet();
+  if (S.routes.length) setTimeout(fitRoute, 320);          // recadrer une fois le panneau en place
+}
+let drag = null;
+$("panel").addEventListener("pointerdown", e => {
+  const head = e.target.closest(".sheet-head");
+  if (!head || S.screen !== "route" || sideLayout() || (e.target.closest("button") && !e.target.closest("#sheetHandle"))) return;
+  drag = {y: e.clientY, start: sheetCollapsed ? sheetRange() : 0, moved: 0, t: performance.now(), id: e.pointerId,
+          onHandle: !!e.target.closest("#sheetHandle")};
+  head.setPointerCapture?.(e.pointerId);
+});
+$("panel").addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.moved = e.clientY - drag.y;
+  if (Math.abs(drag.moved) < 4) return;
+  document.body.classList.add("dragging");
+  layoutSheet(drag.start + drag.moved);
+});
+const endDrag = e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const {moved, start, t, onHandle} = drag, max = sheetRange();
+  drag = null;
+  if (Math.abs(moved) < 6) {                              // simple toucher : la poignée bascule, le titre rouvre
+    setSheet(onHandle ? !sheetCollapsed : false);
+    return;
+  }
+  const speed = moved / Math.max(1, performance.now() - t);       // px/ms : un geste vif suffit
+  setSheet(speed > 0.25 ? true : speed < -0.25 ? false : start + moved > max / 2);
+};
+$("panel").addEventListener("pointerup", endDrag);
+$("panel").addEventListener("pointercancel", endDrag);
+addEventListener("resize", () => layoutSheet());
 function renderKeepFocus() {
   const q = $("q"), pos = q?.selectionStart;
   render();
@@ -632,6 +700,7 @@ function closeRoutes() {
   render();
 }
 function chooseDest(place) {
+  sheetCollapsed = false;                                 // les itinéraires doivent se voir
   S.dest = place; S.query = place.label; S.places = [];
   computeRoute();
 }
@@ -714,6 +783,8 @@ function bind() {
   on("toProfile", "onclick", () => go("profile"));
   on("gpsHere", "onclick", useMyPosition);
   on("q", "oninput", e => { S.query = e.target.value; search(S.query); });
+  on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
+  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
   all("[data-place]", p => p.onclick = () => chooseDest(S.places[+p.dataset.place]));
   all("[data-pick]", b => b.onclick = () => { S.pick = b.dataset.pick; render(); });
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
