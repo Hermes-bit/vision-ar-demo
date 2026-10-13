@@ -150,6 +150,7 @@ export function arcCost(edge, profile, forward = true, obstacleBlocking = false,
 // ---- Moteur (engine.py) ------------------------------------------------------------
 export const SNAP_MAX_DISTANCE_M = 150.0;
 const OBSTACLE_RADIUS_M = 15.0;
+const SNAP_NODE_M = 1.0;          // à moins de 1 m d'un bout du tronçon : on part du nœud lui-même
 
 export class RoutingError extends Error {}
 
@@ -169,6 +170,62 @@ export function nearestNode(net, lat, lon) {
   return best;
 }
 
+// (distance en m, position t de 0 à 1 sur le segment) : mêmes calculs que pointSegmentDistanceM
+function project(lat, lon, aLat, aLon, bLat, bLon) {
+  const k = Math.cos(rad(lat));
+  const ax = (aLon - lon) * k, ay = aLat - lat, bx = (bLon - lon) * k, by = bLat - lat;
+  const dx = bx - ax, dy = by - ay, seg2 = dx * dx + dy * dy;
+  const t = seg2 === 0 ? 0.0 : Math.max(0.0, Math.min(1.0, -(ax * dx + ay * dy) / seg2));
+  return [Math.hypot(ax + t * dx, ay + t * dy) * (Math.PI / 180.0) * 6371000.0, t];
+}
+const shapeOf = (net, e) => e.shape.length >= 2 ? e.shape
+  : [[net.nodes[e.source].lat, net.nodes[e.source].lon], [net.nodes[e.target].lat, net.nodes[e.target].lon]];
+// Départ / arrivée accrochés au point le plus proche d'un tronçon praticable pour ce profil (et non au
+// carrefour le plus proche) -> ["node", id] près d'un bout de tronçon, sinon ["split", tronçon, i, point, fraction]
+function snap(net, lat, lon, profile) {
+  const dlat = SNAP_MAX_DISTANCE_M / 111000.0, dlon = dlat / Math.max(0.2, Math.cos(rad(lat)));
+  let best = null;
+  for (const e of net.edges) {
+    const shape = shapeOf(net, e);
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    for (const q of shape) { minLat = Math.min(minLat, q[0]); maxLat = Math.max(maxLat, q[0]); minLon = Math.min(minLon, q[1]); maxLon = Math.max(maxLon, q[1]); }
+    if (minLat > lat + dlat || maxLat < lat - dlat || minLon > lon + dlon || maxLon < lon - dlon) continue;
+    if (arcCost(e, profile, true).cost === null && arcCost(e, profile, false).cost === null) continue;
+    for (let i = 1; i < shape.length; i++) {
+      const [d, t] = project(lat, lon, shape[i - 1][0], shape[i - 1][1], shape[i][0], shape[i][1]);
+      if (best === null || d < best[0]) best = [d, e, i, t];
+    }
+  }
+  if (best === null || best[0] > SNAP_MAX_DISTANCE_M)
+    throw new RoutingError("Ce point est trop loin d'un cheminement piéton connu.");
+  const [, e, i, t] = best, shape = shapeOf(net, e), a = shape[i - 1], b = shape[i];
+  const point = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+  let before = 0.0, total = 0.0;
+  for (let k = 1; k < shape.length; k++) {
+    const seg = haversineM(shape[k - 1][0], shape[k - 1][1], shape[k][0], shape[k][1]);
+    total += seg;
+    if (k < i) before += seg;
+  }
+  before += haversineM(a[0], a[1], point[0], point[1]);
+  const frac = total > 0 ? before / total : 0.0;
+  if (frac * e.length_m <= SNAP_NODE_M) return ["node", e.source];
+  if ((1.0 - frac) * e.length_m <= SNAP_NODE_M) return ["node", e.target];
+  return ["split", e, i, point, frac];
+}
+const pushTo = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
+// Coupe le tronçon en deux morceaux au point accroché (nœud virtuel vid : -1 départ, -2 arrivée)
+function attach(net, sn, vid, extra, vnodes) {
+  if (sn[0] === "node") return sn[1];
+  const [, e, i, point, frac] = sn, shape = shapeOf(net, e), part = vid === -1 ? 0 : 2;
+  const e1 = {...e, id: -(10 + 5 * e.id + part), target: vid, length_m: e.length_m * frac, shape: [...shape.slice(0, i), point], orig_id: e.id};
+  const e2 = {...e, id: -(11 + 5 * e.id + part), source: vid, length_m: e.length_m * (1.0 - frac), shape: [point, ...shape.slice(i)], orig_id: e.id};
+  pushTo(extra, e.source, [e1, true]);
+  pushTo(extra, vid, [e1, false]);
+  pushTo(extra, vid, [e2, true]);
+  pushTo(extra, e.target, [e2, false]);
+  vnodes.set(vid, {id: vid, lat: point[0], lon: point[1]});
+  return vid;
+}
 function pointSegmentDistanceM(lat, lon, aLat, aLon, bLat, bLon) {
   const k = Math.cos(rad(lat));
   const ax = (aLon - lon) * k, ay = aLat - lat, bx = (bLon - lon) * k, by = bLat - lat;
@@ -219,10 +276,25 @@ class Heap {
   }
 }
 
-export function engineRoute(net, origin, destination, profile, reports = []) {
+export function engineRoute(net, origin, destination, profile, reports = [], metric = "effort") {
   const active = reports.filter(r => r.active !== false);
-  const start = nearestNode(net, origin[0], origin[1]);
-  const goal = nearestNode(net, destination[0], destination[1]);
+  const sSnap = snap(net, origin[0], origin[1], profile), gSnap = snap(net, destination[0], destination[1], profile);
+  const extra = new Map(), vnodes = new Map();
+  if (sSnap[0] === "split" && gSnap[0] === "split" && sSnap[1].id === gSnap[1].id) {
+    // départ et arrivée sur le même tronçon : un morceau direct entre les deux points
+    const e = sSnap[1], shape = shapeOf(net, e);
+    const ends = [[sSnap[4], sSnap[2], sSnap[3], -1], [gSnap[4], gSnap[2], gSnap[3], -2]].sort((x, y) =>
+      x[0] - y[0] || x[1] - y[1] || x[2][0] - y[2][0] || x[2][1] - y[2][1] || x[3] - y[3]);
+    const [[fa, ia, pa, va], [fb, ib, pb, vb]] = ends;
+    if ((fb - fa) * e.length_m <= SNAP_NODE_M)
+      return {legs: [], length_m: 0, effort: 0, duration_s: 0, max_slope_pct: 0, steps: 0,
+              warnings: ["Vous êtes déjà arrivé."], nodes: {[-1]: {id: -1, lat: pa[0], lon: pa[1]}}};
+    const direct = {...e, id: -(14 + 5 * e.id), source: va, target: vb, length_m: e.length_m * (fb - fa),
+                    shape: [pa, ...shape.slice(ia, ib), pb], orig_id: e.id};
+    pushTo(extra, va, [direct, true]);
+    pushTo(extra, vb, [direct, false]);
+  }
+  const start = attach(net, sSnap, -1, extra, vnodes), goal = attach(net, gSnap, -2, extra, vnodes);
   if (start === goal) {
     return {legs: [], length_m: 0, effort: 0, duration_s: 0, max_slope_pct: 0, steps: 0,
             warnings: ["Vous êtes déjà arrivé."], nodes: {[start]: net.nodes[start]}};
@@ -238,13 +310,13 @@ export function engineRoute(net, origin, destination, profile, reports = []) {
     if (done.has(node)) continue;
     if (node === goal) break;
     done.add(node);
-    for (const [edge, forward] of net.adj[node]) {
+    for (const [edge, forward] of [...(net.adj[node] || []), ...(extra.get(node) || [])]) {
       if (!obstacleCache.has(edge.id)) obstacleCache.set(edge.id, obstaclesOn(net, edge, active));
       const [blocking, nearby] = obstacleCache.get(edge.id);
       const c = arcCost(edge, profile, forward, blocking, nearby);
       if (c.cost === null) continue;
       const leg = {edge, forward, cost: c.cost, reasons: c.reasons};
-      const nxt = legTo(leg), nd = d + c.cost;
+      const nxt = legTo(leg), nd = d + (metric === "effort" ? c.cost : edge.length_m);
       if (nd < (dist.has(nxt) ? dist.get(nxt) : Infinity)) {
         dist.set(nxt, nd);
         prev.set(nxt, leg);
@@ -263,7 +335,7 @@ export function engineRoute(net, origin, destination, profile, reports = []) {
   }
   legs.reverse();
   const nodes = {};
-  for (const l of legs) for (const n of [legFrom(l), legTo(l)]) nodes[n] = net.nodes[n];
+  for (const l of legs) for (const n of [legFrom(l), legTo(l)]) nodes[n] = n < 0 ? vnodes.get(n) : net.nodes[n];
   return summarise(legs, profile, nodes);
 }
 
@@ -385,7 +457,7 @@ function out(net, route, label, accessible, issues) {
     steps_count: route.steps, warnings: route.warnings, blocking_issues: issues, geometry: geometry(net, route),
     steps: buildSteps(route).map(s => ({maneuver: s.maneuver, distance_m: s.distance_m, street: s.street,
                                         lat: s.lat, lon: s.lon, text: s.text, alerts: s.alerts})),
-    edge_ids: route.legs.map(l => l.edge.id),
+    edge_ids: route.legs.map(l => l.edge.orig_id ?? l.edge.id),
   };
 }
 function issuesFor(route, profile) {
@@ -407,12 +479,17 @@ export function computeRoutes(net, req, reports = []) {
   const best = engineRoute(net, origin, dest, profile, reports);
   const routes = [out(net, best, "Le plus accessible", true, [])];
   if (req.compare_shortest !== false) {
+    const ids = r => r.legs.map(l => l.edge.id).join(",");
+    // Le plus court en respectant le profil PMR : Dijkstra sur la distance, avec les mêmes interdits
+    let shortAcc = null;
+    try { shortAcc = engineRoute(net, origin, dest, profile, reports, "length"); } catch (e) { if (!(e instanceof RoutingError)) throw e; }
+    if (shortAcc && ids(shortAcc) !== ids(best)) routes.push(out(net, shortAcc, "Le plus court accessible", true, []));
+    // Le plus court sans adaptation (pour comparer : souvent impraticable en fauteuil)
     let shortest = null;
     try { shortest = engineRoute(net, origin, dest, preset("pedestrian"), reports); } catch (e) { if (!(e instanceof RoutingError)) throw e; }
-    const ids = r => r.legs.map(l => l.edge.id).join(",");
-    if (shortest && ids(shortest) !== ids(best)) {
+    if (shortest && ids(shortest) !== ids(best) && (!shortAcc || ids(shortest) !== ids(shortAcc))) {
       const issues = issuesFor(shortest, profile);
-      routes.push(out(net, shortest, "Le plus court", issues.length === 0, issues));
+      routes.push(out(net, shortest, "Le plus court, sans adaptation", issues.length === 0, issues));
     }
   }
   return {api_version: "1.0.0", routes};
