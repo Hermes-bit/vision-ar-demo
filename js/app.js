@@ -539,7 +539,8 @@ function reroute(from, title, manual = false, fromStart = false) {
     if (!manual && !fromStart) buzz("uturn");
     startNav(res.routes[0], true);
     S.routes = res.routes; S.selected = 0;
-    S.nav.rerouted = {at: Date.now(), title};
+    if (!fromStart) S.nav.rerouted = {at: Date.now(), title};           // départ normal : pas de bandeau d'alerte
+    if (fromStart) { S.nav.fromHere = true; S.nav.quietStart = false; S.origin = {lat: from.lat, lon: from.lon, label: "Ma position"}; }
     S.nav.gpsInfo = "";
   } catch (e) {
     if (!(e instanceof RoutingError)) throw e;
@@ -612,20 +613,17 @@ function onGps(pos, precise = false) {
     // L'itinéraire part du carrefour le plus proche de votre point de départ ; depuis un bâtiment, le plus court
     // est souvent de rejoindre le trottoir juste devant, un peu plus loin sur l'itinéraire. On vise donc le point
     // de l'itinéraire le plus proche de vous, sur ses 300 premiers mètres.
-    let join = {d: haversineM(p.lat, p.lon, g[0].lat, g[0].lon), along: 0};
-    for (let i = 1; i < g.length && n.cum[i - 1] <= 300; i++) {
-      const pr = project(p, g[i - 1], g[i]);
-      if (pr.d < join.d) join = {d: pr.d, along: n.cum[i - 1] + pr.t * (n.cum[i] - n.cum[i - 1])};
-    }
-    const dStart = join.d;
-    if (dStart <= Math.max(10, Math.min(acc, 15)) && acc <= 25) return beginRoute(join.along);
-    Object.assign(n, {approachDist: dStart, gap: dStart, gapAlong: join.along, away: true, offRoute: false});
+    const dStart = haversineM(p.lat, p.lon, g[0].lat, g[0].lon);
+    if (dStart <= Math.max(10, Math.min(acc, 15)) && acc <= 25) return beginRoute(0);
+    // Pas au point de départ (départ choisi ailleurs, ou Mairie par défaut) : itinéraire recalculé depuis votre
+    // vraie position, accroché au cheminement le plus proche. Rejoindre l'itinéraire prévu en coupant au plus
+    // court faisait traverser une avenue n'importe où (tests du 13/10/2026). Une seule fois par départ.
+    if (dStart > 15 && acc <= 30 && !n.fromHere) return reroute(p, "Départ depuis votre position", false, true);
+    Object.assign(n, {approachDist: dStart, gap: dStart, gapAlong: 0, away: true, offRoute: false});
     if (!n.said.has("approach")) {
       n.said.add("approach");
       say(`Rejoignez l'itinéraire, à ${Math.round(dStart)} mètres. Suivez les pointillés.`, true);
     }
-    // point de départ choisi sur le plan mais on est ailleurs : nouvel itinéraire depuis sa position
-    if (dStart > 150 && acc <= 40) reroute(p, "Départ depuis votre position", false, true);
     return renderNavLive();
   }
   n.gap = best?.d ?? 0;
@@ -1278,4 +1276,4 @@ fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
 
 // Accès pour les tests automatiques uniquement (adresse terminée par ?debug)
 if (new URLSearchParams(location.search).has("debug"))
-  window.__va = {S, posAt, navState, moveTo, get net() { return net; }, get transit() { return transit; }, addReport, reports, navApi};
+  window.__va = {S, posAt, navState, moveTo, chooseDest, get net() { return net; }, get transit() { return transit; }, addReport, reports, navApi};

@@ -150,6 +150,7 @@ export function arcCost(edge, profile, forward = true, obstacleBlocking = false,
 // ---- Moteur (engine.py) ------------------------------------------------------------
 export const SNAP_MAX_DISTANCE_M = 150.0;
 const OBSTACLE_RADIUS_M = 15.0;
+const CROSSING_PENALTY_M = 25.0;   // « le plus court » : une traversée compte comme 25 m de plus
 const SNAP_NODE_M = 1.0;          // à moins de 1 m d'un bout du tronçon : on part du nœud lui-même
 
 export class RoutingError extends Error {}
@@ -316,7 +317,7 @@ export function engineRoute(net, origin, destination, profile, reports = [], met
       const c = arcCost(edge, profile, forward, blocking, nearby);
       if (c.cost === null) continue;
       const leg = {edge, forward, cost: c.cost, reasons: c.reasons};
-      const nxt = legTo(leg), nd = d + (metric === "effort" ? c.cost : edge.length_m);
+      const nxt = legTo(leg), nd = d + (metric === "effort" ? c.cost : edge.length_m + (edge.is_crossing ? CROSSING_PENALTY_M : 0.0));
       if (nd < (dist.has(nxt) ? dist.get(nxt) : Infinity)) {
         dist.set(nxt, nd);
         prev.set(nxt, leg);
