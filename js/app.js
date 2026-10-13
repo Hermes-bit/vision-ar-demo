@@ -140,7 +140,8 @@ function toast(text, ms = 3500) {
 
 // ---- Carte ---------------------------------------------------------------------------------
 const map = L.map("map", {zoomControl: false, preferCanvas: true}).setView([MAIRIE.lat, MAIRIE.lon], 16);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19,
+// keepBuffer : quelques tuiles d'avance autour de l'écran, pour que la carte qui suit vos pas ne montre pas de trou
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19, keepBuffer: 4, updateWhenIdle: false,
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · relief © IGN'}).addTo(map);
 // Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
 map.attributionControl.setPosition("topright");

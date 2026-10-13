@@ -790,9 +790,17 @@ function domeEdgeY(x) {
   const g = domeGeom;
   return g.top + g.ry - g.ry * Math.sqrt(Math.max(0, 1 - ((x - g.W / 2) / g.rx) ** 2));
 }
+// La petite carte change de taille (carte agrandie, poignée, consigne sur 2 ou 3 lignes) : Leaflet doit le
+// savoir, sinon il ne charge les tuiles que pour l'ancienne taille et laisse une bande vide en marchant
+let mapResizeTimer = 0;
+function refreshMapSize() {
+  clearTimeout(mapResizeTimer);
+  mapResizeTimer = setTimeout(() => api?.map.invalidateSize({pan: false}), 60);
+}
 function layoutDome() {
   const dome = root?.querySelector(".dome"), map = dome?.querySelector(".dome-map");
   if (!map || !map.clientWidth) return;
+  refreshMapSize();
   const W = map.clientWidth, H = map.clientHeight, landscape = matchMedia("(orientation: landscape) and (max-height: 600px)").matches;
   domeGeom = {W, top: map.offsetTop, rx: W * (mapFull ? 1.6 : landscape ? 0.9 : 0.78), ry: H};
   map.style.clipPath = `ellipse(${domeGeom.rx.toFixed(1)}px ${H}px at 50% 100%)`;
