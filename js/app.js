@@ -151,20 +151,52 @@ const BASEMAPS = {
         url: IGN_WMTS("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png"), maxZoom: 19, attribution: "© IGN · réseau © OpenStreetMap"},
   ortho: {label: "Photos aériennes", sub: "Vue du ciel (IGN), comme le mode satellite",
           url: IGN_WMTS("ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg"), maxZoom: 19, attribution: "Photos © IGN · réseau © OpenStreetMap"},
-  voyager: {label: "Épuré", sub: "Style clair et simple, proche de Google Maps ou Plans",
-            url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", maxZoom: 19, subdomains: "abcd",
-            attribution: `${OSM_ATTR} · © <a href="https://carto.com/attributions">CARTO</a>`},
+  // Fonds vectoriels OpenFreeMap : gratuits, sans clé ni limite ; affichés par MapLibre, chargé seulement si choisi
+  liberty: {label: "Style Plans", sub: "Clair et coloré, proche de Plans (Apple) et de Google Maps",
+            style: "https://tiles.openfreemap.org/styles/liberty", attribution: `<a href="https://openfreemap.org">OpenFreeMap</a> · © OpenMapTiles · ${OSM_ATTR}`},
+  positron: {label: "Épuré", sub: "Très sobre, gris clair : l'itinéraire ressort bien",
+             style: "https://tiles.openfreemap.org/styles/positron", attribution: `<a href="https://openfreemap.org">OpenFreeMap</a> · © OpenMapTiles · ${OSM_ATTR}`},
 };
-let baseLayer = null;
-function setBasemap(key) {
-  const b = BASEMAPS[key] || BASEMAPS.osm;
+const MAPLIBRE = ["https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.js",
+                  "https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"];
+let maplibreLoading = null;
+function loadMaplibre() {
+  const load = src => new Promise((ok, ko) => {
+    const el = document.createElement("script");
+    el.src = src; el.crossOrigin = "anonymous"; el.onload = ok; el.onerror = () => ko(new Error(src));
+    document.head.append(el);
+  });
+  if (!maplibreLoading) {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.css";
+    document.head.append(css);
+    maplibreLoading = load(MAPLIBRE[0]).then(() => load(MAPLIBRE[1])).catch(e => { maplibreLoading = null; throw e; });
+  }
+  return maplibreLoading;
+}
+let baseLayer = null, basemapRequest = 0;
+async function setBasemap(key) {
+  if (key === "voyager") key = "liberty";                 // ancien fond CARTO (clé désormais exigée)
+  const b = BASEMAPS[key] || BASEMAPS.osm, request = ++basemapRequest;
   S.basemap = BASEMAPS[key] ? key : "osm";
   store.set("va-basemap", S.basemap);
+  let layer;
+  if (b.style) {
+    try { await loadMaplibre(); } catch { toast("Ce fond de carte ne peut pas se charger (connexion ?) : retour au plan OpenStreetMap."); return setBasemap("osm"); }
+    if (request !== basemapRequest) return;               // un autre fond a été choisi entre-temps
+    layer = L.maplibreGL({style: b.style, interactive: false});          // mention fournie par le style lui-même
+  } else {
+    // keepBuffer : quelques tuiles d'avance autour de l'écran, pour que la carte qui suit vos pas ne montre pas de trou
+    layer = L.tileLayer(b.url, {maxZoom: b.maxZoom, subdomains: b.subdomains || "abc", keepBuffer: 4, updateWhenIdle: false,
+      attribution: b.attribution});
+  }
   baseLayer?.remove();
-  // keepBuffer : quelques tuiles d'avance autour de l'écran, pour que la carte qui suit vos pas ne montre pas de trou
-  baseLayer = L.tileLayer(b.url, {maxZoom: b.maxZoom, subdomains: b.subdomains || "abc", keepBuffer: 4, updateWhenIdle: false,
-    attribution: b.attribution}).addTo(map);
-  baseLayer.bringToBack();
+  // la mention des sources repart de zéro (le fond vectoriel ajoute la sienne et ne la retire pas en partant)
+  const ctl = map.attributionControl;
+  for (const k of Object.keys(ctl._attributions || {})) delete ctl._attributions[k];
+  ctl._update?.();
+  baseLayer = layer.addTo(map);
+  baseLayer.bringToBack?.();
 }
 // Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
 map.attributionControl.setPosition("topright");
@@ -782,8 +814,8 @@ function screenSettings() {
   <section class="card"><h3>${icon("map")} Fond de carte</h3>
     ${Object.entries(BASEMAPS).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
       <span class="grow">${b.label}<small>${b.sub}</small></span>${S.basemap === k ? `<span class="set-check">${icon("check")}</span>` : ""}</button>`).join("")}
-    <p class="fine">${icon("info")} Google Maps et Plans (Apple) ne peuvent pas être proposés gratuitement : leurs conditions d'utilisation
-      exigent leurs propres outils, avec une clé payante ou un compte développeur Apple.</p>
+    <p class="fine">${icon("info")} Le vrai fond Google Maps ou Plans (Apple, utilisé par Citymapper) demande leurs propres outils : une
+      clé Google avec compte de facturation, ou un compte développeur Apple (99 €/an). « Style Plans » en est l'équivalent gratuit.</p>
   </section>
   <section class="card"><h3>${icon("scan-eye")} Obstacles vus par la caméra</h3>
     ${sw("setDetect", "scan-eye", "Détecter les obstacles (expérimental)", S.detect)}
