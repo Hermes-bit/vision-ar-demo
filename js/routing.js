@@ -105,6 +105,7 @@ export function loadNetwork(data) {
 const UPHILL_FACTOR = 0.12, DOWNHILL_FACTOR = 0.04, CROSS_SLOPE_FACTOR = 0.10;
 const ROUGH_SURFACE_FACTOR = 0.5, UNKNOWN_DATA_FACTOR = 0.25;
 const STEP_PENALTY_M = 40.0, NO_SOUND_SIGNAL_PENALTY_M = 30.0, OBSTACLE_PENALTY_M = 80.0;
+const CROSSING_EFFORT_M = 20.0;   // chaque traversée de rue « vaut » 20 m de plus
 const ROADWAY_FACTOR = 2.0;   // marcher sur la chaussée quand un trottoir longe la rue : +200 %
 const ROUGH_SURFACES = new Set(["sett", "cobblestone", "gravel", "unpaved", "grass", "sand", "dirt"]);
 
@@ -143,6 +144,7 @@ export function arcCost(edge, profile, forward = true, obstacleBlocking = false,
     reasons.push("données incomplètes");
   }
   let cost = edge.length_m * factor;
+  if (edge.is_crossing) cost += CROSSING_EFFORT_M;
   if (edge.has_step) { cost += STEP_PENALTY_M; reasons.push("marche"); }
   if (profile.prefers_sound_signals && edge.is_crossing && edge.sound_signal !== true) {
     cost += NO_SOUND_SIGNAL_PENALTY_M;
@@ -343,7 +345,10 @@ export function engineRoute(net, origin, destination, profile, reports = [], met
   legs.reverse();
   const nodes = {};
   for (const l of legs) for (const n of [legFrom(l), legTo(l)]) nodes[n] = n < 0 ? vnodes.get(n) : net.nodes[n];
-  return summarise(legs, profile, nodes);
+  const route = summarise(legs, profile, nodes);
+  route.branches = {};
+  for (const n of Object.keys(nodes)) route.branches[n] = (net.adj[n] || []).length + (extra.get(+n) || []).length;
+  return route;
 }
 
 function summarise(legs, profile, nodes) {
@@ -393,18 +398,23 @@ function legAlerts(leg) {
   const alerts = [];
   if (leg.edge.is_crossing) alerts.push("Traversée" + (leg.edge.sound_signal ? " avec feu sonore" : ""));
   if (leg.edge.has_step) alerts.push("Marche");
+  if (leg.edge.beside_sidewalk) alerts.push("Passage sur la chaussée");
   if (leg.reasons.includes("données incomplètes")) alerts.push("Données à confirmer");
   return alerts;
 }
 const frPct = v => fixed(v, 1).replace(/0+$/, "").replace(/\.$/, "").replace(".", ",") + " %";
 
+const MICRO_STEP_M = 12.0;   // une étape plus courte est fusionnée avec la suivante (décrochement de trottoir, îlot)
 export function buildSteps(route) {
+  // On n'annonce un virage qu'à un embranchement ; les micro-étapes sont fusionnées en une consigne nette.
   const nodes = route.nodes;
   if (!route.legs.length) return [];
-  const steps = [];
+  const branches = route.branches || {};
+  const steps = [], meta = [];
   const first = route.legs[0], start = nodes[legFrom(first)];
   let current = {maneuver: "depart", distance_m: first.edge.length_m, street: first.edge.name,
                  lat: start.lat, lon: start.lon, text: "", alerts: legAlerts(first)};
+  let curMeta = [null, startBearing(nodes, first)];
   const slopes = [[]];
   const pushSlope = (bucket, leg) => { const s = legSlope(leg); if (s !== null) bucket.push(s); };
   pushSlope(slopes.at(-1), first);
@@ -412,21 +422,27 @@ export function buildSteps(route) {
   for (const leg of route.legs.slice(1)) {
     const m = classify(turnAngle(prevBearing, startBearing(nodes, leg)));
     const sameStreet = leg.edge.name && leg.edge.name === current.street;
-    if (m === "straight" && (sameStreet || !leg.edge.name)) {
+    const choice = (branches[legFrom(leg)] ?? 3) >= 3;
+    if ((m === "straight" && (sameStreet || !leg.edge.name)) || (!choice && m !== "uturn")) {
       current.distance_m += leg.edge.length_m;
+      if (!current.street && leg.edge.name) current.street = leg.edge.name;
       for (const a of legAlerts(leg)) if (!current.alerts.includes(a)) current.alerts.push(a);
       pushSlope(slopes.at(-1), leg);
     } else {
       steps.push(current);
+      meta.push(curMeta);
       const node = nodes[legFrom(leg)];
       current = {maneuver: m, distance_m: leg.edge.length_m, street: leg.edge.name,
                  lat: node.lat, lon: node.lon, text: "", alerts: legAlerts(leg)};
+      curMeta = [prevBearing, startBearing(nodes, leg)];
       slopes.push([]);
       pushSlope(slopes.at(-1), leg);
     }
     prevBearing = endBearing(nodes, leg);
   }
   steps.push(current);
+  meta.push(curMeta);
+  mergeMicroSteps(steps, meta, slopes);
   const end = nodes[legTo(route.legs.at(-1))];
   steps.push({maneuver: "arrive", distance_m: 0.0, street: "", lat: end.lat, lon: end.lon, text: TEXT.arrive, alerts: []});
 
@@ -445,6 +461,46 @@ export function buildSteps(route) {
   return steps;
 }
 
+function absorb(into, other) {
+  into.distance_m += other.distance_m;
+  if (!into.street && other.street) into.street = other.street;
+  for (const a of other.alerts) if (!into.alerts.includes(a)) into.alerts.push(a);
+}
+function mergeMicroSteps(steps, meta, slopes) {
+  while (steps.length > 1 && steps[0].distance_m < MICRO_STEP_M) {
+    absorb(steps[0], steps[1]);
+    meta[0][1] = meta[1][1];
+    slopes[0].push(...slopes[1]);
+    steps.splice(1, 1); meta.splice(1, 1); slopes.splice(1, 1);
+  }
+  let i = 1;
+  while (i < steps.length) {
+    const s = steps[i];
+    if (s.distance_m >= MICRO_STEP_M) { i++; continue; }
+    if (i + 1 < steps.length) {
+      const n = steps[i + 1], net = classify(turnAngle(meta[i][0], meta[i + 1][1])), prev = steps[i - 1];
+      if (net === "straight" && (!n.street || n.street === prev.street)) {
+        absorb(prev, s);
+        absorb(prev, n);
+        slopes[i - 1].push(...slopes[i], ...slopes[i + 1]);
+        steps.splice(i, 2); meta.splice(i, 2); slopes.splice(i, 2);
+        i = Math.max(1, i - 1);
+        continue;
+      }
+      s.maneuver = net;
+      s.street = n.street || s.street;
+      s.distance_m += n.distance_m;
+      for (const a of n.alerts) if (!s.alerts.includes(a)) s.alerts.push(a);
+      meta[i][1] = meta[i + 1][1];
+      slopes[i].push(...slopes[i + 1]);
+      steps.splice(i + 1, 1); meta.splice(i + 1, 1); slopes.splice(i + 1, 1);
+      continue;
+    }
+    absorb(steps[i - 1], s);
+    slopes[i - 1].push(...slopes[i]);
+    steps.splice(i, 1); meta.splice(i, 1); slopes.splice(i, 1);
+  }
+}
 // ---- Réponse identique à POST /route (main.py) ------------------------------------
 function geometry(net, route) {
   const pts = [];
