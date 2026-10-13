@@ -532,16 +532,17 @@ function frame() {
 // Glissement lent entre deux mesures GPS pour que les lignes ne sautent pas.
 let lastView = 0;
 function viewpoint(s) {
-  const n = s.nav, away = !!(n.real && (n.offRoute || n.gap > 6));
-  const target = away ? {lat: n.real.lat, lon: n.real.lon} : n.here;
+  const n = s.nav, fresh = n.real && Date.now() - n.real.at < 15000;
+  const away = !!(fresh && (n.offRoute || n.away));
+  const target = away ? {lat: n.real.lat, lon: n.real.lon} : s.posAt(n.pos);
   const now = performance.now(), k = 1 - Math.exp(-Math.min(1, (now - lastView) / 1000) / 0.8);
   lastView = now;
-  if (!view || view.away !== away || haversineM(view.here.lat, view.here.lon, target.lat, target.lon) > 60) view = {here: {...target}, pos: n.pos, away};
+  // Glissement doux, y compris quand on passe de « sur l'itinéraire » à « à l'écart » : plus de saut du tracé
+  if (!view || haversineM(view.here.lat, view.here.lon, target.lat, target.lon) > 60) view = {here: {...target}, pos: n.pos};
   else {
     view.here = {lat: view.here.lat + (target.lat - view.here.lat) * k, lon: view.here.lon + (target.lon - view.here.lon) * k};
     view.pos += (n.pos - view.pos) * k;
   }
-  if (!away) view.here = s.posAt(view.pos);
   view.join = away ? s.posAt(n.gapAlong ?? n.pos) : null;
   return view;
 }
@@ -558,7 +559,7 @@ function renderUi(s, heading, compass) {
   const crossing = next.alerts.some(a => a.startsWith("Traversée"));
   const sub = st.arrived ? (s.dest?.label || "") : crossing ? `puis traversez au passage piéton${next.alerts.some(a => a.includes("feu sonore")) ? " (feu sonore)" : ""}`
     : next.maneuver === "arrive" ? (s.dest?.label || "") : `puis ${dist(next.distance_m)} ${next.street ? "· " + next.street : "tout droit"}`;
-  const joining = !st.arrived && !s.nav.offRoute && s.nav.gap > 8;
+  const joining = !st.arrived && !s.nav.offRoute && s.nav.away;
   const title = st.arrived ? "Vous êtes arrivé" : joining ? "Rejoignez l'itinéraire" : TITLE[next.maneuver] || "Continuez tout droit";
   const manIcon = joining ? "footprints" : MAN_ICON[st.arrived ? "arrive" : next.maneuver] || "arrow-up";
   const away = st.arrived ? "" : joining ? dist(s.nav.gap) : dist(st.toManeuver);
