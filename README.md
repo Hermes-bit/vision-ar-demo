@@ -23,6 +23,10 @@ pentes, marches, bordures de trottoir, feux sonores, revêtement.
    - **Plan** : agrandit la carte ; bouton central : **signaler un obstacle** ; **Lunettes** : vue des
      lunettes connectées ; 🔊 : voix.
    Les repères viennent des données, pas d'une reconnaissance d'image : précision de quelques mètres.
+5. **Gestes** : glisser depuis le **bord gauche** vers la droite pour revenir en arrière, depuis le
+   **bord droit** vers la gauche pour avancer (profil → recherche → démarrer le guidage). Quitter un
+   guidage par geste demande une confirmation. Le choix d'itinéraire a un bouton « Fermer » sur le plan
+   et dans la liste.
 
 Tout fonctionne sur le téléphone, même hors ligne une fois ouvert (sauf la
 recherche d'adresse et le fond de carte non encore vu). Les signalements

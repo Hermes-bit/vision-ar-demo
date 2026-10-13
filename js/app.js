@@ -211,9 +211,8 @@ function gradientLine(ll) {
 map.on("click", e => {
   if (S.screen !== "route") return;
   const p = {lat: e.latlng.lat, lon: e.latlng.lng, label: "Point choisi sur le plan"};
-  if (S.pick === "origin") S.origin = p;
-  else { S.dest = p; S.query = p.label; S.places = []; }
-  computeRoute();
+  if (S.pick === "origin") { S.origin = p; computeRoute(); }
+  else chooseDest(p);
 });
 
 // ---- Itinéraire ---------------------------------------------------------------------------
@@ -223,7 +222,10 @@ function computeRoute() {
     try {
       S.routes = computeRoutes(net, {origin: S.origin, destination: S.dest, profile: profileJson(), compare_shortest: true}, reports()).routes;
       S.selected = 0;
-      map.fitBounds(L.latLngBounds(S.routes[0].geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 24], paddingBottomRight: [24, 24]});
+      // l'itinéraire est cadré dans la partie du plan que le panneau ne couvre pas
+      const panelTop = $("panel").getBoundingClientRect().top || innerHeight * 0.6;
+      const under = panelTop > 0 && panelTop < innerHeight - 40 && $("map").getBoundingClientRect().bottom > panelTop + 40 ? innerHeight - panelTop : 0;
+      map.fitBounds(L.latLngBounds(S.routes[0].geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 80], paddingBottomRight: [24, under + 24]});
     } catch (e) {
       if (!(e instanceof RoutingError)) throw e;
       S.message = e.message;
@@ -483,6 +485,8 @@ function screenRoute() {
   <div class="pick"><span>${icon("map-pin")} Toucher le plan pour placer</span>
     <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button>
       <button data-pick="dest" class="${S.pick === "dest" ? "on" : ""}">l'arrivée</button></div></div>
+  ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
+    <button class="close-btn" id="closeRoutes" aria-label="Fermer le choix d'itinéraire">${icon("x")}<span>Fermer</span></button></div>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`;
@@ -572,6 +576,18 @@ function render() {
   syncLayers();
   if (net) { drawRoutes(); drawReports(); }
   if (nav && !arOpen()) openAR(navApi);                 // dans le geste de l'usager : caméra et boussole autorisées
+  let mc = $("mapClose");
+  if (S.screen === "route" && S.dest) {
+    if (!mc) {
+      mc = document.createElement("button");
+      mc.id = "mapClose"; mc.className = "map-close";
+      mc.setAttribute("aria-label", "Fermer le choix d'itinéraire");
+      mc.innerHTML = `${icon("x")}<span>Fermer</span>`;
+      mc.onclick = back;
+      document.body.append(mc);
+    }
+  } else mc?.remove();
+  syncGuard();
   setTimeout(() => map.invalidateSize(), 0);
 }
 function renderKeepFocus() {
@@ -586,6 +602,102 @@ function renderNavLive() {
   if (S.screen === "nav" && S.nav) map.panTo([S.nav.here.lat, S.nav.here.lon], {animate: false});
 }
 function go(screen) { S.screen = screen; S.message = null; render(); }
+
+// ---- Retour / avancer : gestes, boutons et bouton « retour » du navigateur ----------------------
+// Nos gestes et boutons reviennent en arrière directement : l'appli ne peut jamais être quittée
+// par erreur. L'historique ne garde qu'une étape « sentinelle » : le bouton retour d'Android ou
+// le geste retour de Safari reviennent alors d'un écran dans l'appli au lieu de la fermer.
+let guarded = false;
+function syncGuard() {
+  if (S.screen !== "profile" && !guarded) {
+    try { history.pushState({va: true}, ""); guarded = true; } catch { /* sans historique */ }
+  }
+}
+window.addEventListener("popstate", () => { guarded = false; stepBack(); syncGuard(); });
+function back() { stepBack(); }
+function stepBack() {
+  if (S.hud) { S.hud = false; renderHud(); return; }
+  if (S.screen === "nav") return confirmQuit();
+  if (S.screen === "route" && S.dest) return closeRoutes();
+  if (S.screen === "route") return go("profile");
+}
+function forward() {
+  if (S.screen === "profile") { saveProfile(); go("route"); computeRoute(); return; }
+  if (S.screen === "route" && S.routes[S.selected]?.accessible) return startGuidance();
+  if (S.screen === "route") toast(S.routes.length ? "Cet itinéraire n'est pas praticable : choisissez-en un autre." : "Choisissez d'abord une destination.");
+}
+function closeRoutes() {
+  Object.assign(S, {dest: null, routes: [], query: "", places: [], message: null});
+  map.setView([S.origin.lat, S.origin.lon], 16);
+  render();
+}
+function chooseDest(place) {
+  S.dest = place; S.query = place.label; S.places = [];
+  computeRoute();
+}
+function startGuidance() {
+  startNav(S.routes[S.selected]);
+  go("nav");
+  map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
+}
+// Confirmation avant de quitter un guidage par un geste (on ne l'arrête jamais par mégarde)
+function confirmQuit() {
+  if (document.querySelector(".confirm")) return;          // une seule confirmation à la fois
+  const el = document.createElement("div");
+  el.className = "confirm";
+  el.innerHTML = `<div class="confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="cq">
+    <h3 id="cq">${icon("navigation")} Quitter le guidage&nbsp;?</h3>
+    <div class="actions"><button class="btn soft" data-c="stay">Continuer</button><button class="btn dark" data-c="quit">${icon("x")} Quitter</button></div></div>`;
+  el.onclick = e => {
+    const c = e.target.closest("[data-c]")?.dataset.c;
+    if (!c && e.target !== el) return;
+    el.remove();
+    if (c === "quit") navApi.stop();
+  };
+  document.body.append(el);
+  el.querySelector("[data-c=stay]").focus();
+}
+
+const SWIPE_EDGE = 30, SWIPE_MIN = 90;
+let swipe = null;
+const swipeHint = document.createElement("div");
+swipeHint.className = "swipe-hint";
+swipeHint.hidden = true;
+document.body.append(swipeHint);
+document.addEventListener("touchstart", e => {
+  if (e.touches.length !== 1 || S.hud || document.querySelector(".confirm")) return;
+  const t = e.touches[0], x = t.clientX;
+  const edge = x < SWIPE_EDGE ? "left" : x > innerWidth - SWIPE_EDGE ? "right" : null;
+  const onPanel = !!e.target.closest("#panel") && !e.target.closest("input, .seg, .tile, .switch");
+  if ((!edge && !onPanel) || e.target.closest("#ar .sheet")) return;
+  swipe = {x, y: t.clientY, edge, dx: 0, on: false};
+}, {passive: true});
+document.addEventListener("touchmove", e => {
+  if (!swipe) return;
+  const t = e.touches[0], dx = t.clientX - swipe.x, dy = t.clientY - swipe.y;
+  if (!swipe.on) {
+    if (Math.abs(dy) > 14 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }     // c'est un défilement
+    if (Math.abs(dx) < 14) return;
+    if ((swipe.edge === "left" && dx < 0) || (swipe.edge === "right" && dx > 0)) { swipe = null; return; }
+    swipe.on = true;
+  }
+  swipe.dx = dx;
+  if (e.cancelable) e.preventDefault();                 // le geste est à nous : ni défilement ni retour du navigateur
+  const backDir = dx > 0, progress = Math.min(1, Math.abs(dx) / SWIPE_MIN);
+  swipeHint.hidden = false;
+  swipeHint.className = `swipe-hint ${backDir ? "left" : "right"} ${progress >= 1 ? "ready" : ""}`;
+  swipeHint.style.setProperty("--p", progress.toFixed(2));
+  swipeHint.innerHTML = `${icon(backDir ? "arrow-left" : "arrow-right")}<span>${backDir ? "Retour" : S.screen === "route" ? "Démarrer" : "Suivant"}</span>`;
+}, {passive: false});
+document.addEventListener("touchend", () => {
+  if (swipe?.on && Math.abs(swipe.dx) >= SWIPE_MIN) {
+    if (navigator.vibrate) navigator.vibrate(15);
+    swipe.dx > 0 ? back() : forward();
+  }
+  swipe = null;
+  swipeHint.hidden = true;
+});
+document.addEventListener("touchcancel", () => { swipe = null; swipeHint.hidden = true; });
 function saveProfile() { store.set("va-profile", {mobilities: [...S.mobilities], maxSlope: S.maxSlope, steps: S.steps}); }
 
 function bind() {
@@ -596,19 +708,16 @@ function bind() {
   on("slope", "oninput", e => { S.maxSlope = +e.target.value; $("slopeLbl").textContent = `${S.maxSlope} %`; });
   on("steps", "onchange", e => { S.steps = e.target.checked; });
   on("voice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
-  on("cont", "onclick", () => { saveProfile(); go("route"); computeRoute(); });
+  on("cont", "onclick", forward);
+  on("closeRoutes", "onclick", back);
   on("install", "onclick", async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); });
   on("toProfile", "onclick", () => go("profile"));
   on("gpsHere", "onclick", useMyPosition);
   on("q", "oninput", e => { S.query = e.target.value; search(S.query); });
-  all("[data-place]", p => p.onclick = () => { S.dest = S.places[+p.dataset.place]; S.query = S.dest.label; S.places = []; computeRoute(); });
+  all("[data-place]", p => p.onclick = () => chooseDest(S.places[+p.dataset.place]));
   all("[data-pick]", b => b.onclick = () => { S.pick = b.dataset.pick; render(); });
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
-  on("start", "onclick", () => {
-    startNav(S.routes[S.selected]);
-    go("nav");
-    map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
-  });
+  on("start", "onclick", startGuidance);
 }
 
 // Vue lunettes : toucher pour fermer, appui long pour le contraste élevé
