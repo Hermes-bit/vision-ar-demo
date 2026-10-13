@@ -2,21 +2,27 @@
 // Écrans repris de l'appli Android (phone/ui/Screens.kt) ; itinéraires calculés
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
 import {openAR} from "./ar.js";
+import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
-const MOB = [["manual_wheelchair", "Fauteuil roulant manuel"], ["electric_wheelchair", "Fauteuil électrique"],
-  ["cane_or_walker", "Canne ou déambulateur"], ["low_vision", "Je suis malvoyant(e)"], ["hard_of_hearing", "Je suis malentendant(e)"]];
+const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
+  ["cane_or_walker", "Canne ou déambulateur", "cane"], ["low_vision", "Malvoyance", "eye-off"], ["hard_of_hearing", "Malentendance", "ear-off"]];
 const PRIORITY = ["manual_wheelchair", "electric_wheelchair", "cane_or_walker", "low_vision", "hard_of_hearing"];
-const REPORT_KINDS = [["works", "Travaux"], ["step", "Marche"], ["street_furniture", "Mobilier urbain"],
-  ["narrow_sidewalk", "Trottoir étroit"], ["elevator_out", "Ascenseur en panne"], ["parked_vehicle", "Véhicule garé"], ["other", "Autre"]];
+const REPORT_KINDS = [["works", "Travaux", "construction"], ["step", "Marche", "stairs"], ["street_furniture", "Mobilier urbain", "lamp-floor"],
+  ["narrow_sidewalk", "Trottoir étroit", "narrow"], ["elevator_out", "Ascenseur en panne", "elevator"], ["parked_vehicle", "Véhicule garé", "car"],
+  ["other", "Autre obstacle", "circle-alert"]];
 // Durées de vie : identiques à app/reports.py et à la table va_report_kind_info
 const REPORT_TTL_H = {parked_vehicle: 2, street_furniture: 72, other: 48};
-const ARROW = {left: "←", slight_left: "↖", right: "→", slight_right: "↗", uturn: "↶", arrive: "●"};
+const MAN_ICON = {left: "corner-up-left", right: "corner-up-right", slight_left: "arrow-up-left", slight_right: "arrow-up-right",
+  uturn: "uturn", straight: "arrow-up", depart: "navigation", arrive: "flag"};
 const VERB = {left: "À GAUCHE", slight_left: "SERREZ À GAUCHE", right: "À DROITE", slight_right: "SERREZ À DROITE", uturn: "DEMI-TOUR"};
-const POI = {elevator: ["🛗", "Ascenseur"], accessible_toilet: ["🚻", "Toilettes accessibles"], disabled_parking: ["♿", "Place PMR"],
-  accessible_entrance: ["🚪", "Entrée accessible"], ramp: ["↗", "Rampe"], audio_beacon: ["🔊", "Balise sonore"]};
+const POI = {elevator: ["elevator", "Ascenseur"], accessible_toilet: ["toilet", "Toilettes accessibles"], disabled_parking: ["square-parking", "Place PMR"],
+  accessible_entrance: ["door-open", "Entrée accessible"], ramp: ["arrow-up-right", "Rampe"], audio_beacon: ["volume-2", "Balise sonore"]};
 const KIND_LABEL = {sidewalk: "Trottoir", crossing: "Passage piéton", footway: "Chemin piéton", street: "Rue",
   path: "Sentier", steps: "Escalier", pedestrian: "Voie piétonne", elevator: "Ascenseur", ramp: "Rampe"};
+// Pentes sur la carte : teintes distinguables par les daltoniens, contraste >= 3:1 sur le fond OSM
+const SLOPE = [[2, "#1F8A70", "≤ 2 %"], [5, "#A86F00", "2 à 5 %"], [8, "#D9480F", "5 à 8 %"], [Infinity, "#7B2D8E", "> 8 %"]];
+const C = {route: "#12B5C3", routeCase: "#063B4A", alt: "#6B7C8F", primary: "#0B5E78", unknown: "#5C6B7A", step: "#0F2537"};
 const MAIRIE = {label: "Mairie de Gennevilliers", lat: 48.925459, lon: 2.294045};
 const GEOCODER = "https://data.geopf.fr/geocodage/search/";
 
@@ -74,7 +80,7 @@ function say(text, urgent = false) {
 }
 function toast(text, ms = 3500) {
   const t = $("toast");
-  t.textContent = text;
+  t.innerHTML = `${icon("info")}<span>${esc(text)}</span>`;
   t.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { t.hidden = true; }, ms);
@@ -88,50 +94,60 @@ const layers = {net: L.layerGroup(), pois: L.layerGroup(), reports: L.layerGroup
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 
 function slopeColor(e) {
-  if (e.has_step) return "#7B2CBF";
-  if (e.slope_pct === null) return "#9a9a9a";
-  const s = Math.abs(e.slope_pct);
-  return s <= 2 ? "#1a9850" : s <= 5 ? "#c5b000" : s <= 8 ? "#f46d43" : "#d73027";
+  if (e.has_step) return C.step;
+  if (e.slope_pct === null) return C.unknown;
+  return SLOPE.find(([max]) => Math.abs(e.slope_pct) <= max)[1];
 }
 function edgePopup(e) {
-  const src = {dem: "relief IGN", osm: "OSM", survey: "relevé terrain"}[e.slope_source] || "";
-  return `<b>${esc(e.name) || KIND_LABEL[e.kind] || e.kind}</b><br>${fmt1(e.length_m)} m · pente ${
-    e.slope_pct === null ? "inconnue" : (e.slope_pct > 0 ? "+" : "") + fmt1(e.slope_pct) + " %"}${src ? ` <small>(${src})</small>` : ""}
-    ${e.has_step ? "<br>Marche(s)" : ""}${e.is_crossing ? `<br>Bordures : ${e.kerb_lowered === null ? "inconnues" : e.kerb_lowered ? "abaissées" : "hautes"}
-    · feu sonore : ${e.sound_signal === null ? "?" : e.sound_signal ? "oui" : "non"}` : ""}`;
+  const src = {dem: "relief IGN", osm: "OpenStreetMap", survey: "relevé terrain"}[e.slope_source] || "";
+  const line = (ic, label, value) => `<div class="pp-row">${icon(ic)}<span>${label}</span><b>${value}</b></div>`;
+  return `<div class="pp"><div class="pp-title">${esc(e.name) || KIND_LABEL[e.kind] || e.kind}</div>
+    ${line("ruler", "Longueur", `${fmt1(e.length_m)} m`)}
+    ${line("mountain", "Pente", e.slope_pct === null ? "inconnue" : `${e.slope_pct > 0 ? "+" : ""}${fmt1(e.slope_pct)} %`)}
+    ${src ? `<div class="pp-src">source : ${src}</div>` : ""}
+    ${e.has_step ? line("stairs", "Marche", "oui") : ""}
+    ${e.is_crossing ? line("accessibility", "Bordures", e.kerb_lowered === null ? "inconnues" : e.kerb_lowered ? "abaissées" : "hautes") +
+                      line("volume-2", "Feu sonore", e.sound_signal === null ? "inconnu" : e.sound_signal ? "oui" : "non") : ""}</div>`;
 }
+const pin = (ic, cls) => L.divIcon({className: "", html: `<div class="pin ${cls}">${icon(ic)}</div>`,
+  iconSize: [34, 42], iconAnchor: [17, 40], popupAnchor: [0, -36]});
 function drawNetwork() {
   for (const e of net.edges)
-    L.polyline(e.shape, {color: slopeColor(e), weight: e.is_crossing ? 4 : 3, opacity: .8,
-      dashArray: e.slope_pct === null && !e.has_step ? "4 4" : null}).bindPopup(() => edgePopup(e)).addTo(layers.net);
+    L.polyline(e.shape, {color: slopeColor(e), weight: e.is_crossing ? 5 : 4, opacity: .9, lineCap: "round",
+      dashArray: e.has_step ? "1 7" : e.slope_pct === null ? "5 6" : null}).bindPopup(() => edgePopup(e)).addTo(layers.net);
   for (const [kind, lat, lon, name, status] of net.pois) {
     if (!POI[kind]) continue;
-    L.marker([lat, lon], {icon: L.divIcon({className: "poi", html: POI[kind][0], iconSize: [20, 20]})})
-      .bindPopup(`<b>${POI[kind][1]}</b>${name ? "<br>" + esc(name) : ""}${kind === "elevator" ? `<br>État : ${{ok: "en service", out_of_order: "en panne"}[status] || "inconnu"}` : ""}`)
+    L.marker([lat, lon], {icon: pin(POI[kind][0], "pin-poi"), title: POI[kind][1]})
+      .bindPopup(`<div class="pp"><div class="pp-title">${POI[kind][1]}</div>${name ? esc(name) : ""}${
+        kind === "elevator" ? `<div class="pp-src">État : ${{ok: "en service", out_of_order: "en panne"}[status] || "inconnu"}</div>` : ""}</div>`)
       .addTo(layers.pois);
   }
-  L.geoJSON(net.zone.boundary, {style: {color: "#1F4FD1", weight: 2, fill: false, dashArray: "6 6"}, interactive: false}).addTo(map);
+  L.geoJSON(net.zone.boundary, {style: {color: C.primary, weight: 2, fill: false, dashArray: "6 8", opacity: .7}, interactive: false}).addTo(map);
   const legend = L.control({position: "bottomleft"});
   legend.onAdd = () => {
     const d = L.DomUtil.create("div", "legend");
-    d.innerHTML = `<i style="background:#1a9850"></i>≤2 % <i style="background:#c5b000"></i>≤5 % <i style="background:#f46d43"></i>≤8 %<br>
-      <i style="background:#d73027"></i>&gt;8 % <i style="background:#9a9a9a"></i>inconnue <i style="background:#7B2CBF"></i>marche`;
+    d.innerHTML = `<b>Pente</b>${SLOPE.map(([, c, l]) => `<span><i style="background:${c}"></i>${l}</span>`).join("")}
+      <span><i class="dash" style="--c:${C.unknown}"></i>inconnue</span><span><i class="dots" style="--c:${C.step}"></i>marche</span>`;
     return d;
   };
   legend.addTo(map);
   const sync = () => {
     const show = map.getZoom() >= 16;
     for (const l of [layers.net, layers.pois]) show ? l.addTo(map) : l.remove();
+    document.body.classList.toggle("zoomed-out", !show);
   };
   map.on("zoomend", sync);
   sync();
 }
 function drawReports() {
   layers.reports.clearLayers();
-  for (const r of reports())
-    L.marker([r.lat, r.lon], {icon: L.divIcon({className: "poi", html: "⚠️", iconSize: [22, 22]})})
-      .bindPopup(`<b>${REPORT_KINDS.find(k => k[0] === r.kind)?.[1]}</b>${r.blocking ? " (bloquant)" : ""}<br>Expire le ${new Date(r.expires).toLocaleString("fr-FR")}`)
+  for (const r of reports()) {
+    const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
+    L.marker([r.lat, r.lon], {icon: pin(k[2], "pin-report"), title: k[1]})
+      .bindPopup(`<div class="pp"><div class="pp-title">${k[1]}${r.blocking ? " — bloquant" : ""}</div>
+        <div class="pp-src">Signalé sur ce téléphone · expire le ${new Date(r.expires).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"})}</div></div>`)
       .addTo(layers.reports);
+  }
 }
 function drawRoutes() {
   drawRealPosition();
@@ -139,17 +155,18 @@ function drawRoutes() {
   layers.marks.clearLayers();
   const sel = S.nav?.route || S.routes[S.selected];
   for (const r of S.routes) if (r !== sel)
-    L.polyline(r.geometry.map(p => [p.lat, p.lon]), {color: "#B3261E", weight: 5, opacity: .6, dashArray: "2 8"}).addTo(layers.routes);
-  if (sel) L.polyline(sel.geometry.map(p => [p.lat, p.lon]), {color: "#1F4FD1", weight: 8, opacity: .9}).addTo(layers.routes);
-  if (!S.nav) {
-    L.circleMarker([S.origin.lat, S.origin.lon], {radius: 10, color: "#fff", weight: 3, fillColor: "#0B5A36", fillOpacity: 1})
-      .bindTooltip("Départ").addTo(layers.marks);
+    L.polyline(r.geometry.map(p => [p.lat, p.lon]), {color: C.alt, weight: 5, opacity: .85, dashArray: "1 9", lineCap: "round"}).addTo(layers.routes);
+  if (sel) {
+    const ll = sel.geometry.map(p => [p.lat, p.lon]);
+    L.polyline(ll, {color: C.routeCase, weight: 11, opacity: .9, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
+    L.polyline(ll, {color: C.route, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
   }
-  if (S.dest) L.circleMarker([S.dest.lat, S.dest.lon], {radius: 10, color: "#fff", weight: 3, fillColor: "#B3261E", fillOpacity: 1})
-    .bindTooltip("Arrivée").addTo(layers.marks);
+  if (!S.nav) L.marker([S.origin.lat, S.origin.lon], {icon: L.divIcon({className: "", html: '<div class="start-dot"></div>', iconSize: [24, 24]}),
+    title: "Départ"}).addTo(layers.marks);
+  if (S.dest) L.marker([S.dest.lat, S.dest.lon], {icon: pin("flag", "pin-dest"), title: "Arrivée"}).addTo(layers.marks);
   if (S.nav) {
-    S.nav.marker = L.marker([S.nav.here.lat, S.nav.here.lon], {icon: L.divIcon({className: "", html: '<div class="me"></div>', iconSize: [22, 22]})})
-      .addTo(layers.marks);
+    S.nav.marker = L.marker([S.nav.here.lat, S.nav.here.lon], {icon: L.divIcon({className: "", html: '<div class="me"><span></span></div>', iconSize: [28, 28]}),
+      zIndexOffset: 1000}).addTo(layers.marks);
   }
 }
 map.on("click", e => {
@@ -331,7 +348,7 @@ function onGps(pos) {
   } catch {
     const km = haversineM(p.lat, p.lon, MAIRIE.lat, MAIRIE.lon) / 1000;
     n.gpsProblem = `Vous êtes à ${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km de Gennevilliers. ` +
-      "Le mode GPS réel ne guide que sur place, dans la zone couverte. Ailleurs, utilisez la simulation (avec la vue caméra 📷 si vous voulez).";
+      "Le mode GPS réel ne guide que sur place, dans la zone couverte. Ailleurs, utilisez la simulation (avec la vue Caméra si vous voulez).";
     return renderNavLive();
   }
   // point le plus proche du tracé, sans revenir loin en arrière
@@ -366,8 +383,8 @@ function drawRealPosition() {
   if (!r || S.nav.mode !== "gps") { realMarker?.remove(); realMarker = null; return; }
   if (!realMarker) realMarker = L.layerGroup().addTo(map);
   realMarker.clearLayers();
-  L.circle([r.lat, r.lon], {radius: r.acc, color: "#E07A00", weight: 1, fillColor: "#FFB020", fillOpacity: .15, interactive: false}).addTo(realMarker);
-  L.circleMarker([r.lat, r.lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#E07A00", fillOpacity: 1})
+  L.circle([r.lat, r.lon], {radius: r.acc, color: "#C2410C", weight: 1, fillColor: "#F59E0B", fillOpacity: .15, interactive: false}).addTo(realMarker);
+  L.circleMarker([r.lat, r.lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#C2410C", fillOpacity: 1})
     .bindTooltip("Ma position GPS").addTo(realMarker);
 }
 let wakeLock = null;
@@ -379,68 +396,104 @@ async function requestWakeLock() {
 function screenProfile() {
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  return `<h2>Comment vous déplacez-vous ?</h2><p>Plusieurs choix possibles.</p>
-  ${MOB.map(([m, l]) => `<button class="chip-sel ${S.mobilities.has(m) ? "on" : ""}" data-mob="${m}">${l}</button>`).join("")}
-  <div class="card"><b class="t">Mes limites</b>
-    <p id="slopeLbl">${S.maxSlope == null ? "Pente maximale : réglage du profil" : `Pente maximale : ${S.maxSlope} %`}</p>
-    <input type="range" min="2" max="12" step="1" value="${S.maxSlope ?? 5}" id="slope" aria-label="Pente maximale en pour cent">
-    <div class="row"><span class="grow">J'accepte quelques marches</span><input type="checkbox" class="switch" id="steps" ${S.steps ? "checked" : ""} aria-label="J'accepte quelques marches"></div>
-    <div class="row"><span class="grow">Consignes à la voix</span><input type="checkbox" class="switch" id="voice" ${S.voice ? "checked" : ""} aria-label="Consignes à la voix"></div>
+  const sw = (id, ic, label, on) => `<label class="setting">${icon(ic)}<span class="grow">${label}</span>
+      <input type="checkbox" class="switch" id="${id}" ${on ? "checked" : ""}></label>`;
+  return `<header class="hero">
+    <div class="brand"><img src="icons/icon-192.png" alt="" width="40" height="40"><span>Vision AR</span></div>
+    <h1>Comment vous déplacez-vous&nbsp;?</h1>
+    <p class="lead">Choisissez un ou plusieurs profils : l'itinéraire s'adapte à vos besoins.</p></header>
+  <div class="tiles" role="group" aria-label="Profils de mobilité">
+    ${MOB.map(([m, l, ic]) => `<button class="tile ${S.mobilities.has(m) ? "on" : ""}" data-mob="${m}" aria-pressed="${S.mobilities.has(m)}">
+      <span class="tile-ic">${icon(ic)}</span><span class="tile-label">${l}</span><span class="tile-check">${icon("check")}</span></button>`).join("")}
   </div>
-  <button class="big" id="cont">Continuer</button>
-  ${standalone ? "" : installPrompt ? `<button class="outl full" id="install">📲 Installer sur l'écran d'accueil</button>`
-    : `<p class="muted">📲 Pour l'installer : ${ios ? "bouton Partager ⎋ puis « Sur l'écran d'accueil »" : "menu ⋮ du navigateur puis « Ajouter à l'écran d'accueil »"}.</p>`}
-  <p class="muted">Démonstration sur Gennevilliers : réseau OpenStreetMap (ODbL), pentes calculées depuis le relief IGN.
-    Les itinéraires sont calculés sur ce téléphone ; les signalements y restent aussi.</p>`;
+  <section class="card">
+    <h3>${icon("sliders-horizontal")} Mes réglages</h3>
+    <div class="slider"><div class="row"><span class="grow">Pente maximale</span>
+      <b id="slopeLbl">${S.maxSlope == null ? "selon le profil" : `${S.maxSlope} %`}</b></div>
+      <input type="range" min="2" max="12" step="1" value="${S.maxSlope ?? 5}" id="slope" aria-label="Pente maximale en pour cent">
+      <div class="scale"><span>2 %</span><span>12 %</span></div></div>
+    ${sw("steps", "stairs", "J'accepte quelques marches", S.steps)}
+    ${sw("voice", "volume-2", "Consignes à la voix", S.voice)}
+  </section>
+  <button class="btn primary" id="cont">Continuer ${icon("chevron-right")}</button>
+  ${standalone ? "" : `<div class="install">${icon("smartphone")}<div class="grow"><b>Installer l'appli</b>
+      <span>${installPrompt ? "Ajoutez Vision AR à votre écran d'accueil." : ios ? "Bouton Partager, puis « Sur l'écran d'accueil »." : "Menu ⋮ du navigateur, puis « Ajouter à l'écran d'accueil »."}</span></div>
+      ${installPrompt ? `<button class="btn soft small" id="install">${icon("download")} Installer</button>` : ""}</div>`}
+  <p class="fine">${icon("shield-check")} Démonstration sur Gennevilliers. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
+    Réseau © OpenStreetMap (ODbL), pentes © IGN.</p>`;
 }
 function screenRoute() {
   const chosen = S.routes[S.selected];
-  return `<div class="row"><h2 class="grow">Où allez-vous ?</h2><button class="outl small" id="toProfile">Profil</button></div>
-  <div class="row"><span class="grow muted">Départ : <b>${esc(S.origin.label)}</b></span><button class="outl small" id="gpsHere">📍 Ma position</button></div>
-  <input type="text" id="q" placeholder="Adresse ou lieu à Gennevilliers" value="${esc(S.query)}" autocomplete="off" enterkeyhint="search">
-  ${S.places.map((p, i) => `<div class="place" data-place="${i}">${esc(p.label)}<small>${p.type === "poi" ? "lieu" : "adresse"}</small></div>`).join("")}
-  <div><p class="muted" style="margin-bottom:6px">Toucher le plan pour placer :</p>
-    <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button><button data-pick="dest" class="${S.pick === "dest" ? "on" : ""}">l'arrivée</button></div></div>
-  ${S.message ? `<div class="msg">${esc(S.message)}</div>` : ""}
+  return `<div class="handle" aria-hidden="true"></div>
+  <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
+    <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
+  <div class="trip">
+    <div class="trip-row"><span class="trip-dot start" aria-hidden="true"></span>
+      <div class="grow"><small>Départ</small><b>${esc(S.origin.label)}</b></div>
+      <button class="icon-btn" id="gpsHere" aria-label="Partir de ma position">${icon("locate-fixed")}</button></div>
+    <div class="trip-line" aria-hidden="true"></div>
+    <div class="trip-row"><span class="trip-dot end" aria-hidden="true"></span>
+      <label class="search grow">${icon("search")}<input type="text" id="q" placeholder="Adresse ou lieu à Gennevilliers"
+        value="${esc(S.query)}" autocomplete="off" enterkeyhint="search" aria-label="Destination"></label></div>
+  </div>
+  ${S.places.length ? `<div class="places">${S.places.map((p, i) => `<button class="place" data-place="${i}">
+      ${icon(p.type === "poi" ? "map-pin" : "map")}<span class="grow">${esc(p.label)}<small>${p.type === "poi" ? "Lieu" : "Adresse"}</small></span>
+      ${icon("chevron-right")}</button>`).join("")}</div>` : ""}
+  <div class="pick"><span>${icon("map-pin")} Toucher le plan pour placer</span>
+    <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button>
+      <button data-pick="dest" class="${S.pick === "dest" ? "on" : ""}">l'arrivée</button></div></div>
+  ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
-  ${S.routes.length ? `<button class="big" id="start" ${chosen?.accessible ? "" : "disabled"}>Démarrer le guidage</button>` : ""}`;
+  ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`;
 }
 function routeCard(r, i) {
   const min = Math.ceil(r.duration_s / 60);
-  const tags = r.accessible
-    ? [`<span class="tag ${r.steps_count === 0 ? "ok" : "ko"}">${r.steps_count === 0 ? "0 marche" : r.steps_count + " marche(s)"}</span>`,
-       `<span class="tag ${r.max_slope_pct <= 5 ? "ok" : "ko"}">Pente max ${fmt1(r.max_slope_pct)} %</span>`,
-       ...r.warnings.filter(w => w !== "marche").map(w => `<span class="tag ko">${esc(w)}</span>`)]
-    : r.blocking_issues.map(w => `<span class="tag ko">${esc(w)}</span>`);
-  return `<div class="rcard ${i === S.selected ? "sel" : ""}" data-route="${i}" role="button"
-      aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}">
-    <div class="row"><b class="grow" style="font-size:18px">${esc(r.label)}</b><b style="font-size:22px">${min} min</b></div>
-    <div class="tags">${tags.join("")}</div><div class="muted">${short(r.length_m)} · ${r.steps.length - 1} consignes</div></div>`;
+  const incomplete = r.warnings.includes("données incomplètes");
+  const badge = !r.accessible ? `<span class="badge danger">${icon("ban")} Non praticable</span>`
+    : i === 0 ? `<span class="badge ok">${icon("accessibility")} Recommandé</span>` : "";
+  const notes = r.accessible
+    ? r.warnings.filter(w => w !== "marche" && w !== "données incomplètes").map(w => `<span class="tag">${esc(w)}</span>`)
+      .concat(incomplete ? [`<span class="tag warn">${icon("info")} données à confirmer</span>`] : [])
+    : r.blocking_issues.map(w => `<span class="tag danger">${icon("triangle-alert")} ${esc(w)}</span>`);
+  return `<div class="rcard ${i === S.selected ? "sel" : ""}" data-route="${i}" role="button" tabindex="0"
+      aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}${i === S.selected ? ", sélectionné" : ""}">
+    <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge}</div><div class="rc-time"><b>${min}</b> min</div></div>
+    <div class="rc-meta">
+      <span>${icon("route")} ${short(r.length_m)}</span>
+      <span class="${r.steps_count ? "bad" : "good"}">${icon("stairs")} ${r.steps_count ? r.steps_count + " marche(s)" : "aucune marche"}</span>
+      <span class="${r.max_slope_pct > 5 ? "bad" : "good"}">${icon("mountain")} pente max ${fmt1(r.max_slope_pct)} %</span></div>
+    ${notes.length ? `<div class="tags">${notes.join("")}</div>` : ""}</div>`;
 }
 function screenNav() {
   const n = S.nav, st = navState(), mins = Math.ceil(st.remaining / speed() / 60);
-  return `<div class="row"><div class="stats grow"><div>${short(st.remaining)}<span>restants</span></div><div>${mins} min<span>à ${fmt1(speed() * 3.6)} km/h</span></div></div>
-      <button class="outl small" id="arBtn" aria-label="Vue caméra">📷</button>
-      <button class="outl small" id="hudBtn" aria-label="Vue lunettes">👓</button>
-      <button class="outl small" id="voiceBtn" aria-label="${S.voice ? "Couper la voix" : "Activer la voix"}">${S.voice ? "🔊" : "🔇"}</button></div>
-    <div class="seg"><button data-mode="sim" class="${n.mode === "sim" ? "on" : ""}">Simulation</button><button data-mode="gps" class="${n.mode === "gps" ? "on" : ""}">GPS réel</button></div>
-    ${n.mode === "sim" ? `<div class="row"><button class="outl small grow" id="play">${n.timer ? "⏸ Pause" : n.arrived ? "Arrivé" : "▶ Marcher"}</button>
-        <div class="seg grow">${[1, 5, 20].map(f => `<button data-speed="${f}" class="${n.factor === f ? "on" : ""}">×${f}</button>`).join("")}</div>
-        <button class="outl small" id="rewind" aria-label="Recommencer">↺</button></div>`
-      : n.gpsProblem ? `<div class="msg">📍 ${esc(n.gpsProblem)}</div>
-          <div class="actions"><button class="outl small" data-mode="sim">Revenir à la simulation</button>
-          ${n.real ? `<button class="outl small" id="showMe">Voir ma position</button>` : ""}</div>`
-      : `<p class="muted">${esc(n.gpsInfo || "")} — marchez, les consignes suivent votre position.</p>`}
-    ${S.message ? `<div class="msg">${esc(S.message)}</div>` : ""}
-    <div class="actions"><button class="outl" id="toReport">⚠ Signaler</button>
-      <button class="big dark" id="stop">Arrêter</button></div>`;
+  const eta = new Date(Date.now() + st.remaining / speed() * 1000).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
+  const tool = (id, ic, label, on = false) => `<button class="tool ${on ? "on" : ""}" id="${id}">${icon(ic)}<span>${label}</span></button>`;
+  return `<div class="handle" aria-hidden="true"></div>
+    <div class="trip-stats"><div><b>${mins} min</b><span>arrivée ${eta}</span></div><div><b>${short(st.remaining)}</b><span>restants</span></div>
+      <div class="tools">${tool("arBtn", "camera", "Caméra")}${tool("hudBtn", "glasses", "Lunettes")}${
+        tool("voiceBtn", S.voice ? "volume-2" : "volume-x", S.voice ? "Voix" : "Muet", S.voice)}</div></div>
+    <div class="seg"><button data-mode="sim" class="${n.mode === "sim" ? "on" : ""}">${icon("play")} Simulation</button>
+      <button data-mode="gps" class="${n.mode === "gps" ? "on" : ""}">${icon("locate-fixed")} GPS réel</button></div>
+    ${n.mode === "sim" ? `<div class="sim"><button class="btn soft" id="play">${n.timer ? icon("pause") + " Pause" : n.arrived ? icon("flag") + " Arrivé" : icon("play") + " Marcher"}</button>
+        <div class="seg speed" role="group" aria-label="Vitesse de simulation">${[1, 5, 20].map(f => `<button data-speed="${f}" class="${n.factor === f ? "on" : ""}">×${f}</button>`).join("")}</div>
+        <button class="icon-btn" id="rewind" aria-label="Recommencer">${icon("rotate-ccw")}</button></div>`
+      : n.gpsProblem ? `<div class="msg warn">${icon("map-pin")}<span>${esc(n.gpsProblem)}</span></div>
+          <div class="actions"><button class="btn soft small" data-mode="sim">${icon("play")} Simulation</button>
+          ${n.real ? `<button class="btn soft small" id="showMe">${icon("locate-fixed")} Ma position</button>` : ""}</div>`
+      : `<p class="muted gps">${icon("locate-fixed")} ${esc(n.gpsInfo || "")} — marchez, les consignes suivent votre position.</p>`}
+    ${S.message ? `<div class="msg ok">${icon("check")}<span>${esc(S.message)}</span></div>` : ""}
+    <div class="actions"><button class="btn warn" id="toReport">${icon("triangle-alert")} Signaler</button>
+      <button class="btn dark" id="stop">${icon("x")} Arrêter</button></div>`;
 }
 function screenReport() {
-  return `<h2>Signaler un obstacle</h2><p>Le signalement est placé à votre position actuelle.</p>
-  <div class="row"><span class="grow" style="font-size:17px">Je ne peux pas passer</span><input type="checkbox" class="switch" id="blk" ${S.blocking ? "checked" : ""}></div>
-  ${REPORT_KINDS.map(([k, l]) => `<button class="outl full" data-report="${k}">${l}</button>`).join("")}
-  ${S.message ? `<div class="msg">${esc(S.message)}</div>` : ""}
-  <button class="big" id="back">Retour au guidage</button>`;
+  return `<header class="hero compact"><button class="icon-btn" id="back" aria-label="Retour au guidage">${icon("arrow-left")}</button>
+    <h1>Signaler un obstacle</h1><p class="lead">Il sera placé à votre position actuelle et l'itinéraire en tiendra compte.</p></header>
+  <label class="setting strong">${icon("ban")}<span class="grow">Je ne peux pas passer</span>
+    <input type="checkbox" class="switch" id="blk" ${S.blocking ? "checked" : ""}></label>
+  <div class="tiles">${REPORT_KINDS.map(([k, l, ic]) => `<button class="tile report" data-report="${k}">
+      <span class="tile-ic">${icon(ic)}</span><span class="tile-label">${l}</span></button>`).join("")}</div>
+  ${S.message ? `<div class="msg ok">${icon("check")}<span>${esc(S.message)}</span></div>` : ""}
+  <button class="btn primary" id="back2">${icon("navigation")} Retour au guidage</button>`;
 }
 function navCard() {
   let el = document.querySelector(".navcard");
@@ -453,9 +506,9 @@ function navCard() {
     sizes.observe(el);
   }
   const st = navState();
-  el.innerHTML = `<span class="arr" aria-hidden="true">${ARROW[st.next.maneuver] || "↑"}</span>
-    <div><div class="d">${st.arrived ? "Vous êtes arrivé" : short(st.toManeuver)}</div><div class="s">${esc(st.spoken)}</div>
-    ${!st.arrived && st.next.alerts.length ? `<span class="alert">⚠ ${esc(st.next.alerts.join(" · "))}</span>` : ""}</div>`;
+  el.innerHTML = `<span class="nc-ic">${icon(MAN_ICON[st.arrived ? "arrive" : st.next.maneuver] || "arrow-up")}</span>
+    <div class="nc-txt"><div class="d">${st.arrived ? "Vous êtes arrivé" : short(st.toManeuver)}</div><div class="s">${esc(st.spoken)}</div>
+    ${!st.arrived && st.next.alerts.length ? `<span class="nc-alert">${icon("triangle-alert")} ${esc(st.next.alerts.join(" · "))}</span>` : ""}</div>`;
 }
 function renderHud() {
   const h = $("hud");
@@ -464,12 +517,12 @@ function renderHud() {
   const st = navState(), m = st.next.maneuver, r = S.nav.route, acc = S.hc ? "var(--yellow)" : "var(--cyan)";
   let body;
   if (st.arrived) body = `<div class="big" style="color:${acc}">Vous êtes arrivé</div><div></div>`;
-  else if (S.hc) body = `<div class="main"><span class="arr" style="color:var(--yellow)">${ARROW[m] || "↑"}</span>
+  else if (S.hc) body = `<div class="main"><span class="arr" style="color:var(--yellow)">${icon(MAN_ICON[m] || "arrow-up")}</span>
       <div><div class="verb" style="color:var(--yellow)">${VERB[m] || "TOUT DROIT"}</div><div class="dist">${short(st.toManeuver)}</div></div></div>`;
-  else body = `<div class="main"><span class="arr" style="color:var(--cyan)">${ARROW[m] || "↑"}</span>
+  else body = `<div class="main"><span class="arr" style="color:var(--cyan)">${icon(MAN_ICON[m] || "arrow-up")}</span>
       <div><div class="dist" style="color:var(--cyan)">${short(st.toManeuver)}</div><div class="street">${esc(st.next.street)}</div></div></div>`;
   if (!st.arrived) body += st.next.alerts.length && st.toManeuver < 60
-    ? `<div class="alert">⚠ ${esc(st.next.alerts[0])}<span>${esc(st.next.alerts.slice(1).join(", ") || st.next.street)}</span></div>`
+    ? `<div class="alert">${icon("triangle-alert")} ${esc(st.next.alerts[0])}<span>${esc(st.next.alerts.slice(1).join(", ") || st.next.street)}</span></div>`
     : S.hc ? "<div></div>" : `<div class="chips"><i>${r.steps_count === 0 ? "0 marche" : r.steps_count + " marche(s)"}</i><i>pente ${fmt1(r.max_slope_pct)} %</i>
         <span style="font-size:22px">${Math.ceil(st.remaining / speed() / 60)} min</span></div>`;
   h.innerHTML = body + `<div class="close">Vue lunettes (le noir est transparent) · toucher : fermer · appui long : contraste</div>`;
@@ -524,7 +577,7 @@ function bind() {
   const on = (id, ev, fn) => { const e = $(id); if (e) e[ev] = fn; };
   const all = (sel, fn) => document.querySelectorAll(sel).forEach(fn);
   all("[data-mob]", b => b.onclick = () => { const m = b.dataset.mob; S.mobilities.has(m) ? S.mobilities.delete(m) : S.mobilities.add(m); render(); });
-  on("slope", "oninput", e => { S.maxSlope = +e.target.value; $("slopeLbl").textContent = `Pente maximale : ${S.maxSlope} %`; });
+  on("slope", "oninput", e => { S.maxSlope = +e.target.value; $("slopeLbl").textContent = `${S.maxSlope} %`; });
   on("steps", "onchange", e => { S.steps = e.target.checked; });
   on("voice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("cont", "onclick", () => { saveProfile(); go("route"); computeRoute(); });
@@ -575,6 +628,7 @@ function bind() {
     render();
   });
   on("back", "onclick", () => go("nav"));
+  on("back2", "onclick", () => go("nav"));
 }
 
 // Vue lunettes : toucher pour fermer, appui long pour le contraste élevé

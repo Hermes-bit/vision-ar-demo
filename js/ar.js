@@ -5,6 +5,7 @@
 // bordures, marches, pentes) placées par la position (GPS ou simulation), la boussole
 // et l'inclinaison du téléphone. Précision : quelques mètres, celle du GPS et de la boussole.
 import {haversineM} from "./routing.js";
+import {icon} from "./icons.js";
 
 const CAMERA_HEIGHT_M = 1.4;      // hauteur du téléphone tenu devant soi (fauteuil : ~1,1 m)
 const VFOV_DEG = 62;              // champ vertical approximatif d'une caméra arrière en portrait
@@ -18,13 +19,9 @@ const PROFILE = {manual_wheelchair: "Profil PMR", electric_wheelchair: "Profil P
   low_vision: "Profil malvoyant", hard_of_hearing: "Profil malentendant", pedestrian: "Profil piéton"};
 const REPORT_LABEL = {works: "Travaux", step: "Marche", street_furniture: "Mobilier urbain", narrow_sidewalk: "Trottoir étroit",
   elevator_out: "Ascenseur en panne", parked_vehicle: "Véhicule garé", other: "Obstacle"};
-// Flèches de la carte de consigne (dessinées, comme sur la maquette)
-const ICON = {
-  right: "M7 21V12a3 3 0 0 1 3-3h8M14 5l4 4-4 4", left: "M17 21V12a3 3 0 0 0-3-3H6M10 5L6 9l4 4",
-  slight_right: "M8 21v-6l8-8M10 7h6v6", slight_left: "M16 21v-6L8 7M14 7H8v6",
-  straight: "M12 21V4M7 9l5-5 5 5", depart: "M12 21V4M7 9l5-5 5 5", uturn: "M8 21V9a4 4 0 0 1 8 0v4M12 10l4 4 4-4",
-  arrive: "M12 21v-7M12 3a5 5 0 0 1 5 5c0 4-5 7-5 7s-5-3-5-7a5 5 0 0 1 5-5z",
-};
+// Icônes de consigne : les mêmes que dans l'appli
+const MAN_ICON = {left: "corner-up-left", right: "corner-up-right", slight_left: "arrow-up-left", slight_right: "arrow-up-right",
+  uturn: "uturn", straight: "arrow-up", depart: "navigation", arrive: "flag"};
 
 let api = null, root = null, video = null, canvas = null, ctx = null, stream = null, raf = 0;
 let sensors = {heading: null, pitch: null, roll: 0, source: "itinéraire"}, useCompass = false, smoothHeading = null;
@@ -110,10 +107,10 @@ function ribbonPath(cam, pts, halfWidth) {
 function drawRibbon(cam, pts) {
   if (pts.length < 2) return;
   ribbonPath(cam, pts, GLOW_M / 2);
-  ctx.fillStyle = "rgba(80, 220, 255, 0.20)";
+  ctx.fillStyle = "rgba(18, 181, 195, 0.22)";
   ctx.fill("nonzero");
   ribbonPath(cam, pts, RIBBON_M / 2);
-  ctx.fillStyle = "rgba(40, 200, 255, 0.55)";
+  ctx.fillStyle = "rgba(18, 181, 195, 0.62)";
   ctx.fill("nonzero");
   // ligne centrale pointillée
   ctx.save();
@@ -141,19 +138,19 @@ function drawRibbon(cam, pts) {
     ctx.beginPath();
     tri.forEach((c, k) => { const [sx, sy] = cam.toScreen(c); k ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
     ctx.closePath();
-    ctx.fillStyle = "#39d0ff";
+    ctx.fillStyle = "#5BE0EA";
     ctx.fill();
   }
 }
 function pill(x, y, text, strong, color) {
   const dpr = devicePixelRatio;
-  ctx.font = `700 ${15 * dpr}px system-ui, -apple-system, Roboto, sans-serif`;
+  ctx.font = `700 ${15 * dpr}px \"Atkinson Hyperlegible\", system-ui, -apple-system, Roboto, sans-serif`;
   const wStrong = ctx.measureText(strong).width;
-  ctx.font = `400 ${15 * dpr}px system-ui, -apple-system, Roboto, sans-serif`;
+  ctx.font = `400 ${15 * dpr}px \"Atkinson Hyperlegible\", system-ui, -apple-system, Roboto, sans-serif`;
   const wText = ctx.measureText(" " + text).width;
   const padX = 12 * dpr, dot = 10 * dpr, h = 32 * dpr, w = padX * 2 + dot + 8 * dpr + wStrong + wText;
   const left = Math.max(8 * dpr, Math.min(canvas.width - w - 8 * dpr, x - w / 2)), top = y - h;
-  ctx.fillStyle = "rgba(20, 28, 36, 0.82)";
+  ctx.fillStyle = "rgba(15, 37, 55, 0.86)";
   ctx.strokeStyle = color;
   ctx.lineWidth = 2 * dpr;
   ctx.beginPath();
@@ -166,9 +163,9 @@ function pill(x, y, text, strong, color) {
   ctx.fill();
   ctx.fillStyle = "#fff";
   ctx.textBaseline = "middle";
-  ctx.font = `700 ${15 * dpr}px system-ui, -apple-system, Roboto, sans-serif`;
+  ctx.font = `700 ${15 * dpr}px \"Atkinson Hyperlegible\", system-ui, -apple-system, Roboto, sans-serif`;
   ctx.fillText(strong, left + padX + dot + 8 * dpr, top + h / 2 + dpr);
-  ctx.font = `400 ${15 * dpr}px system-ui, -apple-system, Roboto, sans-serif`;
+  ctx.font = `400 ${15 * dpr}px \"Atkinson Hyperlegible\", system-ui, -apple-system, Roboto, sans-serif`;
   ctx.fillText(" " + text, left + padX + dot + 8 * dpr + wStrong, top + h / 2 + dpr);
   return {left, top, w, h};
 }
@@ -194,18 +191,18 @@ function anchorsAhead(s) {
     const ahead = along - nav.pos;
     if (ahead > -2 && ahead < AHEAD_M) {
       const at = posAt(along + Math.min(1.5, len / 2));
-      if (e.is_crossing && e.kerb_lowered === true) out.push({at, label: "Trottoir abaissé", ahead, color: "#2fd27a"});
-      else if (e.is_crossing && e.kerb_lowered === false) out.push({at, label: "Bordure haute", ahead, color: "#ff5a5f"});
-      if (e.is_crossing && e.sound_signal) out.push({at, label: "Feu sonore", ahead: ahead + 0.01, color: "#2fd27a", lift: 1});
-      if (e.has_step) out.push({at, label: "Marche", ahead, color: "#ffb020"});
+      if (e.is_crossing && e.kerb_lowered === true) out.push({at, label: "Trottoir abaissé", ahead, color: "#3DDC97"});
+      else if (e.is_crossing && e.kerb_lowered === false) out.push({at, label: "Bordure haute", ahead, color: "#FF6B5B"});
+      if (e.is_crossing && e.sound_signal) out.push({at, label: "Feu sonore", ahead: ahead + 0.01, color: "#3DDC97", lift: 1});
+      if (e.has_step) out.push({at, label: "Marche", ahead, color: "#FFC24B"});
       if (e.slope_pct !== null && Math.abs(e.slope_pct) >= 5)
-        out.push({at, label: `${e.slope_pct > 0 ? "Montée" : "Descente"} ${Math.abs(e.slope_pct).toFixed(0)} %`, ahead, color: "#ffb020"});
+        out.push({at, label: `${e.slope_pct > 0 ? "Montée" : "Descente"} ${Math.abs(e.slope_pct).toFixed(0)} %`, ahead, color: "#FFC24B"});
     }
     along += len;
   }
   for (const r of reports) {
     const d = haversineM(nav.here.lat, nav.here.lon, r.lat, r.lon);
-    if (d < AHEAD_M) out.push({at: r, label: REPORT_LABEL[r.kind] || "Obstacle", ahead: d, color: "#ff5a5f", obstacle: true});
+    if (d < AHEAD_M) out.push({at: r, label: REPORT_LABEL[r.kind] || "Obstacle", ahead: d, color: "#FF6B5B", obstacle: true});
   }
   return out;
 }
@@ -297,23 +294,22 @@ function renderCards(s, compass) {
   const sub = st.arrived ? s.dest?.label || "" : next.alerts.some(a => a.startsWith("Traversée"))
     ? `Traversez au passage piéton${next.alerts.some(a => a.includes("feu sonore")) ? " (feu sonore)" : ""}`
     : next.street ? next.street : next.alerts.join(" · ") || "Suivez la ligne au sol";
-  const icon = ICON[st.arrived ? "arrive" : next.maneuver] || ICON.straight;
   const rer = s.nav.rerouted && Date.now() - s.nav.rerouted.at < 10000 ? s.nav.rerouted : null;
   const clean = r.accessible && !r.warnings.includes("données incomplètes");
   const mins = Math.max(1, Math.ceil(st.remaining / s.speed / 60));
   const html = `
     <div class="ar-chip"><i></i>${esc(PROFILE[s.mobility] || "Profil")}</div>
-    ${rer ? `<div class="ar-alert"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3zm0 6v6m0 3v.01"/></svg>
+    ${rer ? `<div class="ar-alert">${icon("triangle-alert")}
       <div><b>${esc(rer.title)}</b><span>Itinéraire recalculé</span></div></div>` : ""}
     <div class="ar-step" role="status" aria-live="polite">
-      <div class="ar-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icon}"/></svg></div>
+      <div class="ar-icon">${icon(MAN_ICON[st.arrived ? "arrive" : next.maneuver] || "arrow-up")}</div>
       <div><b>${esc(title)}</b><span>${esc(sub)}</span></div></div>
     <div class="ar-foot">
     ${useCompass && sensors.heading === null ? `<div class="ar-note">Boussole indisponible : orientation suivant l'itinéraire</div>` : ""}
     <div class="ar-tools">
-      ${s.mode === "sim" ? `<button data-ar="play" aria-label="${s.playing ? "Pause" : "Marcher"}">${s.playing ? "⏸" : "▶"}</button>` : ""}
-      <button data-ar="compass" class="${useCompass ? "on" : ""}" aria-label="Orientation : ${compass ? "boussole" : "itinéraire"}">🧭</button>
-      <button data-ar="close" aria-label="Fermer la vue caméra">✕</button></div>
+      ${s.mode === "sim" ? `<button data-ar="play" aria-label="${s.playing ? "Pause" : "Marcher"}">${icon(s.playing ? "pause" : "play")}</button>` : ""}
+      <button data-ar="compass" class="${useCompass ? "on" : ""}" aria-label="Orientation : ${compass ? "boussole" : "itinéraire"}">${icon("compass")}</button>
+      <button data-ar="close" aria-label="Fermer la vue caméra">${icon("x")}</button></div>
     <div class="ar-bottom"><b>${esc(s.dest?.label || "Destination")}</b>
       <span><b>${dist(st.remaining)}</b> · ${mins} min · <em class="${clean ? "ok" : "warn"}">${
         clean ? "itinéraire 100 % accessible" : r.accessible ? "itinéraire accessible · données à confirmer" : "itinéraire non praticable"}</em></span></div>

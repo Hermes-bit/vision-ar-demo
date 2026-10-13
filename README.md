@@ -44,5 +44,9 @@ d'obstacles restent sur votre téléphone dans cette démo.
 - Recherche d'adresse : service de géocodage de l'IGN (Géoplateforme).
 - Fond de carte : tuiles © OpenStreetMap.
 - Carte interactive : [Leaflet](https://leafletjs.com) 1.9.4 (licence BSD-2).
+- Police : [Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/) du Braille Institute, conçue pour
+  les personnes malvoyantes (licence SIL OFL, `fonts/OFL.txt`).
+- Icônes : [Lucide](https://lucide.dev) (licence ISC, `js/LICENSE-lucide.txt`) et pictogrammes dessinés pour
+  Vision AR (fauteuil, canne, ascenseur, WC…).
 
 Projet GeoVision AR.
