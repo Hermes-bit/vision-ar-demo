@@ -138,6 +138,8 @@ function toast(text, ms = 3500) {
 const map = L.map("map", {zoomControl: false, preferCanvas: true}).setView([MAIRIE.lat, MAIRIE.lon], 16);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19,
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · relief © IGN'}).addTo(map);
+// Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
+map.attributionControl.setPosition("topright");
 const layers = {pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 

@@ -299,7 +299,12 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 .me span { width: 18px; height: 18px; border-radius: 50%; background: #007489; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(15, 37, 55, .4); }
 @keyframes pulse { 50% { box-shadow: 0 0 0 10px rgba(0, 174, 204, 0); background: rgba(0, 174, 204, .4); } }
 @media (prefers-reduced-motion: reduce) { .me { animation: none; } * { transition: none !important; } }
-.leaflet-control-attribution { border-radius: 8px 0 0 0; font-size: 11px; }
+.leaflet-control-attribution { border-radius: 0 0 0 8px; font-size: 11px; }
+/* sous la rangée des boutons ⚙ et « Fermer » */
+.leaflet-top.leaflet-right { top: calc(var(--safe-top) + 72px); }
+/* carte du dôme (guidage) : la mention reste en bas, dans la partie visible */
+#ar .leaflet-top.leaflet-right { top: auto; bottom: 0; }
+#ar .leaflet-control-attribution { border-radius: 8px 0 0 0; }
 
 /* ---- Vue lunettes : le noir est transparent sur un guide d'onde ------------------------------------- */
 #hud { position: fixed; inset: 0; z-index: 1200; background: #000; color: #fff; font-weight: 700;
