@@ -734,13 +734,13 @@ function renderUi(s, heading, compass) {
   // le virage à venir est annoncé dessous ; à 25 m : « Tournez à gauche ».
   const turnSoon = st.toManeuver <= 25 && !vague;
   const upcoming = (TITLE[next.maneuver] || "Continuez tout droit");
-  const title = st.arrived ? "Vous êtes arrivé" : approach ? "Rejoignez le point de départ" : joining ? "Rejoignez l'itinéraire"
+  const title = st.arrived ? "Vous êtes arrivé" : approach ? "Rejoignez l'itinéraire" : joining ? "Rejoignez l'itinéraire"
     : vague ? "Suivez la flèche" : turnSoon || next.maneuver === "straight" ? upcoming : "Continuez tout droit";
   const manIcon = approach || joining ? "footprints" : st.arrived ? MAN_ICON.arrive
     : turnSoon ? MAN_ICON[next.maneuver] || "arrow-up" : vague ? "navigation" : "arrow-up";
   const away = st.arrived ? "" : approach ? dist(s.nav.approachDist) : joining ? dist(s.nav.gap) : (vague ? "≈ " : "") + dist(st.toManeuver);
   const lowerUp = upcoming.charAt(0).toLowerCase() + upcoming.slice(1);
-  const subText = approach ? "suivez les pointillés : le trajet commence au point de départ"
+  const subText = approach ? "suivez les pointillés jusqu'au trottoir : le trajet commence là"
     : joining ? `suivez les pointillés jusqu'à l'itinéraire, puis ${lowerUp}`
     : st.arrived ? sub
     : vague ? `prochain virage : ${lowerUp}, dans environ ${dist(st.toManeuver)}`

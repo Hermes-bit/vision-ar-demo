@@ -345,6 +345,24 @@ function fitRoute() {
   const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
   map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, under + 24]});
 }
+// Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
+// le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
+let autoOriginDone = false;
+async function autoOrigin() {
+  if (autoOriginDone || !net || !navigator.geolocation || S.origin.label !== MAIRIE.label) return;
+  autoOriginDone = true;
+  try {
+    const perm = await navigator.permissions?.query({name: "geolocation"});
+    if (perm?.state !== "granted") return;
+  } catch { return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    const p = {lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Ma position"};
+    try { nearestNode(net, p.lat, p.lon); } catch { return; }          // hors zone : on garde la Mairie
+    if (S.origin.label !== MAIRIE.label) return;                      // l'usager a déjà choisi entre-temps
+    S.origin = p;
+    if (S.screen === "route") { render(); if (S.dest) computeRoute(); }
+  }, () => {}, {enableHighAccuracy: true, timeout: 10000, maximumAge: 30000});
+}
 function useMyPosition() {
   if (!navigator.geolocation) return toast("La localisation n'est pas disponible sur cet appareil.");
   toast("Recherche de votre position…");
@@ -591,13 +609,20 @@ function onGps(pos, precise = false) {
   const leaving = acc <= 15 && h.length === 4 && h[3] > 12 && h[1] > h[0] + 1.5 && h[2] > h[1] + 1.5 && h[3] > h[2] + 1.5;
   // ---- N°15 : phase d'approche, jusqu'au point de départ (ou au tout début de l'itinéraire) ----
   if (n.phase === "approach") {
-    const start = g[0], dStart = haversineM(p.lat, p.lon, start.lat, start.lon);
-    const onRoute = best && best.along <= 40 && best.d <= Math.max(8, Math.min(acc, 15));
-    if ((dStart <= 10 || onRoute) && acc <= 25) return beginRoute(onRoute ? best.along : 0);
-    Object.assign(n, {approachDist: dStart, gap: dStart, gapAlong: 0, away: true, offRoute: false});
+    // L'itinéraire part du carrefour le plus proche de votre point de départ ; depuis un bâtiment, le plus court
+    // est souvent de rejoindre le trottoir juste devant, un peu plus loin sur l'itinéraire. On vise donc le point
+    // de l'itinéraire le plus proche de vous, sur ses 300 premiers mètres.
+    let join = {d: haversineM(p.lat, p.lon, g[0].lat, g[0].lon), along: 0};
+    for (let i = 1; i < g.length && n.cum[i - 1] <= 300; i++) {
+      const pr = project(p, g[i - 1], g[i]);
+      if (pr.d < join.d) join = {d: pr.d, along: n.cum[i - 1] + pr.t * (n.cum[i] - n.cum[i - 1])};
+    }
+    const dStart = join.d;
+    if (dStart <= Math.max(10, Math.min(acc, 15)) && acc <= 25) return beginRoute(join.along);
+    Object.assign(n, {approachDist: dStart, gap: dStart, gapAlong: join.along, away: true, offRoute: false});
     if (!n.said.has("approach")) {
       n.said.add("approach");
-      say(`Rejoignez le point de départ, à ${Math.round(dStart)} mètres. Suivez les pointillés.`, true);
+      say(`Rejoignez l'itinéraire, à ${Math.round(dStart)} mètres. Suivez les pointillés.`, true);
     }
     // point de départ choisi sur le plan mais on est ailleurs : nouvel itinéraire depuis sa position
     if (dStart > 150 && acc <= 40) reroute(p, "Départ depuis votre position", false, true);
@@ -1241,6 +1266,7 @@ if ("serviceWorker" in navigator) {
 $("panel").innerHTML = `<h2>Vision AR</h2><p>Chargement du plan de Gennevilliers…</p>`;
 fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
   net = loadNetwork(data);
+  setTimeout(autoOrigin, 0);
   streetOf = makeStreetFinder(net);
   fetch("data/transit.json").then(r => r.json()).then(d => { transit = loadTransit(d); refreshTransit(true); }).catch(() => {});
   drawNetwork();
