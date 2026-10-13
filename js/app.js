@@ -1323,7 +1323,13 @@ if ("serviceWorker" in navigator) {
 }
 
 // ---- Démarrage ------------------------------------------------------------------------------
-$("panel").innerHTML = `<h2>Vision AR</h2><p>Chargement du plan de Gennevilliers…</p>`;
+// Écran de chargement (index.html) : retiré une fois le plan prêt, après 1,2 s au moins pour voir l'animation
+const loaderStart = performance.now();
+function hideLoader() {
+  const l = $("loader");
+  if (!l) return;
+  setTimeout(() => { l.classList.add("done"); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
+}
 fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
   net = loadNetwork(data);
   setTimeout(autoOrigin, 0);
@@ -1332,7 +1338,9 @@ fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
   drawNetwork();
   render();
   if (S.screen === "route") computeRoute();
+  hideLoader();
 }).catch(err => {
+  hideLoader();
   $("panel").innerHTML = `<h2>Vision AR</h2><div class="msg">Impossible de charger le plan : ${esc(err.message)}</div>`;
 });
 

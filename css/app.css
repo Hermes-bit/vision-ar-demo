@@ -626,3 +626,38 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
 #ar .haptic-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 15px; color: var(--ink); }
 #ar .haptic-legend li { padding: 8px 12px; border-radius: 12px; background: var(--surface-2); }
 #ar .haptic-legend b { color: var(--primary); margin-right: 4px; }
+
+/* ---- Écran de chargement : route qui défile, arbres de part et d'autre, personne en fauteuil ------------- */
+#loader { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+  padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom)); background: linear-gradient(180deg, #EEF7FA 0%, #D9ECF2 100%);
+  transition: opacity .4s ease, visibility .4s; }
+#loader.done { opacity: 0; visibility: hidden; pointer-events: none; }
+[data-theme="neon"] #loader { background: radial-gradient(120% 60% at 50% 0%, #0E3442 0%, #061019 60%); }
+.ld-logo { width: min(180px, 50vw); height: auto; }
+[data-theme="neon"] .ld-logo { content: url("../img/geomessen-blanc.png"); }
+.ld-scene { width: min(300px, 80vw); height: auto; border-radius: 28px; box-shadow: 0 18px 40px rgba(0, 116, 137, .28); }
+.ld-text { margin: 0; font: 700 22px "Atkinson Hyperlegible", system-ui, sans-serif; color: #007489; letter-spacing: .02em; }
+[data-theme="neon"] .ld-text { color: #5BE0EA; }
+.ld-dots { display: inline-block; width: 1.4em; text-align: left; }
+.ld-dots::after { content: ""; animation: ld-dots 1.2s steps(4, end) infinite; }
+@keyframes ld-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75%, 100% { content: "..."; } }
+/* Perspective : chaque élément part de l'horizon (petit) et vient vers nous (grand), en accélérant */
+.ld-tree, .ld-dash { transform-box: view-box; animation: 3s cubic-bezier(.6, 0, .95, .5) infinite; }
+.ld-dash { animation-duration: 2s; animation-name: ld-dash; }
+.ld-tree.ld-l { animation-name: ld-tree-l; } .ld-tree.ld-r { animation-name: ld-tree-r; }
+@keyframes ld-dash { from { transform: translate(150px, 74px) scale(.08); } to { transform: translate(150px, 280px) scale(1.5); } }
+@keyframes ld-tree-l { from { transform: translate(134px, 74px) scale(.12); } to { transform: translate(-30px, 300px) scale(2.2); } }
+@keyframes ld-tree-r { from { transform: translate(166px, 74px) scale(.12); } to { transform: translate(330px, 300px) scale(2.2); } }
+.ld-tire { fill: none; stroke: #0F2537; stroke-width: 6; }
+.ld-wheel { fill: none; stroke: #5BE0EA; stroke-width: 2; stroke-dasharray: 3 9; animation: ld-roll .5s linear infinite; }
+@keyframes ld-roll { to { stroke-dashoffset: -12; } }
+.ld-arm { stroke: #007489; stroke-width: 6; stroke-linecap: round; fill: none; }
+.ld-chair { animation: ld-bob .5s ease-in-out infinite alternate; }
+@keyframes ld-bob { from { translate: 0 0; } to { translate: 0 -2px; } }
+@media (prefers-reduced-motion: reduce) {
+  .ld-tree, .ld-dash, .ld-wheel, .ld-chair, .ld-dots::after { animation: none; }
+  .ld-dots::after { content: "..."; }
+  .ld-dash:nth-child(1) { transform: translate(150px, 110px) scale(.4); } .ld-dash:nth-child(2) { transform: translate(150px, 170px) scale(.8); }
+  .ld-dash:nth-child(3) { transform: translate(150px, 245px) scale(1.2); } .ld-dash:nth-child(4) { display: none; }
+  .ld-tree { transform: translate(110px, 120px) scale(.6); } .ld-tree.ld-r { transform: translate(190px, 120px) scale(.6); }
+}
