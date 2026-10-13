@@ -63,6 +63,29 @@ let sensors = {heading: null, pitch: null, roll: 0}, mapFull = false, sheet = nu
 let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
 let blocking = true, sheetMessage = null, lastUi = "";
 
+// ---- Appli Android de terrain : ARCore Geospatial dessine le tracé sous la page (pont « VisionARNative ») ----
+const NATIVE = globalThis.VisionARNative;
+let nativeOn = false, nativeStatus = null, nativeRoute = null, nativeTheme = null, nativePosAt = 0;
+globalThis.__vaNative = {
+  onStatus(st) {
+    nativeStatus = {...st, at: Date.now()};
+    if (st.localized && st.hAcc > 0 && st.hAcc <= 5) api?.nativeFix?.(st.lat, st.lon, st.hAcc);
+  },
+};
+const nativeLocalized = () => nativeOn && !!nativeStatus?.localized && Date.now() - nativeStatus.at < 2000;
+const nativeHeading = () => nativeOn && nativeStatus && Date.now() - nativeStatus.at < 2000 &&
+  nativeStatus.heading >= 0 && nativeStatus.yawAcc >= 0 && nativeStatus.yawAcc < 25 ? nativeStatus.heading : null;
+function nativePayload(s) {
+  return JSON.stringify({geometry: s.nav.route.geometry.map(p => [p.lat, p.lon]), pos: s.nav.pos, neon: s.theme === "neon", cameraHeight: camHeight});
+}
+function syncNative(s) {
+  if (s.nav.route !== nativeRoute || s.theme !== nativeTheme) {
+    nativeRoute = s.nav.route; nativeTheme = s.theme;
+    NATIVE.setRoute(nativePayload(s));
+  }
+  if (performance.now() - nativePosAt > 500) { nativePosAt = performance.now(); NATIVE.setPos(s.nav.pos); }
+}
+
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const round5 = m => m < 10 ? Math.max(1, Math.round(m)) : Math.round(m / 5) * 5;
 const dist = m => m < 1000 ? `${round5(m)} m` : `${(m / 1000).toFixed(1).replace(".", ",")} km`;
@@ -512,15 +535,19 @@ function frame() {
   const dpr = devicePixelRatio, w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
-  const now = performance.now(), compass = sensors.heading !== null;
-  const heading = F.heading.filter(compass ? sensors.heading : routeBearing(s), now);
+  if (nativeOn) syncNative(s);
+  const now = performance.now(), nh = nativeHeading(), compass = nh !== null || sensors.heading !== null;
+  const heading = F.heading.filter(nh ?? (compass ? sensors.heading : routeBearing(s)), now);
   document.documentElement.style.setProperty("--heading", `${heading.toFixed(1)}deg`);
   const pitch = F.pitch.filter(Math.max(-30, Math.min(80, sensors.pitch ?? 10)), now);   // sans capteur : téléphone presque droit
   const roll = compass ? ((F.roll.filter(sensors.roll + 180, now) + 360) % 360) - 180 : 0;
   const cam = makeCamera(heading, pitch, roll, w, h);
   const v = viewpoint(s);
   updateArrowMode(s, compass);
-  if (!mapFull) {
+  if (!mapFull && nativeOn) {
+    // ARCore dessine le tracé ; tant qu'il n'est pas localisé, la flèche indique la direction
+    if (!nativeLocalized()) drawGroundArrow(heading, arrowBearing(s));
+  } else if (!mapFull) {
     if (noCamera) drawGrid(cam, v.here, heading);
     if (arrowMode) drawGroundArrow(heading, arrowBearing(s));
     else {
@@ -592,7 +619,7 @@ function viewpoint(s) {
   view.join = away ? s.posAt(n.gapAlong ?? n.pos) : null;
   return view;
 }
-export const currentHeading = () => (arOpen() ? sensors.heading : null);
+export const currentHeading = () => (arOpen() ? nativeHeading() ?? sensors.heading : null);
 
 // ---- Interface (DOM) -----------------------------------------------------------------------------------
 function chip(cls, ic, label, value) {
@@ -620,7 +647,8 @@ function renderUi(s, heading, compass) {
       <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
       <div class="bubble" role="status" aria-live="polite"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
-        ${arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative : suivez la flèche au sol</em>` : ""}
+        ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
+        ${!nativeOn && arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative : suivez la flèche au sol</em>` : ""}
         ${!st.arrived && !joining && next.alerts.some(a => !a.startsWith("Traversée")) ? `<em>${icon("triangle-alert")} ${esc(next.alerts.filter(a => !a.startsWith("Traversée")).join(" · "))}</em>` : ""}</div>
         ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}</div>
       ${banner}
@@ -799,6 +827,15 @@ export async function openAR(options) {
   root.addEventListener("change", onAction);
   startSensors();
   noCamera = false;
+  nativeOn = !!NATIVE;
+  if (nativeOn) {                                      // appli Android : la caméra et le tracé viennent d'ARCore
+    nativeStatus = null; nativeRoute = api.state().nav.route; nativeTheme = api.state().theme;
+    root.classList.add("native-ar");
+    document.documentElement.classList.add("native-ar-on");
+    NATIVE.startAr(nativePayload(api.state()));
+    frame();
+    return;
+  }
   frame();                                             // l'interface d'abord, la caméra peut mettre du temps
   try {
     stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: "environment"}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
@@ -815,6 +852,11 @@ export function closeAR() {
   domeObserver?.disconnect(); domeObserver = null; domeGeom = null;
   stream?.getTracks().forEach(t => t.stop());
   stream = null;
+  if (nativeOn) {
+    NATIVE.stopAr();
+    nativeOn = false;
+    document.documentElement.classList.remove("native-ar-on");
+  }
   if (root) {
     root.removeEventListener("click", onAction);
     root.removeEventListener("change", onAction);

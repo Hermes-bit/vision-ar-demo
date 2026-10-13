@@ -350,6 +350,10 @@ body.zoomed-out .legend { display: none; }
 /* ---- Écran de guidage en réalité augmentée --------------------------------------------------- */
 body.nav-ar #panel { display: none; }
 #ar { position: fixed; inset: 0; z-index: 1050; overflow: hidden; color: var(--ink); background: #0F2537; }
+/* Appli Android : l'image caméra et le tracé ARCore sont dessinés sous la page, qui devient transparente */
+html.native-ar-on, html.native-ar-on body { background: transparent !important; }
+#ar.native-ar { background: transparent; }
+#ar.native-ar video { display: none; }
 #ar video, #ar > canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 #ar > canvas { z-index: 1; pointer-events: none; }
 #ar.no-camera { background: linear-gradient(180deg, #d9e5f0 0%, #b9c7d6 44%, #9aa6b3 44%, #7f8b98 100%); }

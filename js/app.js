@@ -88,6 +88,7 @@ function addReport(kind, blocking, at) {
 
 // ---- Voix et vibrations ---------------------------------------------------------------
 function say(text, urgent = false) {
+  if (window.VisionARNative) { if (S.voice) window.VisionARNative.speak(text, urgent); return; }   // appli Android : voix du téléphone
   if (S.voice && "speechSynthesis" in window) {
     if (urgent) speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
@@ -115,12 +116,13 @@ function iosTap() {
 function buzz(kind) {
   const pattern = HAPTIC[kind];
   if (!S.haptics || !pattern) return;
+  if (window.VisionARNative) { window.VisionARNative.vibrate(JSON.stringify(pattern)); return; }
   if (navigator.vibrate) { navigator.vibrate(pattern); return; }
   if (!IOS) return;
   let t = 0;
   pattern.forEach((ms, i) => { if (i % 2 === 0) setTimeout(iosTap, t); t += Math.max(ms, 120); });
 }
-const hapticsNote = () => navigator.vibrate ? "" : IOS
+const hapticsNote = () => window.VisionARNative || navigator.vibrate ? "" : IOS
   ? "Sur iPhone, Safari ne donne pas accès au vibreur : de petits « tics » sont tentés (iOS 18 et plus), sans garantie. La voix reste le repère principal."
   : "Ce navigateur ne permet pas les vibrations.";
 const turnSide = m => m === "left" || m === "slight_left" ? "left" : m === "right" || m === "slight_right" ? "right" : m === "uturn" ? "uturn" : null;
@@ -456,9 +458,12 @@ function onGpsError(err) {
   n.gpsInfo = "";
   renderNavLive();
 }
-function onGps(pos) {
+function onGps(pos, precise = false) {
   const n = S.nav;
   if (!n) return;
+  // Appli Android : la position d'ARCore Geospatial (~1 m) prime sur le GPS tant qu'elle arrive
+  if (precise) n.preciseAt = Date.now();
+  else if (n.preciseAt && Date.now() - n.preciseAt < 3000) return;
   const p = {lat: pos.coords.latitude, lon: pos.coords.longitude}, acc = pos.coords.accuracy;
   n.real = {...p, acc, at: Date.now()};
   n.gpsStatus = accuracyText(acc);
@@ -634,8 +639,9 @@ const navApi = {
     mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus},
   reroute: () => manualReroute(),
+  nativeFix: (lat, lon, acc) => onGps({coords: {latitude: lat, longitude: lon, accuracy: acc}}, true),
   setHaptics: on => { S.haptics = on; store.set("va-haptics", on); if (on) buzz("left"); },
-  toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) speechSynthesis?.cancel(); },
+  toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) window.speechSynthesis?.cancel(); },
   openHud: () => { S.hud = true; renderHud(); },
   setTheme,
   report: (kind, blocking) => doReport(kind, blocking),
