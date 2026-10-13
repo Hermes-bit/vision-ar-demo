@@ -1,6 +1,6 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
-// Changer VERSION à chaque publication pour que les téléphones prennent la mise à jour.
-const VERSION = "vision-ar-v6";
+// Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
+const VERSION = "vision-ar-v7";
 const MAX_TILES = 600;
 const APP = [
   "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js", "js/ar.js", "js/icons.js",
@@ -10,7 +10,8 @@ const APP = [
 ];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(APP)).then(() => self.skipWaiting()));
+  // cache: "reload" : ignorer le cache HTTP du navigateur (GitHub Pages autorise 10 min)
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(APP.map(u => new Request(u, {cache: "reload"})))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", e => {
@@ -23,8 +24,11 @@ self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
   if (url.origin === location.origin) {
-    // Fichiers de l'appli : le cache d'abord (démarrage instantané, hors ligne)
-    e.respondWith(caches.match(e.request, {ignoreSearch: true}).then(hit => hit || fetch(e.request)));
+    // Fichiers de l'appli : le réseau d'abord (toujours la dernière version), le cache hors ligne
+    e.respondWith(fetch(e.request, {cache: "no-cache"}).then(res => {
+      if (res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); }
+      return res;
+    }).catch(() => caches.match(e.request, {ignoreSearch: true})));
   } else if (url.hostname.endsWith("tile.openstreetmap.org")) {
     // Fond de carte : le réseau d'abord, le cache des tuiles déjà vues en secours
     e.respondWith(fetch(e.request).then(res => {

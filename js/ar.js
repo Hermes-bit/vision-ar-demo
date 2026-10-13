@@ -12,15 +12,20 @@
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 
-const CAMERA_HEIGHT_M = 1.4;      // téléphone tenu devant soi (fauteuil : ~1,1 m)
+// Hauteur de la caméra « virtuelle ». Plus haute que le téléphone (~1,4 m) : comme sur les maquettes,
+// le chemin monte dans l'image au lieu de s'écraser en un trait à l'horizon.
+const CAMERA_HEIGHT_M = 2.6;
 const VFOV_DEG = 62;              // champ vertical approximatif d'une caméra arrière en portrait
-const AHEAD_M = 70;               // longueur d'itinéraire dessinée
+const AHEAD_M = 55;               // longueur d'itinéraire dessinée
+const PLACES_M = 130;             // portée des étiquettes de lieux
 const NEAR_M = 1.2;
 const START_M = 2.5;
 const RING_DEG = 55;              // demi-ouverture de l'anneau de boussole du dôme
 const THEMES = {
-  verre: {ribbon: true, chevW: 0.95, chevLen: 1.7, chevTh: 0.55, chevGap: 3.6, chevRGB: "255,255,255", glow: "rgba(61,220,151,.85)", pins: false},
-  neon: {ribbon: false, chevW: 1.8, chevLen: 2.6, chevTh: 0.8, chevGap: 3.4, chevRGB: "130,242,247", glow: "rgba(91,224,234,.95)", pins: true},
+  // Verre (maquette 1) : ruban turquoise -> vert lumineux, chevrons blancs
+  verre: {ribbon: true, chevW: 1.0, chevL: 0.55, chevGap: 4, chevStroke: 0.17, chevRGB: "255,255,255", glow: "rgba(61,220,151,.9)", pins: false},
+  // Néon (maquette 2) : grands chevrons turquoise lumineux, léger halo au sol
+  neon: {ribbon: false, chevW: 1.7, chevL: 0.85, chevGap: 3.2, chevStroke: 0.32, chevRGB: "140,244,248", glow: "rgba(91,224,234,1)", pins: true},
 };
 const TITLE = {left: "Tournez à gauche", slight_left: "Serrez à gauche", right: "Tournez à droite", slight_right: "Serrez à droite",
   uturn: "Faites demi-tour", straight: "Continuez tout droit", depart: "Continuez tout droit", arrive: "Vous arrivez"};
@@ -31,6 +36,20 @@ const PROFILE = {manual_wheelchair: "Profil PMR", electric_wheelchair: "Profil P
 const REPORT_KINDS = [["works", "Travaux", "construction"], ["step", "Marche", "stairs"], ["street_furniture", "Mobilier urbain", "lamp-floor"],
   ["narrow_sidewalk", "Trottoir étroit", "narrow"], ["elevator_out", "Ascenseur en panne", "elevator"], ["parked_vehicle", "Véhicule garé", "car"],
   ["other", "Autre obstacle", "circle-alert"]];
+// Lieux : icône, couleur, nom de catégorie (si le lieu n'a pas de nom)
+const PLACE = {
+  cafe: ["coffee", "#8D5B3E", "Café"], restaurant: ["utensils", "#D9480F", "Restaurant"], fast_food: ["sandwich", "#D9480F", "Restauration rapide"],
+  bar: ["beer", "#A61E4D", "Bar"], bakery: ["croissant", "#B7791F", "Boulangerie"], food: ["shopping-basket", "#2B8A3E", "Alimentation"],
+  shop: ["shopping-bag", "#6741D9", "Commerce"], clothes: ["shirt", "#6741D9", "Vêtements"], hairdresser: ["scissors", "#A61E4D", "Coiffeur"],
+  health_shop: ["heart-pulse", "#C2255C", "Santé"], pharmacy: ["pill", "#2B8A3E", "Pharmacie"], doctor: ["stethoscope", "#1971C2", "Médecin"],
+  hospital: ["hospital", "#C92A2A", "Hôpital"], bank: ["landmark", "#364FC7", "Banque"], post_office: ["mail", "#E67700", "La Poste"],
+  townhall: ["landmark", "#0B5E78", "Mairie"], library: ["book-open", "#5F3DC4", "Médiathèque"], school: ["graduation-cap", "#1864AB", "École"],
+  police: ["shield", "#1864AB", "Police"], worship: ["church", "#495057", "Lieu de culte"], culture: ["drama", "#9C36B5", "Culture"],
+  social: ["users", "#0B7285", "Services sociaux"], market: ["store", "#2B8A3E", "Marché"], hotel: ["bed", "#4263EB", "Hôtel"],
+  park: ["trees", "#2B8A3E", "Parc"], sport: ["dumbbell", "#D9480F", "Sport"], bus_stop: ["bus", "#1971C2", "Arrêt de bus"],
+  tram: ["tram-front", "#0C8599", "Tramway"], train: ["train-front", "#3B5BDB", "Gare"], metro: ["train-front", "#0B7285", "Métro"],
+};
+const WHEEL = {yes: ["#2B8A3E", "Accessible en fauteuil"], limited: ["#E67700", "Accès partiel"], no: ["#C92A2A", "Non accessible"]};
 const POI = {elevator: ["elevator", "Ascenseur"], accessible_toilet: ["toilet", "WC adaptés"], disabled_parking: ["square-parking", "Place PMR"],
   accessible_entrance: ["door-open", "Entrée accessible"], audio_beacon: ["volume-2", "Balise sonore"]};
 
@@ -109,55 +128,100 @@ function fillGround(cam, pts) {               // polygone au sol, coupé devant 
 }
 
 // ---- Dessin du chemin ---------------------------------------------------------------------------
-function ribbon(cam, pts, halfWidth) {
-  ctx.beginPath();
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1], dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy) || 1;
-    const nx = -dy / L * halfWidth, ny = dx / L * halfWidth;
-    const c = clipNear([{x: a.x + nx, y: a.y + ny, z: a.z}, {x: b.x + nx, y: b.y + ny, z: b.z},
-                        {x: b.x - nx, y: b.y - ny, z: b.z}, {x: a.x - nx, y: a.y - ny, z: a.z}].map(p => cam.toCam(p)));
-    if (c.length < 3) continue;
-    c.forEach((q, k) => { const [x, y] = cam.toScreen(q); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-    ctx.closePath();
+// Ligne centrale lissée (Chaikin) : les virages deviennent des courbes, comme sur les maquettes
+function chaikin(pts, rounds = 2) {
+  for (let r = 0; r < rounds; r++) {
+    const out = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      out.push({x: a.x * .75 + b.x * .25, y: a.y * .75 + b.y * .25, z: a.z}, {x: a.x * .25 + b.x * .75, y: a.y * .25 + b.y * .75, z: a.z});
+    }
+    out.push(pts.at(-1));
+    pts = out;
   }
+  return pts;
+}
+// Bords gauche / droite d'une bande au sol, projetés à l'écran (coupés avant le premier point trop proche)
+function bandEdges(cam, pts, half) {
+  const left = [], right = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
+    const l = cam.toCam({x: pts[i].x - dy * half, y: pts[i].y + dx * half, z: pts[i].z});
+    const r = cam.toCam({x: pts[i].x + dy * half, y: pts[i].y - dx * half, z: pts[i].z});
+    if (l.d < NEAR_M || r.d < NEAR_M) { if (left.length) break; continue; }
+    left.push(cam.toScreen(l)); right.push(cam.toScreen(r));
+  }
+  return [left, right];
+}
+function bandPath(left, right) {
+  ctx.beginPath();
+  left.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  for (let k = right.length - 1; k >= 0; k--) ctx.lineTo(right[k][0], right[k][1]);
+  ctx.closePath();
 }
 function drawPath(cam, s, here) {
-  const t = theme(), dpr = devicePixelRatio, h = canvas.height;
-  const pts = [];
-  for (let d = s.nav.pos + START_M; d <= Math.min(s.nav.total, s.nav.pos + AHEAD_M); d += 2) pts.push(enu(here, s.posAt(d)));
-  if (pts.length < 2) return;
-  if (t.ribbon) {
-    const g = ctx.createLinearGradient(0, h, 0, h * 0.4);
-    g.addColorStop(0, "rgba(47,128,237,.55)");
-    g.addColorStop(0.45, "rgba(18,181,195,.62)");
-    g.addColorStop(1, "rgba(61,220,151,.42)");
-    ctx.save();
-    ctx.shadowColor = t.glow;
-    ctx.shadowBlur = 26 * dpr;
-    ribbon(cam, pts, 0.75);
-    ctx.fillStyle = g;
-    ctx.fill("nonzero");
-    ctx.restore();
-  }
-  // chevrons posés au sol, de plus en plus transparents au loin
+  const t = theme(), dpr = devicePixelRatio;
+  const raw = [];
+  for (let d = s.nav.pos + START_M; d <= Math.min(s.nav.total, s.nav.pos + AHEAD_M); d += 1.5) raw.push(enu(here, s.posAt(d)));
+  if (raw.length < 3) return;
+  const pts = chaikin(raw);
+  const [left, right] = bandEdges(cam, pts, t.ribbon ? 0.8 : 1.0);
+  if (left.length < 2) return;
+  const yNear = Math.max(left[0][1], right[0][1]), yFar = Math.min(left.at(-1)[1], right.at(-1)[1]);
+  const fade = (c0, c1, c2) => {                          // opaque devant soi, transparent au loin
+    const g = ctx.createLinearGradient(0, yNear, 0, Math.min(yNear - 1, yFar));
+    g.addColorStop(0, c0); g.addColorStop(0.55, c1); g.addColorStop(1, c2);
+    return g;
+  };
   ctx.save();
-  ctx.shadowColor = t.glow;
-  ctx.shadowBlur = (t.ribbon ? 6 : 22) * dpr;
-  for (let d = s.nav.pos + START_M + 0.8; d <= Math.min(s.nav.total, s.nav.pos + AHEAD_M); d += t.chevGap) {
-    const p = enu(here, s.posAt(d)), q = enu(here, s.posAt(Math.min(s.nav.total, d + 1)));
-    let ux = q.x - p.x, uy = q.y - p.y;
-    const L = Math.hypot(ux, uy);
-    if (L < 1e-3) continue;
-    ux /= L; uy /= L;
-    const lx = -uy, ly = ux, W = t.chevW / 2, len = t.chevLen, th = t.chevTh;
-    const at = (a, b) => ({x: p.x + ux * a + lx * b, y: p.y + uy * a + ly * b, z: p.z});
-    // chevron « ^ » : pointe devant, deux branches d'épaisseur th vers l'arrière
-    const shape = [at(len / 2, 0), at(-len / 2, -W), at(-len / 2 + th, -W), at(len / 2 - th, 0),
-                   at(-len / 2 + th, W), at(-len / 2, W)];
-    if (!fillGround(cam, shape)) continue;
-    const alpha = Math.max(0.12, 1 - (d - s.nav.pos) / AHEAD_M);
-    ctx.fillStyle = `rgba(${t.chevRGB},${(alpha * (t.ribbon ? 0.95 : 1)).toFixed(3)})`;
+  if (t.ribbon) {
+    // halo, ruban, cœur clair : le « tapis lumineux » de la maquette 1
+    ctx.shadowColor = t.glow; ctx.shadowBlur = 34 * dpr;
+    bandPath(left, right);
+    ctx.fillStyle = fade("rgba(18,181,195,.80)", "rgba(40,200,180,.62)", "rgba(61,220,151,0)");
     ctx.fill();
+    ctx.shadowBlur = 0;
+    const [cl, cr] = bandEdges(cam, pts, 0.3);
+    if (cl.length > 1) { bandPath(cl, cr); ctx.fillStyle = fade("rgba(200,255,240,.55)", "rgba(170,250,225,.35)", "rgba(61,220,151,0)"); ctx.fill(); }
+    ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = fade("rgba(255,255,255,.75)", "rgba(255,255,255,.35)", "rgba(255,255,255,0)");
+    ctx.beginPath(); left.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
+    ctx.beginPath(); right.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
+  } else {
+    // léger halo au sol sous les chevrons (maquette 2)
+    bandPath(left, right);
+    ctx.fillStyle = fade("rgba(91,224,234,.16)", "rgba(91,224,234,.08)", "rgba(91,224,234,0)");
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Chevrons « ^ » tracés au sol le long de la ligne lissée, à intervalle régulier
+  ctx.save();
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.shadowColor = t.glow; ctx.shadowBlur = (t.ribbon ? 8 : 26) * dpr;
+  let acc = 0, next = t.chevGap * 0.6;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!seg) continue;
+    while (acc + seg >= next) {
+      const f = (next - acc) / seg, ux = (b.x - a.x) / seg, uy = (b.y - a.y) / seg;
+      const c = {x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z};
+      const tip = {x: c.x + ux * t.chevL / 2, y: c.y + uy * t.chevL / 2, z: c.z};
+      const back = (side) => ({x: c.x - ux * t.chevL / 2 - uy * side * t.chevW / 2, y: c.y - uy * t.chevL / 2 + ux * side * t.chevW / 2, z: c.z});
+      const q = [back(1), tip, back(-1)].map(p => cam.toCam(p));
+      if (q.every(v => v.d >= NEAR_M)) {
+        const along = next;                              // distance depuis le début du ruban
+        const alpha = Math.max(0, 1 - along / (AHEAD_M - START_M)) ** 0.8;
+        ctx.strokeStyle = `rgba(${t.chevRGB},${alpha.toFixed(3)})`;
+        ctx.lineWidth = Math.max(2 * dpr, Math.min(46 * dpr, cam.scale(q[1].d) * t.chevStroke));
+        ctx.beginPath();
+        q.forEach((v, k) => { const [x, y] = cam.toScreen(v); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        ctx.stroke();
+      }
+      next += t.chevGap;
+    }
+    acc += seg;
   }
   ctx.restore();
 }
@@ -205,6 +269,12 @@ function anchorsAhead(s) {
     const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
     if (d < AHEAD_M) out.push({at: r, label: k[1], ic: k[2], ahead: d, color: "#B42318", glow: "#FF6B5B", obstacle: true});
   }
+  for (const [cat, lat, lon, name, wheel] of net.places || []) {
+    const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
+    if (d > PLACES_M || !PLACE[cat]) continue;
+    const [ic, color, label] = PLACE[cat];
+    out.push({at: {lat, lon}, label: name || label, ic, ahead: d, color, glow: "#5BE0EA", place: true, wheel: WHEEL[wheel]});
+  }
   for (const [kind, lat, lon, name] of net.pois) {
     if (!POI[kind]) continue;
     const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
@@ -227,13 +297,14 @@ function iconImage(name, color) {
 function font(weight, px) { return `${weight} ${px}px "Atkinson Hyperlegible", system-ui, -apple-system, Roboto, sans-serif`; }
 
 // Étiquette en verre (thème Verre)
-function glassLabel(x, y, a) {
+function glassLabel(x, y, a, groundY = y + 18 * devicePixelRatio) {
   const dpr = devicePixelRatio, h = 36 * dpr, r = h / 2, ic = 22 * dpr;
   ctx.font = font(700, 15 * dpr);
   const w1 = ctx.measureText(a.label).width;
   ctx.font = font(400, 15 * dpr);
   const w2 = ctx.measureText(" " + dist(Math.max(1, a.ahead))).width;
-  const w = 10 * dpr + ic + 8 * dpr + w1 + w2 + 14 * dpr;
+  const badge = a.wheel ? 24 * dpr : 0;
+  const w = 10 * dpr + ic + 8 * dpr + w1 + w2 + 14 * dpr + badge;
   const left = Math.max(8 * dpr, Math.min(canvas.width - w - 8 * dpr, x - w / 2)), top = y - h;
   ctx.save();
   ctx.shadowColor = "rgba(15,37,55,.25)"; ctx.shadowBlur = 12 * dpr; ctx.shadowOffsetY = 3 * dpr;
@@ -249,10 +320,16 @@ function glassLabel(x, y, a) {
   ctx.fillText(a.label, left + 18 * dpr + ic, top + h / 2 + dpr);
   ctx.fillStyle = "#4B5E70"; ctx.font = font(400, 15 * dpr);
   ctx.fillText(" " + dist(Math.max(1, a.ahead)), left + 18 * dpr + ic + w1, top + h / 2 + dpr);
+  if (a.wheel) {                                        // badge fauteuil : vert / orange / rouge
+    const bx = left + w - 14 * dpr - 9 * dpr, by = top + h / 2;
+    ctx.fillStyle = a.wheel[0]; ctx.beginPath(); ctx.arc(bx, by, 10 * dpr, 0, Math.PI * 2); ctx.fill();
+    const wi = iconImage("accessibility", "#ffffff");
+    if (wi.complete) ctx.drawImage(wi, bx - 7 * dpr, by - 7 * dpr, 14 * dpr, 14 * dpr);
+  }
   // petit trait vers le point au sol
   ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 2 * dpr;
-  ctx.beginPath(); ctx.moveTo(x, top + h); ctx.lineTo(x, y + 18 * dpr); ctx.stroke();
-  ctx.fillStyle = a.color; ctx.beginPath(); ctx.arc(x, y + 18 * dpr, 4 * dpr, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x, top + h); ctx.lineTo(x, groundY); ctx.stroke();
+  ctx.fillStyle = a.color; ctx.beginPath(); ctx.arc(x, groundY, 4 * dpr, 0, Math.PI * 2); ctx.fill();
   return {left, top, w, h: h + 22 * dpr};
 }
 // Repère en goutte translucide (thème Néon)
@@ -276,29 +353,37 @@ function glassPin(x, y, a, H) {
   // pastille d'icône au sommet
   const s = Math.min(R * 1.05, 64 * dpr), bx = x - s / 2, by = cy - s / 2 - R * 0.15;
   ctx.save();
-  ctx.fillStyle = a.obstacle ? "rgba(214,64,52,.85)" : "rgba(18,181,195,.85)";
+  ctx.fillStyle = a.obstacle ? "rgba(214,64,52,.85)" : a.place ? a.color : "rgba(18,181,195,.85)";
   ctx.shadowColor = a.glow; ctx.shadowBlur = 14 * dpr;
   ctx.beginPath(); ctx.roundRect ? ctx.roundRect(bx, by, s, s, s * 0.22) : ctx.rect(bx, by, s, s); ctx.fill();
   ctx.restore();
   const img = iconImage(a.ic, "#ffffff");
   if (img.complete) ctx.drawImage(img, bx + s * 0.18, by + s * 0.18, s * 0.64, s * 0.64);
+  if (a.wheel) {
+    const r = s * 0.2, cx = bx + s, cy2 = by;
+    ctx.fillStyle = a.wheel[0]; ctx.beginPath(); ctx.arc(cx, cy2, r, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = "#fff"; ctx.stroke();
+    const wi = iconImage("accessibility", "#ffffff");
+    if (wi.complete) ctx.drawImage(wi, cx - r * 0.7, cy2 - r * 0.7, r * 1.4, r * 1.4);
+  }
   // nom sous la pastille, distance à droite
   ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = "#fff";
   ctx.font = font(700, Math.max(12, Math.min(18, s / dpr * 0.3)) * dpr);
   ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = 4 * dpr;
   const fs = Math.max(12, Math.min(18, s / dpr * 0.3)) * dpr;
-  ctx.fillText(a.label, x, by + s + 6 * dpr);
+  const tw = ctx.measureText(a.label).width, tx = Math.max(tw / 2 + 8 * dpr, Math.min(canvas.width - tw / 2 - 8 * dpr, x));
+  ctx.fillText(a.label, tx, by + s + 6 * dpr);
   ctx.font = font(400, fs * 0.9);
   ctx.fillStyle = "#CFF7FA";
-  ctx.fillText(dist(Math.max(1, a.ahead)), x, by + s + 8 * dpr + fs);
+  ctx.fillText(dist(Math.max(1, a.ahead)), tx, by + s + 8 * dpr + fs);
   ctx.shadowBlur = 0; ctx.textAlign = "start";
   return {left: x - R, top: cy - R, w: W, h: H};
 }
 function drawAnchors(cam, s, here) {
   const dpr = devicePixelRatio, w = canvas.width, h = canvas.height, neon = theme().pins;
   // les plus proches d'abord : si deux repères se gênent, le plus lointain attend d'être plus près
-  const rank = a => a.obstacle ? 0 : a.poi ? 2 : 1;      // obstacles d'abord, puis le trajet, puis les équipements
-  const anchors = anchorsAhead(s).filter(a => neon || !a.poi || a.ahead < 50).sort((a, b) => rank(a) - rank(b) || a.ahead - b.ahead).slice(0, 7);
+  const rank = a => a.obstacle ? 0 : a.place || a.poi ? 2 : 1;   // obstacles d'abord, puis le trajet, puis les lieux
+  const anchors = anchorsAhead(s).sort((a, b) => rank(a) - rank(b) || a.ahead - b.ahead).slice(0, 10);
   const taken = reservedAreas(), toDraw = [];
   for (const a of anchors) {
     const c = cam.toCam(enu(here, a.at));
@@ -310,12 +395,25 @@ function drawAnchors(cam, s, here) {
     const H = Math.min(Math.max(70 * dpr, Math.min(240 * dpr, cam.scale(c.d) * 3.2)), y - ceiling - 12 * dpr);
     if (neon && H < 56 * dpr) continue;
     const est = neon ? {left: x - H * 0.33, top: y - H, w: H * 0.66, h: H} : {left: x - 90 * dpr, top: y - 70 * dpr, w: 180 * dpr, h: 60 * dpr};
-    if (!neon) { ctx.font = font(700, 15 * dpr); est.w = ctx.measureText(a.label).width + 110 * dpr; est.left = x - est.w / 2; }
+    if (!neon) {                                       // même calage que glassLabel (repoussée du bord d'écran)
+      ctx.font = font(700, 15 * dpr);
+      est.w = ctx.measureText(a.label).width + (a.wheel ? 134 : 110) * dpr;
+      est.left = Math.max(8 * dpr, Math.min(w - est.w - 8 * dpr, x - est.w / 2));
+    } else if (x - H * 0.4 < 0 || x + H * 0.4 > w) continue;      // goutte entière à l'écran
     const pad = 6 * dpr;
     const hit = t => est.left < t.left + t.w + pad && t.left < est.left + est.w + pad && est.top < t.top + t.h + pad && t.top < est.top + est.h + pad;
-    if (taken.some(t => hit(t) && (!neon || !t.bubble))) continue;     // une goutte peut passer derrière la bulle
+    let labelY = y - 24 * dpr;
+    if (!neon) {                                       // gênée : elle remonte, reliée à son point par un trait
+      for (let tries = 0; tries < 4; tries++) {
+        const t = taken.find(hit);
+        if (!t) break;
+        labelY = t.top - 8 * dpr;
+        est.top = labelY - 36 * dpr; est.h = 36 * dpr;
+      }
+      if (taken.some(hit) || est.top < ceiling) continue;
+    } else if (taken.some(t => hit(t) && !t.bubble)) continue;       // une goutte peut passer derrière la bulle
     taken.push(est);
-    toDraw.push(() => neon ? glassPin(x, y, a, H) : glassLabel(x, y - 24 * dpr, a));
+    toDraw.push(() => neon ? glassPin(x, y, a, H) : glassLabel(x, labelY, a, y));
   }
   toDraw.reverse().forEach(draw => draw());          // les lointains d'abord, les proches par-dessus
 }
@@ -330,16 +428,25 @@ function reservedAreas() {
 
 // ---- Orientation ---------------------------------------------------------------------------------
 function routeBearing(s) {
-  // direction du tronçon où l'on se trouve (3 m devant) : on regarde dans le sens de la marche, le virage apparaît sur le côté
-  const a = s.posAt(s.nav.pos), b = s.posAt(Math.min(s.nav.total, s.nav.pos + 3));
+  // On regarde vers le prochain virage (au plus 15 m devant) : le chemin file droit devant puis tourne,
+  // comme sur la maquette. Juste avant le virage, on regarde déjà un peu dans la nouvelle direction.
+  const turnAt = s.nav.stepAt[s.st.idx + 1] ?? s.nav.total;
+  let ahead = Math.min(15, turnAt - s.nav.pos);
+  if (ahead < 3) ahead = 8;
+  const a = s.posAt(s.nav.pos), b = s.posAt(Math.min(s.nav.total, s.nav.pos + ahead));
   if (a.lat === b.lat && a.lon === b.lon) return smoothHeading ?? 0;
   const k = Math.cos(a.lat * Math.PI / 180);
   return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
 }
+let lastSmooth = 0;
 function smooth(target) {
+  // Lissage selon le temps écoulé (et non par image) : même rendu à 60 ou à 10 images/s.
+  const now = performance.now(), dt = Math.min(1, (now - lastSmooth) / 1000 || 0);
+  lastSmooth = now;
   if (smoothHeading === null) return (smoothHeading = target);
   const diff = ((target - smoothHeading + 540) % 360) - 180;
-  smoothHeading = (smoothHeading + diff * 0.15 + 360) % 360;
+  if (Math.abs(diff) > 100) return (smoothHeading = target);        // saut (recalcul, demi-tour) : on se recale
+  smoothHeading = (smoothHeading + diff * (1 - Math.exp(-dt / 0.25)) + 360) % 360;
   return smoothHeading;
 }
 
@@ -354,7 +461,7 @@ function frame() {
   const compass = useCompass && sensors.heading !== null;
   const heading = smooth(compass ? sensors.heading : routeBearing(s));
   document.documentElement.style.setProperty("--heading", `${heading.toFixed(1)}deg`);
-  const pitch = Math.max(5, Math.min(70, sensors.pitch ?? 22));
+  const pitch = Math.max(5, Math.min(70, sensors.pitch ?? 10));   // sans capteur : téléphone tenu presque droit
   const cam = makeCamera(heading, pitch, w, h);
   const here = s.nav.here;
   if (!mapFull) {

@@ -618,7 +618,14 @@ $("hud").addEventListener("pointerup", () => { if (pressTimer) { clearTimeout(pr
 
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; if (S.screen === "profile") render(); });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.nav) requestWakeLock(); });
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  // Une nouvelle version prend la main : on recharge une fois pour l'afficher (sauf pendant un guidage)
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !S.nav && !sessionStorage.getItem("va-reloaded")) { sessionStorage.setItem("va-reloaded", "1"); location.reload(); }
+  });
+  navigator.serviceWorker.register("sw.js", {updateViaCache: "none"}).then(r => r.update()).catch(() => {});
+}
 
 // ---- Démarrage ------------------------------------------------------------------------------
 $("panel").innerHTML = `<h2>Vision AR</h2><p>Chargement du plan de Gennevilliers…</p>`;
