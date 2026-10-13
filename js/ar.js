@@ -59,7 +59,7 @@ const POI = {elevator: ["elevator", "Ascenseur"], accessible_toilet: ["toilet", 
   accessible_entrance: ["door-open", "Entrée accessible"], audio_beacon: ["volume-2", "Balise sonore"]};
 
 let api = null, root = null, video = null, canvas = null, ctx = null, stream = null, raf = 0, noCamera = false;
-let sensors = {heading: null, pitch: null, roll: 0}, smoothHeading = null, mapFull = false, sheet = null;
+let sensors = {heading: null, pitch: null, roll: 0}, mapFull = false, sheet = null, domeGeom = null, domeObserver = null;
 let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
 let blocking = true, sheetMessage = null, lastUi = "";
 
@@ -92,10 +92,28 @@ function onOrientation(e) {
   const gx = cb * Math.sin(e.gamma * d), gy = -Math.sin(e.beta * d), gz = -cb * Math.cos(e.gamma * d);
   const pitch = Math.asin(Math.max(-1, Math.min(1, -gz))) / d;
   const roll = Math.atan2(gx, -gy) / d + screenAngle();
-  sensors.pitch = sensors.pitch === null ? pitch : sensors.pitch + (pitch - sensors.pitch) * 0.3;
-  const dr = ((roll - sensors.roll + 540) % 360) - 180;
-  sensors.roll = (((sensors.roll + dr * 0.3) + 540) % 360) - 180;
+  sensors.pitch = pitch;
+  sensors.roll = ((roll + 540) % 360) - 180;
 }
+// Filtre « 1 € » (Casiez et al., 2012) : très lisse quand le téléphone bouge peu (les tremblements de la
+// main et le bruit de la boussole disparaissent), réactif quand on tourne vraiment.
+class OneEuro {
+  constructor(minCutoff, beta, wrap = false) { Object.assign(this, {minCutoff, beta, wrap, x: null, dx: 0, t: 0}); }
+  reset() { this.x = null; }
+  filter(value, now) {
+    if (this.x === null) { Object.assign(this, {x: value, dx: 0, t: now}); return value; }
+    const dt = Math.max(0.001, Math.min(0.5, (now - this.t) / 1000));
+    this.t = now;
+    let d = value - this.x;
+    if (this.wrap) d = ((d + 540) % 360) - 180;
+    const a = c => 1 / (1 + 1 / (2 * Math.PI * c * dt));
+    this.dx += a(1) * (d / dt - this.dx);
+    this.x += a(this.minCutoff + this.beta * Math.abs(this.dx)) * d;
+    if (this.wrap) this.x = (this.x + 360) % 360;
+    return this.x;
+  }
+}
+const F = {heading: new OneEuro(0.35, 0.012, true), pitch: new OneEuro(0.4, 0.01), roll: new OneEuro(0.4, 0.01)};
 async function startSensors() {
   try {
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function")
@@ -254,6 +272,21 @@ function drawPath(cam, s, here, pos) {
       next += t.chevGap;
     }
     acc += seg;
+  }
+  ctx.restore();
+}
+// Pointillés au sol de sa position réelle jusqu'à l'itinéraire (à l'intérieur, sur le parking, à l'écart…)
+function drawJoin(cam, here, target) {
+  const t = theme(), end = enu(here, target), L = Math.hypot(end.x, end.y);
+  if (L < 3) return;
+  const ux = end.x / L, uy = end.y / L, w = 0.09;
+  ctx.save();
+  ctx.fillStyle = `rgba(${t.chevRGB},.9)`; ctx.shadowColor = t.glow; ctx.shadowBlur = 10 * devicePixelRatio;
+  for (let d = 1; d < L - 0.3; d += 0.9) {
+    const a = d, b = Math.min(L, d + 0.35), z = -camHeight;
+    const quad = [{x: ux * a - uy * w, y: uy * a + ux * w, z}, {x: ux * b - uy * w, y: uy * b + ux * w, z},
+                  {x: ux * b + uy * w, y: uy * b - ux * w, z}, {x: ux * a + uy * w, y: uy * a - ux * w, z}];
+    if (fillGround(cam, quad)) ctx.fill();
   }
   ctx.restore();
 }
@@ -451,9 +484,9 @@ function drawAnchors(cam, s, here) {
 }
 function reservedAreas() {
   const dpr = devicePixelRatio, out = [];
-  for (const el of root.querySelectorAll(".chips, .banner, .bubble, .dome, .dock")) {
+  for (const el of root.querySelectorAll(".top, .dome, .dock")) {
     const r = el.getBoundingClientRect();
-    if (r.width) out.push({left: r.left * dpr, top: r.top * dpr, w: r.width * dpr, h: r.height * dpr, ui: true, bubble: el.classList.contains("bubble")});
+    if (r.width) out.push({left: r.left * dpr, top: r.top * dpr, w: r.width * dpr, h: r.height * dpr, ui: true, bubble: false});
   }
   return out;
 }
@@ -466,22 +499,10 @@ function routeBearing(s) {
   let ahead = Math.min(15, turnAt - s.nav.pos);
   if (ahead < 3) ahead = 8;
   const a = s.posAt(s.nav.pos), b = s.posAt(Math.min(s.nav.total, s.nav.pos + ahead));
-  if (a.lat === b.lat && a.lon === b.lon) return smoothHeading ?? 0;   // (sans boussole : ordinateur, capteurs refusés)
+  if (a.lat === b.lat && a.lon === b.lon) return F.heading.x ?? 0;   // (sans boussole : ordinateur, capteurs refusés)
   const k = Math.cos(a.lat * Math.PI / 180);
   return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
 }
-let lastSmooth = 0;
-function smooth(target) {
-  // Lissage selon le temps écoulé (et non par image) : même rendu à 60 ou à 10 images/s.
-  const now = performance.now(), dt = Math.min(1, (now - lastSmooth) / 1000 || 0);
-  lastSmooth = now;
-  if (smoothHeading === null) return (smoothHeading = target);
-  const diff = ((target - smoothHeading + 540) % 360) - 180;
-  if (Math.abs(diff) > 100) return (smoothHeading = target);        // saut (recalcul, demi-tour) : on se recale
-  smoothHeading = (smoothHeading + diff * (1 - Math.exp(-dt / 0.25)) + 360) % 360;
-  return smoothHeading;
-}
-
 // ---- Boucle d'affichage -------------------------------------------------------------------------------
 function frame() {
   raf = requestAnimationFrame(frame);
@@ -490,33 +511,38 @@ function frame() {
   const dpr = devicePixelRatio, w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
-  const compass = sensors.heading !== null;
-  const heading = smooth(compass ? sensors.heading : routeBearing(s));
+  const now = performance.now(), compass = sensors.heading !== null;
+  const heading = F.heading.filter(compass ? sensors.heading : routeBearing(s), now);
   document.documentElement.style.setProperty("--heading", `${heading.toFixed(1)}deg`);
-  const pitch = Math.max(-30, Math.min(80, sensors.pitch ?? 10));  // sans capteur : téléphone tenu presque droit
-  const cam = makeCamera(heading, pitch, compass ? sensors.roll : 0, w, h);
-  const {here, pos} = viewpoint(s);
+  const pitch = F.pitch.filter(Math.max(-30, Math.min(80, sensors.pitch ?? 10)), now);   // sans capteur : téléphone presque droit
+  const roll = compass ? ((F.roll.filter(sensors.roll + 180, now) + 360) % 360) - 180 : 0;
+  const cam = makeCamera(heading, pitch, roll, w, h);
+  const v = viewpoint(s);
   if (!mapFull) {
-    if (noCamera) drawGrid(cam, here, heading);
-    drawPath(cam, s, here, pos);
-    drawAnchors(cam, s, here);
+    if (noCamera) drawGrid(cam, v.here, heading);
+    if (v.join) drawJoin(cam, v.here, v.join);
+    drawPath(cam, s, v.here, v.pos);
+    drawAnchors(cam, s, v.here);
   }
-  renderUi(s, cam, here, heading, compass);
+  renderUi(s, heading, compass);
 }
-// Point de vue : sur l'itinéraire, la position projetée sur le tracé (le ruban part de sous les pieds) ;
-// loin du tracé, la vraie position GPS (le ruban montre où le rejoindre). Glissement doux entre deux mesures GPS.
+// Point de vue : sur l'itinéraire, la position projetée sur le tracé (le ruban part de sous les pieds).
+// À l'écart du tracé (à l'intérieur, de l'autre côté de la rue, hors itinéraire), la vraie position GPS :
+// le ruban reste à sa vraie place dans la rue et des pointillés montrent comment le rejoindre.
+// Glissement lent entre deux mesures GPS pour que les lignes ne sautent pas.
 let lastView = 0;
 function viewpoint(s) {
-  const n = s.nav, off = n.real && n.offRoute;
-  const target = off ? {lat: n.real.lat, lon: n.real.lon} : n.here;
-  const now = performance.now(), k = 1 - Math.exp(-Math.min(1, (now - lastView) / 1000) / 0.45);
+  const n = s.nav, away = !!(n.real && (n.offRoute || n.gap > 6));
+  const target = away ? {lat: n.real.lat, lon: n.real.lon} : n.here;
+  const now = performance.now(), k = 1 - Math.exp(-Math.min(1, (now - lastView) / 1000) / 0.8);
   lastView = now;
-  if (!view || haversineM(view.here.lat, view.here.lon, target.lat, target.lon) > 40) view = {here: {...target}, pos: n.pos};
+  if (!view || view.away !== away || haversineM(view.here.lat, view.here.lon, target.lat, target.lon) > 60) view = {here: {...target}, pos: n.pos, away};
   else {
     view.here = {lat: view.here.lat + (target.lat - view.here.lat) * k, lon: view.here.lon + (target.lon - view.here.lon) * k};
     view.pos += (n.pos - view.pos) * k;
   }
-  if (!off) view.here = s.posAt(view.pos);
+  if (!away) view.here = s.posAt(view.pos);
+  view.join = away ? s.posAt(n.gapAlong ?? n.pos) : null;
   return view;
 }
 export const currentHeading = () => (arOpen() ? sensors.heading : null);
@@ -525,28 +551,33 @@ export const currentHeading = () => (arOpen() ? sensors.heading : null);
 function chip(cls, ic, label, value) {
   return `<div class="chip ${cls}"><span class="chip-ic">${icon(ic)}</span><span><small>${label}</small><b>${value}</b></span></div>`;
 }
-function renderUi(s, cam, here, heading, compass) {
+function renderUi(s, heading, compass) {
   const st = s.st, next = st.next, r = s.nav.route;
   const eta = new Date(Date.now() + st.remaining / s.speed * 1000).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
   const after = s.nav.route.steps[st.idx + 2];
   const crossing = next.alerts.some(a => a.startsWith("Traversée"));
   const sub = st.arrived ? (s.dest?.label || "") : crossing ? `puis traversez au passage piéton${next.alerts.some(a => a.includes("feu sonore")) ? " (feu sonore)" : ""}`
     : next.maneuver === "arrive" ? (s.dest?.label || "") : `puis ${dist(next.distance_m)} ${next.street ? "· " + next.street : "tout droit"}`;
-  const title = st.arrived ? "Vous êtes arrivé" : TITLE[next.maneuver] || "Continuez tout droit";
-  const manIcon = MAN_ICON[st.arrived ? "arrive" : next.maneuver] || "arrow-up";
+  const joining = !st.arrived && !s.nav.offRoute && s.nav.gap > 8;
+  const title = st.arrived ? "Vous êtes arrivé" : joining ? "Rejoignez l'itinéraire" : TITLE[next.maneuver] || "Continuez tout droit";
+  const manIcon = joining ? "footprints" : MAN_ICON[st.arrived ? "arrive" : next.maneuver] || "arrow-up";
+  const away = st.arrived ? "" : joining ? dist(s.nav.gap) : dist(st.toManeuver);
+  const subText = joining ? `suivez les pointillés jusqu'à la rue, puis ${(TITLE[next.maneuver] || "continuez").toLowerCase()}` : sub;
   const rer = s.nav.rerouted && Date.now() - s.nav.rerouted.at < 10000 ? s.nav.rerouted : null;
   const banner = rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
     : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
     : s.gpsInfo ? `<div class="banner ${s.nav.offRoute ? "warn" : "info"}">${icon(s.nav.offRoute ? "route" : "locate-fixed")}<span>${esc(s.gpsInfo)}</span></div>` : "";
   const alt = s.alt;
   const html = `
-    <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
-    ${banner}
-    <div class="bubble" role="status" aria-live="polite"><b>${esc(title)}</b><span>${esc(sub)}</span>
-      ${!st.arrived && next.alerts.some(a => !a.startsWith("Traversée")) ? `<em>${icon("triangle-alert")} ${esc(next.alerts.filter(a => !a.startsWith("Traversée")).join(" · "))}</em>` : ""}
-      <i class="bubble-ic">${icon(manIcon)}</i></div>
+    <div class="top">
+      <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
+      <div class="bubble" role="status" aria-live="polite"><i class="bubble-ic">${icon(manIcon)}</i>
+        <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
+        ${!st.arrived && !joining && next.alerts.some(a => !a.startsWith("Traversée")) ? `<em>${icon("triangle-alert")} ${esc(next.alerts.filter(a => !a.startsWith("Traversée")).join(" · "))}</em>` : ""}</div>
+        ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}</div>
+      ${banner}
+    </div>
     <div class="dome-ui">
-      <div class="next-pill"><span>${icon(manIcon)}</span><b>${st.arrived ? "Arrivé" : dist(st.toManeuver)}</b></div>
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
       <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
         <span class="needle"></span><i>N</i></div>
@@ -562,41 +593,65 @@ function renderUi(s, cam, here, heading, compass) {
   const ui = root.querySelector(".ar-ui");
   if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
   root.classList.toggle("sheet-open", !!sheet);
-  placeBubble(s, cam, here);
   placeNorth(heading);
 }
-// La bulle de consigne s'accroche au point de la prochaine manœuvre, si on le voit
-function placeBubble(s, cam, here) {
-  const b = root.querySelector(".bubble");
-  if (!b) return;
-  const dpr = devicePixelRatio, W = canvas.clientWidth, H = canvas.clientHeight;
-  const top = (root.querySelector(".chips")?.getBoundingClientRect().bottom || 80) + 64;
-  const bottom = (root.querySelector(".dome")?.getBoundingClientRect().top || H * 0.6) - 24;
-  let x = W / 2, y = (top + bottom) / 2 - 40;
-  if (!mapFull && !s.st.arrived) {
-    const c = cam.toCam(enu(here, s.posAt(s.nav.stepAt[s.st.idx + 1] ?? s.nav.total)));
-    if (c.d > 2) {
-      const [sx, sy] = cam.toScreen(c);
-      if (sx > 0 && sx < W * dpr) { x = sx / dpr; y = sy / dpr - 70; }
-    }
-  }
-  const bw = b.offsetWidth, bh = b.offsetHeight;
-  x = Math.max(12 + bw / 2, Math.min(W - 12 - bw / 2, x));
-  y = Math.max(top, Math.min(bottom - bh, y));
-  b.style.transform = `translate(${(x - bw / 2).toFixed(1)}px, ${y.toFixed(1)}px)`;
+// Bord du dôme : une seule ellipse sert à découper la carte, à tracer l'anneau et à placer le « N »
+function domeEdgeY(x) {
+  const g = domeGeom;
+  return g.top + g.ry - g.ry * Math.sqrt(Math.max(0, 1 - ((x - g.W / 2) / g.rx) ** 2));
 }
-// Anneau de boussole du dôme : « N » placé là où se trouve le nord par rapport au regard
+function layoutDome() {
+  const dome = root?.querySelector(".dome"), map = dome?.querySelector(".dome-map");
+  if (!map || !map.clientWidth) return;
+  const W = map.clientWidth, H = map.clientHeight, landscape = matchMedia("(orientation: landscape) and (max-height: 600px)").matches;
+  domeGeom = {W, top: map.offsetTop, rx: W * (mapFull ? 1.6 : landscape ? 0.9 : 0.78), ry: H};
+  map.style.clipPath = `ellipse(${domeGeom.rx.toFixed(1)}px ${H}px at 50% 100%)`;
+  const svg = dome.querySelector(".ring");
+  svg.setAttribute("viewBox", `0 0 ${W} ${dome.clientHeight}`);
+  let d = "";
+  for (let i = 0; i <= 80; i++) { const x = W * i / 80; d += `${i ? "L" : "M"}${x.toFixed(1)} ${domeEdgeY(x).toFixed(1)}`; }
+  svg.querySelector(".ring-arc").setAttribute("d", d);
+  svg.querySelector(".ring-ticks").innerHTML = Array.from({length: 23}, (_, i) => {
+    const x = W * (0.06 + 0.88 * i / 22);
+    return `<circle cx="${x.toFixed(1)}" cy="${(domeEdgeY(x) + 7).toFixed(1)}" r="${i % 5 === 0 ? 2 : 1.2}"/>`;
+  }).join("");
+  dome.querySelector(".dome-grip").style.top = `${(domeGeom.top - 22).toFixed(1)}px`;
+}
+// « N » sur l'anneau, là où se trouve le nord par rapport au regard
 function placeNorth(heading) {
   const n = root.querySelector(".ring-n");
-  if (!n) return;
-  const ring = root.querySelector(".ring").getBoundingClientRect(), dome = root.querySelector(".dome").getBoundingClientRect();
+  if (!n || !domeGeom) return;
   const rel = ((-heading + 540) % 360) - 180;
   n.style.opacity = Math.abs(rel) <= RING_DEG ? "1" : "0";
-  // même courbe que l'arc dessiné (Bézier quadratique 8,118 → 200,-20 → 392,118)
-  const t = 0.5 + Math.max(-RING_DEG, Math.min(RING_DEG, rel)) / RING_DEG * 0.42;
-  const x = (1 - t) ** 2 * 8 + 2 * (1 - t) * t * 200 + t * t * 392, y = (1 - t) ** 2 * 118 + 2 * (1 - t) * t * -20 + t * t * 118;
-  n.style.left = `${(ring.left - dome.left + x / 400 * ring.width).toFixed(1)}px`;
-  n.style.top = `${(ring.top - dome.top + y / 120 * ring.height).toFixed(1)}px`;
+  const x = domeGeom.W / 2 + Math.max(-1, Math.min(1, rel / RING_DEG)) * domeGeom.W * 0.4;
+  n.style.left = `${x.toFixed(1)}px`;
+  n.style.top = `${(domeEdgeY(x) - (Math.abs(x - domeGeom.W / 2) < 64 ? 40 : 16)).toFixed(1)}px`;   // au-dessus de la poignée
+}
+// Poignée du dôme : tirer vers le haut agrandit la carte, vers le bas la remet en place ; un toucher bascule
+function bindGrip() {
+  const grip = root.querySelector(".dome-grip"), dome = root.querySelector(".dome");
+  let y0 = null, h0 = 0, moved = 0;
+  grip.addEventListener("pointerdown", e => {
+    y0 = e.clientY; h0 = dome.offsetHeight; moved = 0;
+    grip.setPointerCapture(e.pointerId);
+    dome.style.transition = "none";
+  });
+  grip.addEventListener("pointermove", e => {
+    if (y0 === null) return;
+    moved = e.clientY - y0;
+    const max = root.clientHeight - 64;
+    dome.style.height = `${Math.max(120, Math.min(max, h0 - moved)).toFixed(0)}px`;
+    layoutDome();
+  });
+  const end = () => {
+    if (y0 === null) return;
+    y0 = null;
+    dome.style.transition = ""; dome.style.height = "";
+    if (Math.abs(moved) < 8) setMapFull(!mapFull);
+    else setMapFull(moved < 0);
+  };
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
 }
 function settingsSheet(s) {
   const seg = (act, opts, cur) => `<div class="seg">${opts.map(([v, l, ic]) =>
@@ -646,7 +701,12 @@ function onAction(e) {
 function setMapFull(on) {
   mapFull = on;
   root.classList.toggle("map-full", on);
-  setTimeout(() => api.map.invalidateSize(), 320);
+  const grip = root.querySelector(".dome-grip");
+  grip.setAttribute("aria-label", on ? "Réduire la carte" : "Agrandir la carte");
+  grip.setAttribute("aria-expanded", String(on));
+  lastUi = "";
+  layoutDome();
+  setTimeout(() => { layoutDome(); api.map.invalidateSize(); }, 320);
 }
 
 // ---- Ouverture / fermeture ------------------------------------------------------------------------------
@@ -654,25 +714,27 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  smoothHeading = null; view = null; mapFull = false; sheet = null; lastUi = "";
+  view = null; mapFull = false; sheet = null; lastUi = "";
+  Object.values(F).forEach(f => f.reset());
   sensors = {heading: null, pitch: null, roll: 0};
   root = document.getElementById("ar");
   root.hidden = false;
   root.className = "";
   root.innerHTML = `<video playsinline muted autoplay></video><canvas></canvas>
     <div class="dome"><div class="dome-map"></div>
-      <svg class="ring" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
-        <path class="ring-arc" d="M8 118 Q200 -20 392 118"/>${Array.from({length: 23}, (_, i) => {
-          const t = i / 22, x = (1 - t) * (1 - t) * 8 + 2 * (1 - t) * t * 200 + t * t * 392, y = (1 - t) * (1 - t) * 118 + 2 * (1 - t) * t * -20 + t * t * 118;
-          return `<circle cx="${x.toFixed(1)}" cy="${(y + 7).toFixed(1)}" r="${i % 5 === 0 ? 1.6 : 1}"/>`;
-        }).join("")}</svg>
-      <span class="ring-n">N</span></div>
+      <svg class="ring" preserveAspectRatio="none" aria-hidden="true"><path class="ring-arc"/><g class="ring-ticks"></g></svg>
+      <span class="ring-n">N</span>
+      <button class="dome-grip" aria-label="Agrandir la carte" aria-expanded="false"><span></span></button></div>
     <div class="ar-ui"></div>`;
   video = root.querySelector("video");
   canvas = root.querySelector("canvas");
   ctx = canvas.getContext("2d");
   root.querySelector(".dome-map").append(api.map.getContainer());
   api.map.invalidateSize();
+  bindGrip();
+  domeObserver = new ResizeObserver(layoutDome);
+  domeObserver.observe(root.querySelector(".dome"));
+  layoutDome();
   root.addEventListener("click", onAction);
   root.addEventListener("change", onAction);
   startSensors();
@@ -690,6 +752,7 @@ export async function openAR(options) {
 export function closeAR() {
   cancelAnimationFrame(raf);
   stopSensors();
+  domeObserver?.disconnect(); domeObserver = null; domeGeom = null;
   stream?.getTracks().forEach(t => t.stop());
   stream = null;
   if (root) {

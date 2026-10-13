@@ -358,8 +358,10 @@ body.nav-ar #panel { display: none; }
   border: 1px solid var(--glass-border); box-shadow: var(--shadow); color: var(--nav-ink); }
 
 /* Pastilles du haut : Marches · Arrivée · Distance */
-#ar .chips { position: absolute; left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right)); top: calc(10px + var(--safe-top));
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+/* Haut de l'écran : pastilles, consigne, alerte (empilées : rien ne cache la rue devant soi) */
+#ar .top { position: absolute; left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right)); top: calc(10px + var(--safe-top));
+  display: flex; flex-direction: column; gap: 8px; }
+#ar .chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 #ar .chip { border-radius: 999px; padding: 6px 10px 6px 6px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 #ar .chip-ic { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface-solid);
   border: 3px solid currentColor; }
@@ -372,23 +374,24 @@ body.nav-ar #panel { display: none; }
 [data-theme="verre"] #ar .c-steps small { color: #5E2B04; } [data-theme="verre"] #ar .c-eta small { color: #0F3A7A; } [data-theme="verre"] #ar .c-dist small { color: #66104F; }
 [data-theme="verre"] #ar .bubble span, [data-theme="verre"] #ar .sheet-label { color: #263B50; }
 
-#ar .banner { position: absolute; left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right)); top: calc(66px + var(--safe-top));
+#ar .banner {
   border-radius: 16px; padding: 10px 14px; display: flex; gap: 10px; align-items: flex-start; font-size: 15px; }
 #ar .banner.danger { background: rgba(214, 64, 52, .94); color: #fff; border-color: transparent; }
 #ar .banner.warn { color: var(--warn); }
 #ar .banner b { margin-right: 6px; }
 
-/* Bulle de consigne, accrochée au point de la manœuvre */
-#ar .bubble { position: absolute; left: 0; top: 0; max-width: min(300px, 76vw); border-radius: 16px; padding: 10px 14px 10px 16px;
-  will-change: transform; display: flex; flex-direction: column; }
+/* Consigne : icône de la manœuvre, texte, distance — sous les pastilles */
+#ar .bubble { border-radius: 18px; padding: 10px 14px 10px 10px; display: flex; align-items: center; gap: 12px; }
+#ar .bubble-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #ar .bubble b { font-size: 19px; line-height: 1.15; }
+#ar .bubble-dist { flex: none; font-size: 26px; font-weight: 700; color: var(--nav-ink); }
 #ar .bubble span { font-size: 14px; color: var(--muted); }
 [data-theme="neon"] #ar .bubble span { color: #B9D3DE; }
 #ar .bubble em { font-style: normal; font-size: 13px; font-weight: 700; color: var(--warn); display: flex; align-items: center; gap: 4px; margin-top: 2px; }
 #ar .bubble em .i { width: 14px; height: 14px; }
-#ar .bubble-ic { position: absolute; left: -14px; bottom: -18px; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--accent-grad); color: #04222B; border: 3px solid #fff; box-shadow: 0 4px 12px rgba(0, 174, 204, .6); }
-#ar .bubble-ic .i { width: 18px; height: 18px; stroke-width: 2.6; }
+#ar .bubble-ic { flex: none; width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
+  background: var(--accent-grad); color: #04222B; box-shadow: 0 4px 12px rgba(0, 174, 204, .45); }
+#ar .bubble-ic .i { width: 28px; height: 28px; stroke-width: 2.6; }
 
 /* Dôme : mini-carte arrondie, anneau de boussole */
 #ar .dome { position: absolute; left: 0; right: 0; bottom: 0; height: calc(min(36vh, 330px) + var(--safe-bottom)); z-index: 2;
@@ -396,21 +399,20 @@ body.nav-ar #panel { display: none; }
 #ar .dome-map { position: absolute; inset: 22px 0 0 0; overflow: hidden; clip-path: ellipse(78% 100% at 50% 100%);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .5); }
 #ar .dome-map > #map { position: absolute !important; inset: 0 !important; width: 100% !important; height: 100% !important; }
-#ar .ring { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 70px; pointer-events: none; overflow: visible; }
+#ar .ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+/* Poignée posée au sommet de l'anneau : tirer vers le haut / le bas (cible tactile de 44 px) */
+#ar .dome-grip { position: absolute; left: 50%; top: 0; width: 88px; height: 44px; margin-left: -44px; border: 0; background: transparent;
+  display: grid; place-items: center; touch-action: none; cursor: grab; z-index: 5; pointer-events: auto; }
+#ar .dome-grip span { width: 56px; height: 8px; border-radius: 99px; background: rgba(255, 255, 255, .95);
+  box-shadow: 0 0 0 2px rgba(0, 116, 137, .55), 0 0 10px rgba(91, 224, 234, .9); }
 #ar .ring-arc { fill: none; stroke: rgba(255, 255, 255, .85); stroke-width: 2.5; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 6px rgba(91, 224, 234, .9)); }
 #ar .ring circle { fill: rgba(255, 255, 255, .9); }
 [data-theme="neon"] #ar .ring-arc { stroke: #5BE0EA; }
 #ar .ring-n { position: absolute; transform: translate(-50%, -50%); font-weight: 700; font-size: 18px; color: #fff; text-shadow: 0 0 8px #2F80ED, 0 0 2px #000;
   transition: opacity .2s; }
 #ar.map-full .dome { height: calc(100% - 64px - var(--safe-top)); }
-#ar.map-full .dome-map { clip-path: ellipse(160% 100% at 50% 100%); }
 #ar .dome-ui { position: absolute; left: 0; right: 0; bottom: 0; height: calc(min(36vh, 330px) + var(--safe-bottom)); z-index: 4; pointer-events: none; }
 #ar.map-full .dome-ui { height: calc(100% - 64px - var(--safe-top)); }
-#ar .next-pill { position: absolute; left: calc(14px + var(--safe-left)); top: -6px; display: flex; align-items: center; gap: 8px; padding: 5px 16px 5px 5px;
-  border-radius: 999px; background: var(--accent-grad); color: #04222B; box-shadow: 0 8px 20px rgba(0, 174, 204, .45); border: 2px solid rgba(255, 255, 255, .8); }
-#ar .next-pill span { width: 40px; height: 40px; border-radius: 50%; background: #fff; display: grid; place-items: center; color: #007489; }
-#ar .next-pill span .i { width: 22px; height: 22px; stroke-width: 2.6; }
-#ar .next-pill b { font-size: 26px; }
 #ar .rose { position: absolute; right: calc(14px + var(--safe-right)); bottom: calc(88px + var(--safe-bottom)); width: 52px; height: 52px; border-radius: 50%;
   display: grid; place-items: center; }
 #ar .rose.on { outline: 3px solid var(--route); }
@@ -442,7 +444,7 @@ body.nav-ar #panel { display: none; }
 /* Feuilles : réglages et signalement */
 #ar .scrim { position: absolute; inset: 0; z-index: 10; background: rgba(6, 16, 25, .45); }
 /* Une fenêtre ouverte (réglages, signalement) passe devant tout ; les indicateurs du guidage s'effacent */
-#ar.sheet-open .dome-ui, #ar.sheet-open .bubble, #ar.sheet-open .banner { visibility: hidden; }
+#ar.sheet-open .dome-ui, #ar.sheet-open .bubble, #ar.sheet-open .banner, #ar.sheet-open .dome-grip, #ar.sheet-open .ring-n { visibility: hidden; }
 #ar .sheet { position: absolute; z-index: 11; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom));
   max-height: calc(100% - 80px - var(--safe-top)); overflow-y: auto; border-radius: 26px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
   max-width: 560px; margin: 0 auto; background: var(--surface-solid); }
@@ -458,14 +460,12 @@ body.nav-ar #panel { display: none; }
 
 @media (max-width: 380px) {
   #ar .chip { padding: 5px 8px 5px 5px; gap: 6px; } #ar .chip-ic { width: 32px; height: 32px; } #ar .chip b { font-size: 14px; }
-  #ar .dock .pill span { display: none; } #ar .next-pill b { font-size: 22px; }
+  #ar .dock .pill span { display: none; } #ar .bubble-dist { font-size: 22px; } #ar .bubble b { font-size: 17px; }
 }
 @media (orientation: landscape) and (max-height: 600px) {
-  #ar .chips { right: auto; width: min(560px, 60%); }
+  #ar .top { right: auto; width: min(560px, 52%); }
   #ar .dome, #ar .dome-ui { left: auto; width: 46%; height: calc(100% - 70px - var(--safe-top)); }
-  #ar .dome-map { clip-path: ellipse(90% 100% at 50% 100%); }
   #ar .dock { left: calc(10px + var(--safe-left)); right: auto; width: 52%; }
-  #ar .bubble { max-width: 260px; }
 }
 
 /* ---- Choix d'itinéraire : bouton « Fermer » bien visible --------------------------------------- */

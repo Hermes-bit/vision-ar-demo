@@ -331,7 +331,7 @@ function startNav(route, keepGps = false) {
   stopNav();
   S.nav = {route, cum, total: cum.at(-1), stepAt, pos: 0, here: {...g[0]}, watch, real: prev?.real || null,
            gpsInfo: prev?.gpsInfo || "", gpsStatus: prev?.gpsStatus || "", lastReroute: prev?.lastReroute || 0,
-           said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, arrived: false};
+           said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, gap: 0, gapAlong: 0, arrived: false};
   requestWakeLock();
   const first = route.steps[0];
   say(`${first.text}. ${short(route.length_m)}, environ ${Math.ceil(route.length_m / speed() / 60)} minutes.`, true);
@@ -399,7 +399,7 @@ function accuracyText(acc) {
   const m = Math.max(1, Math.round(acc));
   return acc <= 10 ? `Position précise (à ${m} m près)`
     : acc <= 25 ? `Position correcte (à ${m} m près)`
-    : `Position approximative (à ${m} m près) : les immeubles gênent le GPS, avancez si possible à découvert`;
+    : `Position approximative (à ${m} m près) : à l'intérieur ou entre les immeubles, le GPS se trompe facilement. Le guidage commence dehors, dans la rue`;
 }
 // Nouvel itinéraire depuis la position réelle (écart, mauvaise rue, ou demande de l'usager)
 function reroute(from, title, manual = false) {
@@ -477,8 +477,14 @@ function onGps(pos) {
   // Mauvaise rue prise à un carrefour : l'écart grandit à chaque mesure -> on n'attend pas les 20 m
   const h = n.dHist = [...n.dHist.slice(-3), best?.d ?? 0];
   const leaving = acc <= 15 && h.length === 4 && h[3] > 12 && h[1] > h[0] + 1.5 && h[2] > h[1] + 1.5 && h[3] > h[2] + 1.5;
+  n.gap = best?.d ?? 0;
+  n.gapAlong = best?.along ?? n.pos;
   if (best && best.d <= limit && !leaving) {
     n.off = 0; n.offRoute = false;
+    if (n.gap > 8 && n.pos < 5 && !n.said.has("join")) {          // départ depuis un bâtiment, une cour…
+      n.said.add("join");
+      say(`Rejoignez l'itinéraire, à ${Math.round(n.gap)} mètres. Suivez les pointillés.`, true);
+    }
     if (best.along < n.pos - 12 && acc <= 25) {          // on remonte l'itinéraire à l'envers
       if (++n.back >= 3) { n.back = 0; n.pos = best.along; wrongWay(); }
     } else n.back = 0;
@@ -500,7 +506,7 @@ function steer() {
   if (heading === null || !n.real || Date.now() - n.real.at > 15000) return;
   if (!n.offRoute && navState().toManeuver < 15) return;
   if (Date.now() - (n.lastSteer || 0) < 6000) return;
-  const from = n.offRoute ? n.real : n.here, to = posAt(Math.min(n.total, n.pos + 10));
+  const from = n.offRoute || n.gap > 6 ? n.real : n.here, to = posAt(Math.min(n.total, n.pos + 10));
   if (haversineM(from.lat, from.lon, to.lat, to.lon) < 3) return;
   const k = Math.cos(from.lat * Math.PI / 180);
   const bearing = Math.atan2((to.lon - from.lon) * k, to.lat - from.lat) * 180 / Math.PI;
