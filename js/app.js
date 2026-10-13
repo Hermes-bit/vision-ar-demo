@@ -99,6 +99,21 @@ function say(text, urgent = false) {
 //   2 = à gauche, 3 = à droite, 5 rapides = mauvais sens / demi-tour, 1 longue = arrivé
 const HAPTIC = {left: [160, 140, 160], right: [160, 140, 160, 140, 160], uturn: [70, 60, 70, 60, 70, 60, 70, 60, 70], arrive: [700], tick: [40]};
 const IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+// Appli installée sur iPhone (barre d'état « black-translucent ») : certaines versions d'iOS arrêtent la
+// fenêtre une soixantaine de pixels avant le bas de l'écran, ce qui laisse une bande vide. On mesure
+// l'écart et l'interface est prolongée jusqu'en bas (--ios-gap, 0 partout ailleurs).
+function fixIosGap() {
+  let gap = 0;
+  if (IOS && (navigator.standalone || matchMedia("(display-mode: standalone)").matches)) {
+    const portrait = innerHeight >= innerWidth;
+    const full = portrait ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+    gap = Math.max(0, Math.min(120, full - innerHeight));
+  }
+  document.documentElement.style.setProperty("--ios-gap", `${gap}px`);
+}
+fixIosGap();
+addEventListener("resize", fixIosGap);
+addEventListener("orientationchange", () => setTimeout(fixIosGap, 300));
 let iosSwitch = null;
 function iosTap() {
   // Safari (iPhone) n'a pas navigator.vibrate ; depuis iOS 18, basculer un interrupteur natif
@@ -185,13 +200,23 @@ function drawNetwork() {
   map.on("zoomend", syncLayers);
   syncLayers();
 }
+// L'obstacle n'est plus là (ou signalé par erreur) : on le retire, et l'itinéraire est recalculé sans lui
+function removeReport(id) {
+  store.set("va-reports", reports().filter(r => r.id !== id));
+  map.closePopup();
+  drawReports();
+  toast("Signalement retiré.");
+  if (S.screen === "route" && S.dest) computeRoute();
+}
 function drawReports() {
   layers.reports.clearLayers();
   for (const r of reports()) {
     const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
     L.marker([r.lat, r.lon], {icon: pin(k[2], "pin-report"), title: k[1]})
       .bindPopup(`<div class="pp"><div class="pp-title">${k[1]}${r.blocking ? " — bloquant" : ""}</div>
-        <div class="pp-src">Signalé sur ce téléphone · expire le ${new Date(r.expires).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"})}</div></div>`)
+        <div class="pp-src">Signalé sur ce téléphone · expire le ${new Date(r.expires).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"})}</div>
+        <button class="pp-remove" type="button">${icon("trash-2")} Retirer ce signalement</button></div>`)
+      .on("popupopen", e => { e.popup.getElement().querySelector(".pp-remove").onclick = () => removeReport(r.id); })
       .addTo(layers.reports);
   }
 }
