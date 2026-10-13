@@ -2,6 +2,7 @@
 // Écrans repris de l'appli Android (phone/ui/Screens.kt) ; itinéraires calculés
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
 import {arOpen, closeAR, openAR} from "./ar.js";
+import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
@@ -22,7 +23,7 @@ const KIND_LABEL = {sidewalk: "Trottoir", crossing: "Passage piéton", footway: 
   path: "Sentier", steps: "Escalier", pedestrian: "Voie piétonne", elevator: "Ascenseur", ramp: "Rampe"};
 // Pentes sur la carte : teintes distinguables par les daltoniens, contraste >= 3:1 sur le fond OSM
 const SLOPE = [[2, "#1F8A70", "≤ 2 %"], [5, "#A86F00", "2 à 5 %"], [8, "#D9480F", "5 à 8 %"], [Infinity, "#7B2D8E", "> 8 %"]];
-const C = {route: "#12B5C3", routeCase: "#063B4A", alt: "#6B7C8F", primary: "#0B5E78", unknown: "#5C6B7A", step: "#0F2537"};
+const C = {route: "#00AECC", routeCase: "#00495A", alt: "#6B7C8F", primary: "#007489", unknown: "#5C6B7A", step: "#0F2537"};
 const MAIRIE = {label: "Mairie de Gennevilliers", lat: 48.925459, lon: 2.294045};
 const GEOCODER = "https://data.geopf.fr/geocodage/search/";
 
@@ -37,7 +38,7 @@ const store = {
 
 const saved = store.get("va-profile", null);
 const S = {
-  screen: saved ? "route" : "profile",
+  screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
   voice: store.get("va-voice", true), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
@@ -50,7 +51,7 @@ let syncLayers = () => {};
 S.theme = store.get("va-theme", matchMedia("(prefers-color-scheme: dark)").matches ? "neon" : "verre");
 function applyTheme() {
   document.documentElement.dataset.theme = S.theme;
-  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = S.theme === "neon" ? "#061019" : "#E9EEF5";
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = S.theme === "neon" ? "#061019" : "#E8F4F8";
 }
 function setTheme(t) {
   S.theme = t;
@@ -199,7 +200,7 @@ function drawRoutes() {
 }
 // Ligne en dégradé (Leaflet n'en fait pas) : une succession de tronçons de teintes voisines
 function gradientLine(ll) {
-  const stops = [[47, 128, 237], [18, 181, 195], [61, 220, 151]], n = Math.min(30, ll.length - 1), out = [];
+  const stops = [[47, 128, 237], [0, 174, 204], [61, 220, 151]], n = Math.min(30, ll.length - 1), out = [];
   for (let k = 0; k < n; k++) {
     const a = Math.floor(k * (ll.length - 1) / n), b = Math.floor((k + 1) * (ll.length - 1) / n);
     const t = k / Math.max(1, n - 1) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(t)), f = t - i;
@@ -446,7 +447,9 @@ function screenProfile() {
   const sw = (id, ic, label, on) => `<label class="setting">${icon(ic)}<span class="grow">${label}</span>
       <input type="checkbox" class="switch" id="${id}" ${on ? "checked" : ""}></label>`;
   return `<header class="hero">
-    <div class="brand"><img src="icons/icon-192.png" alt="" width="40" height="40"><span>Vision AR</span></div>
+    <div class="brand"><img src="icons/icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
+      <button class="btn soft small" id="logout" aria-label="Se déconnecter">${icon("log-out")} Déconnexion</button></div>
+    ${currentSession() ? `<p class="hello">Bonjour ${esc(currentSession().name.split(" ")[0])}&nbsp;!</p>` : ""}
     <h1>Comment vous déplacez-vous&nbsp;?</h1>
     <p class="lead">Choisissez un ou plusieurs profils : l'itinéraire s'adapte à vos besoins.</p></header>
   <div class="tiles" role="group" aria-label="Profils de mobilité">
@@ -577,9 +580,10 @@ function renderHud() {
 
 function render() {
   const nav = S.screen === "nav";
-  document.body.className = S.screen === "profile" ? "full" : nav ? "nav-ar" : "sheet";
-  $("panel").innerHTML = nav ? "" : {profile: screenProfile, route: screenRoute}[S.screen]();
-  bind();
+  const authScreen = AUTH_SCREENS[S.screen];
+  document.body.className = authScreen ? "full auth-screen" : S.screen === "profile" ? "full" : nav ? "nav-ar" : "sheet";
+  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute}[S.screen]();
+  if (authScreen) bindAuth($("panel"), authCtx); else bind();
   renderHud();
   syncLayers();
   if (net) { drawRoutes(); drawReports(); }
@@ -658,6 +662,24 @@ const endDrag = e => {
 $("panel").addEventListener("pointerup", endDrag);
 $("panel").addEventListener("pointercancel", endDrag);
 addEventListener("resize", () => layoutSheet());
+// ---- Authentification (js/auth.js) ----------------------------------------------------------------
+const AUTH_SCREENS = {welcome: screenWelcome, login: screenLogin, signup: screenSignup};
+const authCtx = {
+  go: screen => go(screen),
+  toast,
+  rerender: () => {                                       // garde la saisie et le focus pendant la frappe
+    const id = document.activeElement?.id;
+    render();
+    if (id && $(id)) $(id).focus();
+  },
+  done: () => {                                           // connecté : profil, ou directement la recherche
+    resetForm();
+    const next = store.get("va-profile", null) ? "route" : "profile";
+    go(next);
+    if (next === "route") computeRoute();
+    toast(`Bienvenue ${currentSession()?.name.split(" ")[0] || ""} !`);
+  },
+};
 function renderKeepFocus() {
   const q = $("q"), pos = q?.selectionStart;
   render();
@@ -677,19 +699,24 @@ function go(screen) { S.screen = screen; S.message = null; render(); }
 // le geste retour de Safari reviennent alors d'un écran dans l'appli au lieu de la fermer.
 let guarded = false;
 function syncGuard() {
-  if (S.screen !== "profile" && !guarded) {
+  if (!["profile", "welcome"].includes(S.screen) && !guarded) {
     try { history.pushState({va: true}, ""); guarded = true; } catch { /* sans historique */ }
   }
 }
 window.addEventListener("popstate", () => { guarded = false; stepBack(); syncGuard(); });
 function back() { stepBack(); }
 function stepBack() {
+  if (S.screen === "signup") { resetForm(); return go("login"); }
+  if (S.screen === "login") { resetForm(); return go("welcome"); }
+  if (S.screen === "welcome") return;
   if (S.hud) { S.hud = false; renderHud(); return; }
   if (S.screen === "nav") return confirmQuit();
   if (S.screen === "route" && S.dest) return closeRoutes();
   if (S.screen === "route") return go("profile");
 }
 function forward() {
+  if (S.screen === "welcome") { resetForm(); return go("login"); }
+  if (S.screen === "login" || S.screen === "signup") return;
   if (S.screen === "profile") { saveProfile(); go("route"); computeRoute(); return; }
   if (S.screen === "route" && S.routes[S.selected]?.accessible) return startGuidance();
   if (S.screen === "route") toast(S.routes.length ? "Cet itinéraire n'est pas praticable : choisissez-en un autre." : "Choisissez d'abord une destination.");
@@ -772,6 +799,7 @@ function saveProfile() { store.set("va-profile", {mobilities: [...S.mobilities],
 function bind() {
   const on = (id, ev, fn) => { const e = $(id); if (e) e[ev] = fn; };
   const all = (sel, fn) => document.querySelectorAll(sel).forEach(fn);
+  on("logout", "onclick", () => { logout(); resetForm(); Object.assign(S, {dest: null, routes: [], query: ""}); go("welcome"); });
   all("[data-mob]", b => b.onclick = () => { const m = b.dataset.mob; S.mobilities.has(m) ? S.mobilities.delete(m) : S.mobilities.add(m); render(); });
   all("[data-theme-pick]", b => b.onclick = () => { setTheme(b.dataset.themePick); render(); });
   on("slope", "oninput", e => { S.maxSlope = +e.target.value; $("slopeLbl").textContent = `${S.maxSlope} %`; });

@@ -43,7 +43,7 @@ const PLACE = {
   shop: ["shopping-bag", "#6741D9", "Commerce"], clothes: ["shirt", "#6741D9", "Vêtements"], hairdresser: ["scissors", "#A61E4D", "Coiffeur"],
   health_shop: ["heart-pulse", "#C2255C", "Santé"], pharmacy: ["pill", "#2B8A3E", "Pharmacie"], doctor: ["stethoscope", "#1971C2", "Médecin"],
   hospital: ["hospital", "#C92A2A", "Hôpital"], bank: ["landmark", "#364FC7", "Banque"], post_office: ["mail", "#E67700", "La Poste"],
-  townhall: ["landmark", "#0B5E78", "Mairie"], library: ["book-open", "#5F3DC4", "Médiathèque"], school: ["graduation-cap", "#1864AB", "École"],
+  townhall: ["landmark", "#007489", "Mairie"], library: ["book-open", "#5F3DC4", "Médiathèque"], school: ["graduation-cap", "#1864AB", "École"],
   police: ["shield", "#1864AB", "Police"], worship: ["church", "#495057", "Lieu de culte"], culture: ["drama", "#9C36B5", "Culture"],
   social: ["users", "#0B7285", "Services sociaux"], market: ["store", "#2B8A3E", "Marché"], hotel: ["bed", "#4263EB", "Hôtel"],
   park: ["trees", "#2B8A3E", "Parc"], sport: ["dumbbell", "#D9480F", "Sport"], bus_stop: ["bus", "#1971C2", "Arrêt de bus"],
@@ -180,7 +180,7 @@ function drawPath(cam, s, here) {
     // halo, ruban, cœur clair : le « tapis lumineux » de la maquette 1
     ctx.shadowColor = t.glow; ctx.shadowBlur = 34 * dpr;
     bandPath(left, right);
-    ctx.fillStyle = fade("rgba(18,181,195,.80)", "rgba(40,200,180,.62)", "rgba(61,220,151,0)");
+    ctx.fillStyle = fade("rgba(0,174,204,.80)", "rgba(20,190,200,.62)", "rgba(61,220,151,0)");
     ctx.fill();
     ctx.shadowBlur = 0;
     const [cl, cr] = bandEdges(cam, pts, 0.3);
@@ -278,7 +278,7 @@ function anchorsAhead(s) {
   for (const [kind, lat, lon, name] of net.pois) {
     if (!POI[kind]) continue;
     const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
-    if (d < 90) out.push({at: {lat, lon}, label: POI[kind][1], sub: name, ic: POI[kind][0], ahead: d, color: "#0B5E78", glow: "#5BE0EA", poi: true});
+    if (d < 90) out.push({at: {lat, lon}, label: POI[kind][1], sub: name, ic: POI[kind][0], ahead: d, color: "#007489", glow: "#5BE0EA", poi: true});
   }
   return out;
 }
@@ -345,15 +345,15 @@ function glassPin(x, y, a, H) {
   ctx.bezierCurveTo(x + R, cy + R * 0.55, x + R * 0.35, y - H * 0.3, x, y);
   ctx.closePath();
   const g = ctx.createLinearGradient(0, cy - R, 0, y);
-  g.addColorStop(0, a.obstacle ? "rgba(255,107,91,.42)" : "rgba(18,181,195,.42)");
-  g.addColorStop(1, a.obstacle ? "rgba(255,107,91,.08)" : "rgba(18,181,195,.06)");
+  g.addColorStop(0, a.obstacle ? "rgba(255,107,91,.42)" : "rgba(0,174,204,.42)");
+  g.addColorStop(1, a.obstacle ? "rgba(255,107,91,.08)" : "rgba(0,174,204,.06)");
   ctx.fillStyle = g; ctx.fill();
   ctx.lineWidth = 1.6 * dpr; ctx.strokeStyle = a.obstacle ? "rgba(255,150,140,.9)" : "rgba(130,236,242,.9)"; ctx.stroke();
   ctx.restore();
   // pastille d'icône au sommet
   const s = Math.min(R * 1.05, 64 * dpr), bx = x - s / 2, by = cy - s / 2 - R * 0.15;
   ctx.save();
-  ctx.fillStyle = a.obstacle ? "rgba(214,64,52,.85)" : a.place ? a.color : "rgba(18,181,195,.85)";
+  ctx.fillStyle = a.obstacle ? "rgba(214,64,52,.85)" : a.place ? a.color : "rgba(0,174,204,.85)";
   ctx.shadowColor = a.glow; ctx.shadowBlur = 14 * dpr;
   ctx.beginPath(); ctx.roundRect ? ctx.roundRect(bx, by, s, s, s * 0.22) : ctx.rect(bx, by, s, s); ctx.fill();
   ctx.restore();

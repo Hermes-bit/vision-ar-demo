@@ -8,6 +8,10 @@ pentes, marches, bordures de trottoir, feux sonores, revêtement.
 
 ## Sur le téléphone
 
+L'appli s'ouvre sur **Bienvenue**, puis **Connexion** ou **Inscription** (Geomessen Burkina Faso).
+En mode démonstration, le compte est enregistré uniquement sur le téléphone (mot de passe chiffré,
+rien n'est envoyé) ; les boutons Google et Apple seront actifs avec de vrais comptes.
+
 1. Ouvrir le lien ci-dessus dans Chrome (Android) ou Safari (iPhone).
 2. L'installer sur l'écran d'accueil :
    - Android : menu ⋮ → « Ajouter à l'écran d'accueil » (ou le bouton « Installer » de l'appli) ;
@@ -54,4 +58,6 @@ d'obstacles restent sur votre téléphone dans cette démo.
 - Icônes : [Lucide](https://lucide.dev) (licence ISC, `js/LICENSE-lucide.txt`) et pictogrammes dessinés pour
   Vision AR (fauteuil, canne, ascenseur, WC…).
 
-Projet GeoVision AR.
+- Photo de l'écran de connexion et logo : fournis par Geomessen Burkina Faso.
+
+Projet Vision AR — Geomessen Burkina Faso.
