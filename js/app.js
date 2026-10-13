@@ -2,6 +2,7 @@
 // Écrans repris de l'appli Android (phone/ui/Screens.kt) ; itinéraires calculés
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
 import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
+import {MODE, linesText, loadTransit, makeStreetFinder, searchPlaces, stopTarget, wheelText} from "./transit.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
@@ -39,10 +40,10 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
+  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
 };
-let net = null;
+let net = null, transit = [], streetOf = () => null;
 let installPrompt = null;
 let syncLayers = () => {};
 
@@ -140,7 +141,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19,
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · relief © IGN'}).addTo(map);
 // Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
 map.attributionControl.setPosition("topright");
-const layers = {progress: L.layerGroup().addTo(map), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
+const layers = {progress: L.layerGroup().addTo(map), transit: L.layerGroup().addTo(map), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 
 const pin = (ic, cls) => L.divIcon({className: "", html: `<div class="pin ${cls}">${icon(ic)}</div>`,
@@ -164,6 +165,88 @@ function drawNetwork() {
   syncLayers();
 }
 // L'obstacle n'est plus là (ou signalé par erreur) : on le retire, et l'itinéraire est recalculé sans lui
+// ---- Transports en commun (N°3, N°13) --------------------------------------------------------------
+// Sur le plan de recherche : les arrêts de la partie visible (30 au plus, à partir du zoom 15).
+// Pendant le guidage : seulement ceux à moins de 200 m, 8 au plus, qui apparaissent et disparaissent en marchant.
+const transitIcon = mode => {
+  const m = MODE[mode] || MODE.bus;
+  return L.divIcon({className: "", html: `<div class="pin pin-transit" style="background:${m.color}">${icon(m.icon)}</div>${m.badge ? `<b class="pin-badge" style="background:${m.color}">${m.badge}</b>` : ""}`,
+    iconSize: [34, 42], iconAnchor: [17, 40], popupAnchor: [0, -36]});
+};
+const chipInk = hex => {                                   // texte lisible sur la couleur de la ligne
+  const c = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!c) return "#fff";
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(c[1].slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55 ? "#0F2537" : "#fff";
+};
+const whereAmI = () => {
+  const n = S.nav;
+  if (n) return n.real && Date.now() - n.real.at < 15000 ? n.real : n.here;
+  return S.origin;
+};
+function transitPopup(st) {
+  const m = MODE[st.mode] || MODE.bus, from = whereAmI(), t = stopTarget(st, from);
+  const d = from ? haversineM(from.lat, from.lon, t.lat, t.lon) : null;
+  return `<div class="pp"><div class="pp-title">${esc(st.name)}</div><div class="pp-type" style="color:${m.color}">${icon(m.icon)} ${m.label}</div>
+    ${st.lines.length ? `<div class="pp-lines">${st.lines.map(l => `<span class="line-chip" style="background:${l.colour || m.color};color:${chipInk(l.colour || m.color)}">${esc(l.ref)}</span>`).join("")}</div>`
+      : `<div class="pp-src">Lignes non renseignées</div>`}
+    <div class="pp-src">${d !== null ? `${short(d)} · ` : ""}${wheelText(t.entrance?.wheelchair || st.wheelchair)}${st.entrances.length ? ` · ${st.entrances.length} entrée${st.entrances.length > 1 ? "s" : ""} (guidage vers la plus proche)` : ""}</div>
+    <button class="pp-guide" type="button">${icon("navigation")} M'y guider</button></div>`;
+}
+function guideToStop(st) {
+  const m = MODE[st.mode] || MODE.bus, from = whereAmI(), t = stopTarget(st, from);
+  const dest = {label: `${m.label} ${st.name}${t.entrance?.label ? ` (entrée ${t.entrance.label})` : ""}`, lat: t.lat, lon: t.lon, type: "poi", kind: st.mode};
+  map.closePopup();
+  if (S.screen === "nav" && S.nav) {                       // en cours de guidage : nouvel itinéraire vers l'arrêt
+    S.dest = dest;
+    return reroute({lat: from.lat, lon: from.lon}, `Vers ${st.name}`, true);
+  }
+  if (S.screen !== "route") go("route");
+  chooseDest(dest);
+}
+let transitAt = 0;
+function refreshTransit(force = false) {
+  if (!transit.length || (!force && performance.now() - transitAt < 800)) return;
+  transitAt = performance.now();
+  layers.transit.clearLayers();
+  let list = [];
+  if (S.screen === "nav" && S.nav) {
+    const c = whereAmI();
+    list = transit.map(st => [st, haversineM(c.lat, c.lon, st.lat, st.lon)]).filter(([, d]) => d <= 200);
+    list.sort((a, b) => a[1] - b[1]); list = list.slice(0, 8);
+  } else if (S.screen === "route" && map.getZoom() >= 15) {
+    const b = map.getBounds(), c = map.getCenter();
+    list = transit.filter(st => b.contains([st.lat, st.lon])).map(st => [st, haversineM(c.lat, c.lng, st.lat, st.lon)]);
+    list.sort((a, b2) => a[1] - b2[1]); list = list.slice(0, 30);
+  }
+  for (const [st] of list)
+    L.marker([st.lat, st.lon], {icon: transitIcon(st.mode), title: `${(MODE[st.mode] || MODE.bus).label} ${st.name}`, keyboard: true})
+      .bindPopup(() => transitPopup(st), {maxWidth: 290})
+      .on("popupopen", e => { e.popup.getElement().querySelector(".pp-guide").onclick = () => guideToStop(st); })
+      .addTo(layers.transit);
+}
+map.on("moveend", () => { if (S.screen === "route") refreshTransit(); });
+// Annonce vocale discrète (réglage) : « Station de métro Les Agnettes à 80 m sur votre droite »
+function announceStops() {
+  const n = S.nav;
+  if (!S.stopsVoice || !n || n.phase !== "route" || !n.real) return;
+  const c = whereAmI(), heading = currentHeading();
+  n.saidStops ||= new Set();
+  for (const st of transit) {
+    const key = `${st.mode}:${st.name}`;
+    if (n.saidStops.has(key)) continue;
+    const d = haversineM(c.lat, c.lon, st.lat, st.lon);
+    if (d > 80) continue;
+    n.saidStops.add(key);
+    let side = "";
+    if (heading !== null) {
+      const rel = ((bearingOf(c, st) - heading + 540) % 360) - 180;
+      side = Math.abs(rel) < 30 ? " devant vous" : Math.abs(rel) > 150 ? " derrière vous" : rel > 0 ? " sur votre droite" : " sur votre gauche";
+    }
+    say(`${(MODE[st.mode] || MODE.bus).label} ${st.name}, à ${Math.max(5, Math.round(d / 5) * 5)} mètres${side}.`);
+    break;                                                // une annonce à la fois
+  }
+}
 function removeReport(id) {
   store.set("va-reports", reports().filter(r => r.id !== id));
   map.closePopup();
@@ -279,21 +362,30 @@ function search(q) {
   clearTimeout(searchTimer);
   if (q.trim().length < 3) { S.places = []; return renderKeepFocus(); }
   searchTimer = setTimeout(async () => {
+    // 1) lieux, stations, arrêts et commerces connus de l'appli (instantané, hors ligne)
+    const local = net ? searchPlaces(q, {places: net.places, stops: transit, streetOf, from: S.origin}).map(r => ({
+      label: r.label, lat: r.lat, lon: r.lon, type: "poi", kind: r.kind, icon: r.icon, color: r.color,
+      sub: `${r.typeLabel}${r.rue ? " · " + r.rue : ""} · ${short(r.dist)}`})) : [];
+    S.places = local;
+    renderKeepFocus();
+    // 2) adresses (Géoplateforme IGN), ajoutées à la suite
     try {
       const url = `${GEOCODER}?${new URLSearchParams({q, limit: 6, index: "address,poi", lat: S.origin.lat, lon: S.origin.lon})}`;
       const data = await fetch(url).then(r => r.json());
-      S.places = (data.features || []).map(f => {
+      if (S.query !== q) return;                            // la saisie a changé entre-temps
+      const addr = (data.features || []).map(f => {
         const p = f.properties, [lon, lat] = f.geometry.coordinates;
         const label = p.label || [p.toponym, (p.city || [])[0]].filter(Boolean).join(", ");
-        return {label, lat, lon, type: p._type};
-      }).filter((p, i, all) => all.findIndex(o => o.label === p.label && haversineM(o.lat, o.lon, p.lat, p.lon) < 150) === i);
+        return {label, lat, lon, type: p._type, sub: `${p._type === "poi" ? "Lieu" : "Adresse"} · ${short(haversineM(S.origin.lat, S.origin.lon, lat, lon))}`};
+      }).filter(a => haversineM(S.origin.lat, S.origin.lon, a.lat, a.lon) < 15000);   // pas de « Calmels-et-le-Viala » à 550 km
+      S.places = [...local, ...addr].filter((p, i, all) => all.findIndex(o => norm2(o.label) === norm2(p.label) && haversineM(o.lat, o.lon, p.lat, p.lon) < 150) === i).slice(0, 10);
     } catch {
-      S.places = [];
-      toast("Recherche d'adresse impossible (hors ligne ?) : touchez le plan pour choisir l'arrivée.");
+      if (!local.length) toast("Recherche d'adresse impossible (hors ligne ?) : touchez le plan pour choisir l'arrivée.");
     }
     renderKeepFocus();
-  }, 350);
+  }, 300);
 }
+const norm2 = t => String(t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 // ---- Guidage GPS ----------------------------------------------------------------------
 function project(p, a, b) {           // projection d'un point sur un segment, en mètres (plan local)
@@ -630,6 +722,7 @@ function screenSettings() {
     ${sw("setVoice", "volume-2", "Consignes à la voix", S.voice)}
     ${sw("setHaptics", "vibrate", "Vibrations de direction", S.haptics)}
     ${row("testHaptics", "vibrate", "Tester la vibration", "", false)}
+    ${sw("setStopsVoice", "bus", "Annoncer les arrêts de transport proches", S.stopsVoice)}
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
@@ -674,11 +767,11 @@ function screenRoute() {
       <button class="icon-btn" id="gpsHere" aria-label="Partir de ma position">${icon("locate-fixed")}</button></div>
     <div class="trip-line" aria-hidden="true"></div>
     <div class="trip-row"><span class="trip-dot end" aria-hidden="true"></span>
-      <label class="search grow">${icon("search")}<input type="text" id="q" placeholder="Adresse ou lieu à Gennevilliers"
+      <label class="search grow">${icon("search")}<input type="text" id="q" placeholder="Adresse, lieu, station, commerce…"
         value="${esc(S.query)}" autocomplete="off" enterkeyhint="search" aria-label="Destination"></label></div>
   </div>
   ${S.places.length ? `<div class="places">${S.places.map((p, i) => `<button class="place" data-place="${i}">
-      ${icon(p.type === "poi" ? "map-pin" : "map")}<span class="grow">${esc(p.label)}<small>${p.type === "poi" ? "Lieu" : "Adresse"}</small></span>
+      <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
       ${icon("chevron-right")}</button>`).join("")}</div>` : ""}
   <div class="pick"><span>${icon("map-pin")} Toucher le plan pour placer</span>
     <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button>
@@ -788,6 +881,7 @@ function render() {
   syncLayers();
   if (net) { drawRoutes(); drawReports(); }
   if (nav && !arOpen()) openAR(navApi);                 // dans le geste de l'usager : caméra et boussole autorisées
+  refreshTransit(true);
   let mc = $("mapClose");
   if (S.screen === "route" && S.dest) {
     if (!mc) {
@@ -904,7 +998,7 @@ function renderNavLive() {
   if (!n) return;
   const shown = (n.phase === "approach" || n.away || n.offRoute) && n.real ? n.real : n.here;   // N°15 : pas accroché pendant l'approche
   n.marker?.setLatLng([shown.lat, shown.lon]);
-  if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); }
+  if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); refreshTransit(); announceStops(); }
 }
 // N°16 : le tracé s'allume sur 30 m devant soi ; déjà parcouru = gris ; la suite reste visible, atténuée
 function routeSlice(a, b) {
@@ -1063,6 +1157,7 @@ function bind() {
   on("setProfile", "onclick", () => go("profile"));
   on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
+  on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
   on("testHaptics", "onclick", () => {
     const was = S.haptics; S.haptics = true; buzz("left"); S.haptics = was;
     toast(window.VisionARNative || navigator.vibrate ? "2 impulsions : « tournez à gauche »." :
@@ -1104,6 +1199,8 @@ if ("serviceWorker" in navigator) {
 $("panel").innerHTML = `<h2>Vision AR</h2><p>Chargement du plan de Gennevilliers…</p>`;
 fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
   net = loadNetwork(data);
+  streetOf = makeStreetFinder(net);
+  fetch("data/transit.json").then(r => r.json()).then(d => { transit = loadTransit(d); refreshTransit(true); }).catch(() => {});
   drawNetwork();
   render();
   if (S.screen === "route") computeRoute();
@@ -1113,4 +1210,4 @@ fetch("data/gennevilliers.json").then(r => r.json()).then(data => {
 
 // Accès pour les tests automatiques uniquement (adresse terminée par ?debug)
 if (new URLSearchParams(location.search).has("debug"))
-  window.__va = {S, posAt, navState, moveTo, get net() { return net; }, addReport, reports, navApi};
+  window.__va = {S, posAt, navState, moveTo, get net() { return net; }, get transit() { return transit; }, addReport, reports, navApi};

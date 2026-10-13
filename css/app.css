@@ -294,6 +294,18 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 .pin-poi { background: #007489; }
 .pin-report { background: #C2410C; }
 .pin-dest { background: #B42318; }
+/* Arrêts de transport : couleur par mode, petit badge M / T / RER */
+.pin-transit { border: 2px solid #fff; }
+.pin-badge { position: absolute; left: 22px; top: -8px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; border: 2px solid #fff;
+  color: #fff; font: 700 11px/16px "Atkinson Hyperlegible", sans-serif; text-align: center; }
+.pp-type { display: flex; align-items: center; gap: 6px; font-weight: 700; margin-bottom: 6px; }
+.pp-type .i { width: 18px; height: 18px; }
+.pp-lines { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.line-chip { min-width: 30px; height: 26px; padding: 0 8px; border-radius: 7px; display: inline-grid; place-items: center; font-weight: 700; font-size: 14px; }
+.pp-guide { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 44px; margin-top: 8px; border: 0;
+  border-radius: 12px; background: #007489; color: #fff; font: 700 15px "Atkinson Hyperlegible", sans-serif; }
+.pp-guide .i { width: 18px; height: 18px; }
+.place-ic { display: grid; place-items: center; color: var(--primary); }
 .start-dot { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 6px solid #007489; box-shadow: 0 2px 6px rgba(15, 37, 55, .35); }
 .me { width: 28px; height: 28px; border-radius: 50%; background: rgba(0, 174, 204, .25); display: grid; place-items: center; animation: pulse 2s infinite; }
 .me span { width: 18px; height: 18px; border-radius: 50%; background: #007489; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(15, 37, 55, .4); }
