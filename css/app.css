@@ -415,6 +415,13 @@ body.nav-ar #panel { display: none; }
 #ar.map-full .dome-ui { height: calc(100% - var(--top-h, 220px) - 12px); }
 #ar .rose { position: absolute; right: calc(14px + var(--safe-right)); bottom: calc(88px + var(--safe-bottom)); width: 52px; height: 52px; border-radius: 50%;
   display: grid; place-items: center; }
+/* Bouton « Arrêter » toujours visible, à gauche au-dessus de la barre (la boussole est à droite) */
+#ar .stop-btn { position: absolute; left: calc(14px + var(--safe-left)); bottom: calc(88px + var(--safe-bottom)); height: 52px; padding: 0 16px 0 12px;
+  border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 16px; pointer-events: auto;
+  background: #C4321F; color: #fff; border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 6px 16px rgba(120, 20, 10, .35); }
+#ar .stop-btn .i { width: 22px; height: 22px; stroke-width: 2.6; }
+#ar .stop-text { font-size: 16px; color: var(--ink); }
+#ar .btn.danger { background: #C4321F; color: #fff; }
 #ar .rose.on { outline: 3px solid var(--route); }
 #ar .rose .needle { position: absolute; width: 6px; height: 34px; transform: rotate(calc(-1 * var(--heading)));
   background: linear-gradient(#E5484D 50%, #A7B7C7 50%); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }

@@ -579,6 +579,7 @@ function renderUi(s, heading, compass) {
     </div>
     <div class="dome-ui">
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
+      <button class="stop-btn" data-act="ask-stop" aria-label="Arrêter le guidage">${icon("x")}<span>Arrêter</span></button>
       <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
         <span class="needle"></span><i>N</i></div>
     </div>
@@ -589,7 +590,7 @@ function renderUi(s, heading, compass) {
       <button class="pill" data-act="hud">${icon("glasses")}<span>Lunettes</span></button>
       <button class="round" data-act="voice" aria-label="${s.voice ? "Couper la voix" : "Activer la voix"}">${icon(s.voice ? "volume-2" : "volume-x")}</button>
     </nav>
-    ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : reportSheet()}</section>` : ""}`;
+    ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : sheet === "stop" ? stopSheet() : reportSheet()}</section>` : ""}`;
   const ui = root.querySelector(".ar-ui");
   if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
   root.classList.toggle("sheet-open", !!sheet);
@@ -675,6 +676,13 @@ function settingsSheet(s) {
       `<button class="theme-card ${s.theme === v ? "on" : ""}" data-act="theme" data-v="${v}"><span class="preview pv-${v}"><i></i><i></i><i></i></span><b>${l}</b><small>${d}</small></button>`).join("")}</div>
     <button class="btn danger-soft" data-act="stop">${icon("x")} Arrêter le guidage</button>`;
 }
+// Arrêt depuis l'écran de guidage : une confirmation évite d'arrêter par un toucher involontaire
+function stopSheet() {
+  return `<div class="sheet-head"><h3>${icon("x")} Arrêter le guidage ?</h3><button class="x" data-act="close-sheet" aria-label="Fermer">${icon("x")}</button></div>
+    <p class="stop-text">Vous reviendrez à la recherche d'itinéraire. La destination reste enregistrée.</p>
+    <button class="btn danger" data-act="stop">${icon("x")} Oui, arrêter le guidage</button>
+    <button class="btn soft" data-act="close-sheet">${icon("navigation")} Non, continuer</button>`;
+}
 function reportSheet() {
   return `<div class="sheet-head"><h3>${icon("triangle-alert")} Signaler un obstacle</h3><button class="x" data-act="close-sheet" aria-label="Fermer">${icon("x")}</button></div>
     <label class="setting strong">${icon("ban")}<span class="grow">Je ne peux pas passer</span>
@@ -688,6 +696,7 @@ function onAction(e) {
   if (!b) return;
   const act = b.dataset.act, v = b.dataset.v;
   if (act === "settings") sheet = "settings";
+  else if (act === "ask-stop") sheet = "stop";
   else if (act === "report") { sheet = "report"; sheetMessage = null; }
   else if (act === "close-sheet") sheet = null;
   else if (act === "map") setMapFull(!mapFull);
