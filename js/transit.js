@@ -171,5 +171,7 @@ export function searchPlaces(q, {places, stops, streetOf, from, limit = 8}) {
     consider({label: name || label, kind: cat, icon: ic, color: "#007489", lat, lon, type: "poi", typeLabel: label}, name || "", label);
   }
   out.sort((a, b) => b.score - a.score || a.dist - b.dist);
-  return out.slice(0, limit).map(r => ({...r, rue: r.rue ?? streetOf(r.lat, r.lon)}));
+  // un arrêt a souvent deux quais (un par sens) : un seul résultat, le quai le plus proche
+  const seen = new Set();
+  return out.filter(r => { const k = `${r.kind}|${r.label}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, limit).map(r => ({...r, rue: r.rue ?? streetOf(r.lat, r.lon)}));
 }
