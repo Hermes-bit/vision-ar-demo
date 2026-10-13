@@ -15,6 +15,7 @@
 // (vecteur de gravité), même champ de vision (calculé d'après l'image vidéo affichée).
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
+import {captureSample, detect, groundPosition, loadModel, modelReady, sideText} from "./obstacles.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
@@ -63,6 +64,8 @@ let api = null, root = null, video = null, canvas = null, ctx = null, stream = n
 let sensors = {heading: null, pitch: null, roll: 0}, mapFull = false, sheet = null, domeGeom = null, domeObserver = null;
 let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
 let blocking = true, sheetMessage = null, lastUi = "";
+// Détection d'obstacles (N°5, N°17, N°18)
+let dets = [], detsAt = 0, detBusy = false, detState = "", lastPitch = 10, alerted = {}, lastAlert = 0, lastAutoSample = 0;
 
 // ---- Appli Android de terrain : ARCore Geospatial dessine le tracé sous la page (pont « VisionARNative ») ----
 const NATIVE = globalThis.VisionARNative;
@@ -507,6 +510,77 @@ function drawAnchors(cam, s, here) {
   }
   toDraw.reverse().forEach(draw => draw());          // les lointains d'abord, les proches par-dessus
 }
+// ---- Obstacles vus par la caméra -----------------------------------------------------------------------------
+function detView() {
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  return {vw: video.videoWidth, vh: video.videoHeight, W, H, focal: focalPx(W, H), pitchDeg: lastPitch, height: camHeight};
+}
+function runDetection(s) {
+  if (detBusy || performance.now() - detsAt < 350 || !video?.videoWidth) return;
+  if (!modelReady()) {
+    if (detState !== "loading" && detState !== "error") {
+      detState = "loading"; lastUi = "";
+      loadModel().then(() => { detState = "ready"; lastUi = ""; }).catch(() => { detState = "error"; lastUi = ""; });
+    }
+    return;
+  }
+  detBusy = true;
+  detect(video, s.detectDebug ? 0.2 : 0.3).then(found => {
+    dets = found; detsAt = performance.now();
+    const view = detView();
+    for (const d of dets) d.ground = groundPosition(d, view);
+    obstacleAlerts(s);
+    autoSample(s);
+  }).catch(() => {}).finally(() => { detBusy = false; });
+}
+// Alerte (voix + vibration) : objet sûr à plus de 50 %, au sol, à moins de 8 m et dans le couloir de marche
+function obstacleAlerts(s) {
+  const now = performance.now();
+  const near = dets.filter(d => d.alert && d.score >= 0.5 && d.ground && d.ground.dist < 8 && Math.abs(d.ground.lateral) < 1.3)
+    .sort((a, b) => a.ground.dist - b.ground.dist)[0];
+  if (!near || now - lastAlert < 4000 || now - (alerted[near.cls] || 0) < 10000) return;
+  lastAlert = now; alerted[near.cls] = now;
+  const m = Math.max(1, Math.round(near.ground.dist));
+  api.obstacleAlert(`${near.label} à ${m} mètre${m > 1 ? "s" : ""} ${sideText(near.ground.lateral)}.`);
+}
+// Collecte automatique (si l'usager l'a accepté) : images où le modèle hésite, une toutes les 20 s au plus
+function autoSample(s) {
+  if (!s.dataConsent || !s.autoLowConf || performance.now() - lastAutoSample < 20000) return;
+  if (!dets.some(d => d.alert && d.score >= 0.3 && d.score < 0.5)) return;
+  lastAutoSample = performance.now();
+  captureSample(video, {kind: "faible_confiance", detections: dets, meta: sampleMeta(s)}).catch(() => {});
+}
+function sampleMeta(s) {
+  const r = s.nav.real;
+  return {lat: r?.lat, lon: r?.lon, accuracy: r?.acc, heading: Math.round(F.heading.x ?? -1), pitch: Math.round(lastPitch)};
+}
+// Mode test : toutes les détections encadrées, avec le nom et le score
+function drawDetections() {
+  if (performance.now() - detsAt > 4000) return;              // jusqu'au résultat suivant (téléphone lent : jusqu'à 4 s)
+  const dpr = devicePixelRatio;
+  ctx.save();
+  ctx.lineWidth = 3 * dpr; ctx.font = font(700, 14 * dpr); ctx.textBaseline = "top";
+  for (const d of dets) {
+    const g = d.ground ?? groundPosition(d, detView());
+    const view = detView(), sc = Math.max(view.W / view.vw, view.H / view.vh);
+    const raw = g?.screen ?? [(view.W - view.vw * sc) / 2 + d.box[0] * sc, (view.H - view.vh * sc) / 2 + d.box[1] * sc, d.box[2] * sc, d.box[3] * sc];
+    // boîte ramenée dans la partie visible de l'écran (un objet tout proche dépasse souvent du cadre)
+    const top = (root.querySelector(".top")?.getBoundingClientRect().bottom ?? 0) + 4;
+    const x0 = Math.max(2, raw[0]), y0 = Math.max(top, raw[1]), x1 = Math.min(view.W - 2, raw[0] + raw[2]), y1 = Math.min(view.H - 2, raw[1] + raw[3]);
+    if (x1 - x0 < 8 || y1 - y0 < 8) continue;
+    const [x, y, w, h] = [x0, y0 + 22, x1 - x0, y1 - y0 - 22].map(v => v * dpr);
+    const strong = d.alert && d.score >= 0.5;
+    ctx.strokeStyle = strong ? "#FF8A00" : "rgba(255,255,255,.85)";
+    ctx.strokeRect(x, y, w, h);
+    const text = `${d.label} ${Math.round(d.score * 100)} %${g ? ` · ${g.dist.toFixed(1).replace(".", ",")} m` : ""}`;
+    const tw = ctx.measureText(text).width + 10 * dpr;
+    ctx.fillStyle = strong ? "#FF8A00" : "rgba(15,37,55,.85)";
+    ctx.fillRect(x, Math.max(0, y - 22 * dpr), tw, 22 * dpr);
+    ctx.fillStyle = strong ? "#04222B" : "#fff";
+    ctx.fillText(text, x + 5 * dpr, Math.max(0, y - 22 * dpr) + 4 * dpr);
+  }
+  ctx.restore();
+}
 // N°12 : gros repère posé sur la destination, visible dès qu'elle est dans le champ, qui grossit à l'approche ;
 // il disparaît une fois l'arrivée confirmée (la flèche aussi : on ne superpose jamais les deux)
 function drawDestination(cam, s, here) {
@@ -559,6 +633,7 @@ function frame() {
   const pitch = F.pitch.filter(Math.max(-30, Math.min(80, sensors.pitch ?? 10)), now);   // sans capteur : téléphone presque droit
   const roll = compass ? ((F.roll.filter(sensors.roll + 180, now) + 360) % 360) - 180 : 0;
   const cam = makeCamera(heading, pitch, roll, w, h);
+  lastPitch = pitch;
   const v = viewpoint(s);
   updateArrowMode(s, compass);
   if (!mapFull && nativeOn) {
@@ -573,6 +648,7 @@ function frame() {
     }
     drawAnchors(cam, s, v.here);
     drawDestination(cam, s, v.here);
+    if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); }
   }
   renderUi(s, heading, compass);
 }
@@ -683,6 +759,8 @@ function renderUi(s, heading, compass) {
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
         ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
         ${!nativeOn && arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : suivez la flèche au sol</em>` : ""}
+        ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
+        ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
         ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}</div>
       ${banner}
@@ -767,7 +845,13 @@ function settingsSheet(s) {
       <input type="checkbox" class="switch" data-act="haptics" ${s.haptics ? "checked" : ""}></label>
     <ul class="haptic-legend">
       <li><b>2 impulsions</b> tournez à gauche</li><li><b>3 impulsions</b> tournez à droite</li>
-      <li><b>5 impulsions rapides</b> mauvais sens : faites demi-tour</li><li><b>1 longue</b> vous êtes arrivé</li></ul>
+      <li><b>5 impulsions rapides</b> mauvais sens : faites demi-tour</li><li><b>1 longue</b> vous êtes arrivé</li>
+      <li><b>1 longue + 1 courte</b> obstacle devant vous</li></ul>
+    <p class="sheet-label">Obstacles vus par la caméra (expérimental)</p>
+    <label class="setting">${icon("scan-eye")}<span class="grow">Détecter les obstacles</span>
+      <input type="checkbox" class="switch" data-act="detect" ${s.detect ? "checked" : ""}></label>
+    <label class="setting">${icon("square-dashed")}<span class="grow">Mode test : tout encadrer</span>
+      <input type="checkbox" class="switch" data-act="detect-debug" ${s.detectDebug ? "checked" : ""}></label>
     ${s.hapticsNote ? `<p class="fine">${icon("info")} ${esc(s.hapticsNote)}</p>` : ""}
     <p class="sheet-label">Thème</p>
     <div class="themes">${[["verre", "Verre", "Clair, ruban lumineux"], ["neon", "Néon", "Sombre, repères flottants"]].map(([v, l, d]) =>
@@ -788,7 +872,20 @@ function reportSheet() {
       <input type="checkbox" class="switch" data-act="blocking" ${blocking ? "checked" : ""}></label>
     <div class="tiles">${REPORT_KINDS.map(([k, l, ic]) => `<button class="tile report" data-act="report-kind" data-v="${k}">
       <span class="tile-ic">${icon(ic)}</span><span class="tile-label">${l}</span></button>`).join("")}</div>
+    <p class="sheet-label">Aider à améliorer la détection</p>
+    <div class="sheet-row"><button class="btn soft" data-act="sample" data-v="obstacle_manque">${icon("scan-eye")} Obstacle non détecté</button>
+      <button class="btn soft" data-act="sample" data-v="fausse_alerte">${icon("circle-alert")} Fausse alerte</button></div>
     ${sheetMessage ? `<div class="msg ok">${icon("check")}<span>${esc(sheetMessage)}</span></div>` : ""}`;
+}
+async function saveSample(kind) {
+  const s = api.state();
+  if (nativeOn || noCamera || !video?.videoWidth) { sheetMessage = "Image caméra indisponible ici (appli Android : bientôt)."; lastUi = ""; return; }
+  if (!s.dataConsent) { sheetMessage = "Activez d'abord « Contribuer à l'entraînement » dans les Paramètres (images floutées, gardées sur ce téléphone)."; lastUi = ""; return; }
+  try {
+    await captureSample(video, {kind, detections: performance.now() - detsAt < 2000 ? dets : [], meta: sampleMeta(s)});
+    sheetMessage = "Merci : image enregistrée (visages et plaques floutés) sur ce téléphone.";
+  } catch (err) { sheetMessage = `Enregistrement impossible : ${err.message}`; }
+  lastUi = "";
 }
 function onAction(e) {
   const b = e.target.closest("[data-act]");
@@ -805,6 +902,8 @@ function onAction(e) {
   else if (act === "haptics") { api.setHaptics(b.checked); }
   else if (act === "theme") api.setTheme(v);
   else if (act === "blocking") { blocking = b.checked; return; }
+  else if (act === "sample") { saveSample(v); return; }
+  else if (act === "detect" || act === "detect-debug") { api.setOption(act === "detect" ? "detect" : "detectDebug", b.checked); }
   else if (act === "report-kind") { sheetMessage = api.report(v, blocking); setTimeout(() => { if (sheet === "report") { sheet = null; lastUi = ""; } }, 1800); }
   else if (act === "stop") { sheet = null; api.stop(); return; }
   lastUi = "";

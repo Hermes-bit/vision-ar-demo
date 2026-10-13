@@ -3,6 +3,7 @@
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
 import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
 import {MODE, linesText, loadTransit, makeStreetFinder, searchPlaces, stopTarget, wheelText} from "./transit.js";
+import {clearSamples, exportZip, listSamples} from "./obstacles.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
@@ -40,7 +41,8 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
+  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", false), detectDebug: store.get("va-detect-debug", false),
+  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
 };
 let net = null, transit = [], streetOf = () => null;
@@ -98,7 +100,8 @@ function say(text, urgent = false) {
 }
 // Vibrations de direction : le nombre d'impulsions dit où aller (même code sur Android et sur iPhone)
 //   2 = à gauche, 3 = à droite, 5 rapides = mauvais sens / demi-tour, 1 longue = arrivé
-const HAPTIC = {left: [160, 140, 160], right: [160, 140, 160, 140, 160], uturn: [70, 60, 70, 60, 70, 60, 70, 60, 70], arrive: [700], tick: [40]};
+const HAPTIC = {left: [160, 140, 160], right: [160, 140, 160, 140, 160], uturn: [70, 60, 70, 60, 70, 60, 70, 60, 70], arrive: [700], tick: [40],
+  obstacle: [450, 120, 120]};
 const IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 let iosSwitch = null;
 function iosTap() {
@@ -698,6 +701,7 @@ function screenProfile() {
   <p class="fine">${icon("shield-check")} Démonstration sur Gennevilliers. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
     Réseau © OpenStreetMap (ODbL), pentes © IGN.</p>`;
 }
+const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
 const APP_VERSION = "22";
 function screenSettings() {
@@ -726,6 +730,21 @@ function screenSettings() {
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
+  <section class="card"><h3>${icon("scan-eye")} Obstacles vus par la caméra</h3>
+    ${sw("setDetect", "scan-eye", "Détecter les obstacles (expérimental)", S.detect)}
+    <p class="fine">${icon("info")} Télécharge un modèle de 6 Mo à la première utilisation. Reconnaît déjà : vélos, deux-roues, voitures,
+      bancs, bornes, horodateurs, bacs à plantes, tables et chaises de terrasse. Pas encore : potelets, poubelles, travaux, trous, marches
+      (modèle dédié en préparation, grâce aux images collectées ci-dessous).</p>
+    ${sw("setDetectDebug", "square-dashed", "Mode test : encadrer tout ce qui est détecté", S.detectDebug)}
+    ${sw("setConsent", "shield-check", "Contribuer à l'entraînement", S.dataConsent)}
+    <p class="fine">${icon("info")} Avec votre accord, le bouton ⚠ du guidage permet d'enregistrer l'image caméra d'un obstacle manqué ou
+      d'une fausse alerte, avec la position et l'heure. Visages et plaques sont floutés avant tout enregistrement ; les images restent sur ce
+      téléphone tant que vous ne les exportez pas. Vous pouvez retirer votre accord et tout effacer à tout moment.</p>
+    ${S.dataConsent ? sw("setAutoLow", "scan-eye", "Enregistrer aussi les détections incertaines", S.autoLowConf) : ""}
+    <div class="set-row static">${icon("database")}<span class="grow">Images collectées</span><span class="set-val" id="sampleCount">…</span></div>
+    ${row("exportSamples", "share-2", "Exporter les images (ZIP)", "", false)}
+    ${row("clearSamples", "trash-2", "Tout effacer", "", false)}
+  </section>
   <section class="card"><h3>${icon("triangle-alert")} Mes signalements</h3>
     ${mine.length ? mine.map(r => {
       const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
@@ -805,8 +824,11 @@ const navApi = {
   map,
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
     mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
+    detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus},
   reroute: () => manualReroute(),
+  setOption: (key, value) => { S[key] = value; store.set(OPTION_KEYS[key], value); },
+  obstacleAlert: text => { say(text, true); buzz("obstacle"); },
   nativeFix: (lat, lon, acc) => onGps({coords: {latitude: lat, longitude: lon, accuracy: acc}}, true),
   setHaptics: on => { S.haptics = on; store.set("va-haptics", on); if (on) buzz("left"); },
   toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) window.speechSynthesis?.cancel(); },
@@ -1158,6 +1180,25 @@ function bind() {
   on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
   on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
+  on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
+  on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
+  on("setConsent", "onchange", e => { navApi.setOption("dataConsent", e.target.checked); if (!e.target.checked) navApi.setOption("autoLowConf", false); render(); });
+  on("setAutoLow", "onchange", e => navApi.setOption("autoLowConf", e.target.checked));
+  if ($("sampleCount")) listSamples().then(list => {
+    const mb = list.reduce((t, x) => t + (x.blob?.size || 0), 0) / 1e6;
+    if ($("sampleCount")) $("sampleCount").textContent = `${list.length} (${mb.toFixed(1).replace(".", ",")} Mo)`;
+  }).catch(() => { if ($("sampleCount")) $("sampleCount").textContent = "—"; });
+  on("exportSamples", "onclick", async () => {
+    const list = await listSamples();
+    if (!list.length) return toast("Aucune image collectée pour l'instant.");
+    const blob = await exportZip(), a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = `vision-ar-obstacles-${new Date().toISOString().slice(0, 10)}.zip`;
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+  on("clearSamples", "onclick", async () => {
+    if (!confirm("Effacer toutes les images collectées sur ce téléphone ?")) return;
+    await clearSamples(); toast("Images effacées."); render();
+  });
   on("testHaptics", "onclick", () => {
     const was = S.haptics; S.haptics = true; buzz("left"); S.haptics = was;
     toast(window.VisionARNative || navigator.vibrate ? "2 impulsions : « tournez à gauche »." :
