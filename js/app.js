@@ -140,7 +140,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19,
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · relief © IGN'}).addTo(map);
 // Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
 map.attributionControl.setPosition("topright");
-const layers = {pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
+const layers = {progress: L.layerGroup().addTo(map), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 
 const pin = (ic, cls) => L.divIcon({className: "", html: `<div class="pin ${cls}">${icon(ic)}</div>`,
@@ -190,7 +190,9 @@ function drawRoutes() {
   layers.marks.clearLayers();
   const sel = S.nav?.route || S.routes[S.selected];
   const nav = S.screen === "nav";
-  for (const r of S.routes) if (r !== sel) {
+  layers.progress.clearLayers();
+  if (nav && S.nav) { progressAt = 0; drawProgress(true); }
+  for (const r of S.routes) if (r !== sel && !nav) {
     const ll = r.geometry.map(p => [p.lat, p.lon]);
     L.polyline(ll, nav ? {color: "#E8457C", weight: 5, opacity: .9, lineCap: "round"}
                        : {color: C.alt, weight: 5, opacity: .85, dashArray: "1 9", lineCap: "round"}).addTo(layers.routes);
@@ -201,7 +203,7 @@ function drawRoutes() {
         interactive: false}).addTo(layers.routes);
     }
   }
-  if (sel) {
+  if (sel && !nav) {
     const ll = sel.geometry.map(p => [p.lat, p.lon]);
     L.polyline(ll, {color: C.routeCase, weight: nav ? 10 : 11, opacity: nav ? .35 : .9, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
     if (nav) gradientLine(ll).forEach(l => l.addTo(layers.routes));
@@ -320,10 +322,20 @@ function startNav(route, keepGps = false) {
   stopNav();
   S.nav = {route, cum, total: cum.at(-1), stepAt, pos: 0, here: {...g[0]}, watch, real: prev?.real || null,
            gpsInfo: prev?.gpsInfo || "", gpsStatus: prev?.gpsStatus || "", lastReroute: prev?.lastReroute || 0,
-           said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, away: false, gap: 0, gapAlong: 0, arrived: false};
+           said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, away: false, gap: 0, gapAlong: 0, arrived: false,
+           // N°15 : « approach » tant que le point de départ n'est pas atteint ; « route » ensuite
+           phase: "approach", approachDist: 0, quietStart: keepGps};
   requestWakeLock();
-  const first = route.steps[0];
-  say(`${first.text}. ${short(route.length_m)}, environ ${Math.ceil(route.length_m / speed() / 60)} minutes.`, true);
+}
+// Le trajet commence : on est au point de départ (ou sur le tout début de l'itinéraire)
+function beginRoute(along) {
+  const n = S.nav, first = n.route.steps[0];
+  n.phase = "route"; n.away = false; n.approachDist = 0;
+  if (!n.quietStart) {
+    say(`Vous êtes au point de départ, le trajet commence. ${first.text}. ${short(n.route.length_m)}, environ ${Math.ceil(n.route.length_m / speed() / 60)} minutes.`, true);
+    buzz("tick");
+  }
+  moveTo(along);
 }
 function stopNav() {
   if (!S.nav) return;
@@ -342,19 +354,28 @@ function navState() {
   const n = S.nav, steps = n.route.steps;
   let idx = 0;
   for (let i = 0; i < steps.length - 1; i++) if (n.pos >= n.stepAt[i] - 0.5) idx = i;
-  const arrived = n.arrived || n.pos >= n.total - 3;
+  // Arrivée : fin de l'itinéraire ET vraie position proche de la fin (sinon un GPS en avance déclenchait trop tôt)
+  const r = n.real, fresh = r && Date.now() - r.at < 15000, end = n.route.geometry.at(-1);
+  const near = !fresh || haversineM(r.lat, r.lon, end.lat, end.lon) <= Math.max(10, Math.min(r.acc, 25));
+  const arrived = n.arrived || (n.phase !== "approach" && n.pos >= n.total - 3 && near);
   const next = arrived ? steps.at(-1) : steps[idx + 1];
   const toManeuver = arrived ? 0 : Math.max(0, n.stepAt[idx + 1] - n.pos);
   const lower = next.text.charAt(0).toLowerCase() + next.text.slice(1);
   const spoken = arrived ? "Vous êtes arrivé" : toManeuver < 15 ? next.text : `Dans ${short(toManeuver)}, ${lower}`;
-  return {idx, next, toManeuver, remaining: Math.max(0, n.total - n.pos), arrived, spoken};
+  return {idx, next, toManeuver, remaining: Math.max(0, n.total - n.pos) + (n.phase === "approach" ? n.approachDist : 0), arrived, spoken};
 }
 function announce() {
   const n = S.nav, st = navState();
   if (st.arrived) {
-    if (!n.said.has("arrive")) { n.said.add("arrive"); n.arrived = true; say("Vous êtes arrivé.", true); buzz("arrive"); }
+    if (!n.said.has("arrive")) {
+      n.said.add("arrive"); n.arrived = true;
+      const end = n.route.geometry.at(-1), d = S.dest ? haversineM(end.lat, end.lon, S.dest.lat, S.dest.lon) : 0;
+      say(d > 15 ? `Vous êtes arrivé au bout de l'itinéraire. Votre destination est à ${Math.round(d)} mètres.` : "Vous êtes arrivé.", true);
+      buzz("arrive");
+    }
     return;
   }
+  if (n.phase === "approach") return;
   const i = st.idx + 1, alerts = st.next.alerts.length ? `. Attention : ${st.next.alerts.join(", ")}` : "";
   const side = turnSide(st.next.maneuver);
   if (st.toManeuver <= 60 && st.toManeuver > 20 && !n.said.has(`${i}-far`)) {
@@ -363,11 +384,13 @@ function announce() {
     if (side) buzz(side);
   } else if (st.toManeuver <= 15 && !n.said.has(`${i}-now`)) {
     n.said.add(`${i}-now`); n.said.add(`${i}-far`);
-    say(st.next.text, true);
+    const vague = n.real && n.real.acc > 20;                  // GPS imprécis : pas de virage « au mètre près »
+    say(vague ? `Bientôt, ${st.next.text.charAt(0).toLowerCase()}${st.next.text.slice(1)}` : st.next.text, true);
     if (side) buzz(side);
   }
 }
 function moveTo(pos) {
+  if (S.nav.phase === "approach") { S.nav.phase = "route"; S.nav.away = false; }
   S.nav.pos = Math.min(S.nav.total, Math.max(0, pos));
   S.nav.here = posAt(S.nav.pos);
   announce();
@@ -391,15 +414,15 @@ function accuracyText(acc) {
     : `Position approximative (à ${m} m près) : à l'intérieur ou entre les immeubles, le GPS se trompe facilement. Le guidage commence dehors, dans la rue`;
 }
 // Nouvel itinéraire depuis la position réelle (écart, mauvaise rue, ou demande de l'usager)
-function reroute(from, title, manual = false) {
+function reroute(from, title, manual = false, fromStart = false) {
   const n = S.nav;
   if (!manual && Date.now() - n.lastReroute < 10000) return;      // pas plus d'un recalcul automatique toutes les 10 s
   n.lastReroute = Date.now();
   n.off = 0;
   try {
     const res = computeRoutes(net, {origin: from, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
-    say(manual ? "Itinéraire recalculé depuis votre position." : "Vous vous êtes écarté de l'itinéraire. Nouvel itinéraire.", true);
-    if (!manual) buzz("uturn");
+    say(manual || fromStart ? "Itinéraire recalculé depuis votre position." : "Vous vous êtes écarté de l'itinéraire. Nouvel itinéraire.", true);
+    if (!manual && !fromStart) buzz("uturn");
     startNav(res.routes[0], true);
     S.routes = res.routes; S.selected = 0;
     S.nav.rerouted = {at: Date.now(), title};
@@ -456,11 +479,12 @@ function onGps(pos, precise = false) {
       "Le guidage ne fonctionne que sur place, dans la zone couverte.";
     return renderNavLive();
   }
-  // point le plus proche du tracé, sans revenir loin en arrière
-  const g = n.route.geometry;
+  // Point le plus proche du tracé, sans revenir loin en arrière NI sauter loin en avant : un itinéraire qui
+  // repasse près de lui-même (aller-retour sur deux trottoirs) faisait « avancer » de 100 m d'un coup (N°10)
+  const g = n.route.geometry, ahead = n.pos + Math.max(60, 2 * acc);
   let best = null;
   for (let i = 1; i < g.length; i++) {
-    if (n.cum[i] < n.pos - 60) continue;
+    if (n.cum[i] < n.pos - 60 || n.cum[i - 1] > ahead) continue;
     const pr = project(p, g[i - 1], g[i]);
     if (!best || pr.d < best.d) best = {d: pr.d, along: n.cum[i - 1] + pr.t * (n.cum[i] - n.cum[i - 1])};
   }
@@ -469,24 +493,33 @@ function onGps(pos, precise = false) {
   // Mauvaise rue prise à un carrefour : l'écart grandit à chaque mesure -> on n'attend pas les 20 m
   const h = n.dHist = [...n.dHist.slice(-3), best?.d ?? 0];
   const leaving = acc <= 15 && h.length === 4 && h[3] > 12 && h[1] > h[0] + 1.5 && h[2] > h[1] + 1.5 && h[3] > h[2] + 1.5;
+  // ---- N°15 : phase d'approche, jusqu'au point de départ (ou au tout début de l'itinéraire) ----
+  if (n.phase === "approach") {
+    const start = g[0], dStart = haversineM(p.lat, p.lon, start.lat, start.lon);
+    const onRoute = best && best.along <= 40 && best.d <= Math.max(8, Math.min(acc, 15));
+    if ((dStart <= 10 || onRoute) && acc <= 25) return beginRoute(onRoute ? best.along : 0);
+    Object.assign(n, {approachDist: dStart, gap: dStart, gapAlong: 0, away: true, offRoute: false});
+    if (!n.said.has("approach")) {
+      n.said.add("approach");
+      say(`Rejoignez le point de départ, à ${Math.round(dStart)} mètres. Suivez les pointillés.`, true);
+    }
+    // point de départ choisi sur le plan mais on est ailleurs : nouvel itinéraire depuis sa position
+    if (dStart > 150 && acc <= 40) reroute(p, "Départ depuis votre position", false, true);
+    return renderNavLive();
+  }
   n.gap = best?.d ?? 0;
   n.gapAlong = best?.along ?? n.pos;
   // « À l'écart de l'itinéraire » (intérieur, cour) seulement si l'écart dépasse nettement l'erreur du GPS,
   // avec une marge pour ne pas basculer sans cesse : en ville le GPS se trompe souvent de 5 à 15 m.
   const enter = Math.max(15, 1.5 * acc), exit = Math.max(9, acc);
   n.away = n.away ? n.gap > exit : n.gap > enter;
-  // Au départ (bâtiment, cour, parking), on guide jusqu'à l'itinéraire au lieu de le recalculer, jusqu'à 60 m
-  const joining = n.pos < 5 && best && best.d <= 60;
-  if (best && (best.d <= limit || joining) && !leaving) {
+  if (best && best.d <= limit && !leaving) {
     n.off = 0; n.offRoute = false;
-    if (n.away && n.pos < 5 && !n.said.has("join")) {          // départ depuis un bâtiment, une cour…
-      n.said.add("join");
-      say(`Rejoignez l'itinéraire, à ${Math.round(n.gap)} mètres. Suivez les pointillés.`, true);
-    }
     if (best.along < n.pos - 12 && acc <= 25) {          // on remonte l'itinéraire à l'envers
       if (++n.back >= 3) { n.back = 0; n.pos = best.along; wrongWay(); }
     } else n.back = 0;
-    return moveTo(Math.max(n.pos, best.along));
+    // GPS imprécis : on n'accroche pas de force au tracé, on avance prudemment (N°4)
+    return moveTo(Math.max(n.pos, acc > 25 ? Math.min(best.along, n.pos + 15) : best.along));
   }
   n.offRoute = true; n.back = 0;
   n.gpsInfo = `Vous vous éloignez de l'itinéraire (${Math.round(best?.d ?? 0)} m) : nouveau calcul en cours…`;
@@ -497,11 +530,22 @@ function onGps(pos, precise = false) {
 // Repères de direction par vibration, téléphone tenu devant soi : si l'on ne fait pas face
 // au chemin (plus de 40°), 2 impulsions = tournez-vous vers la gauche, 3 = vers la droite,
 // 5 = demi-tour. Au plus une fois toutes les 6 s ; les virages ont leur propre signal.
+const bearingOf = (a, b) => { const k = Math.cos(a.lat * Math.PI / 180); return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360; };
 function steer() {
   const n = S.nav;
-  if (!n || n.arrived || !S.haptics || S.screen !== "nav") return;
+  if (!n || n.arrived || S.screen !== "nav") return;
   const heading = currentHeading();
   if (heading === null || !n.real || Date.now() - n.real.at > 15000) return;
+  // N°1 : à moins de 12 m du virage, déjà tourné vers la suite depuis 2 s -> manœuvre faite, consigne suivante
+  if (n.phase === "route") {
+    const st = navState();
+    if (!st.arrived && st.toManeuver < 12 && st.next.maneuver !== "arrive") {
+      const at = n.stepAt[st.idx + 1], out = bearingOf(posAt(at), posAt(Math.min(n.total, at + 12)));
+      n.facing = Math.abs(((out - heading + 540) % 360) - 180) < 30 ? (n.facing || 0) + 1 : 0;
+      if (n.facing >= 2) { n.facing = 0; moveTo(Math.max(n.pos, at + 1)); return; }
+    } else n.facing = 0;
+  }
+  if (!S.haptics) return;
   if (!n.offRoute && navState().toManeuver < 15) return;
   if (Date.now() - (n.lastSteer || 0) < 6000) return;
   const from = n.offRoute || n.away ? n.real : n.here, to = posAt(Math.min(n.total, n.pos + 10));
@@ -676,8 +720,24 @@ const navApi = {
   openHud: () => { S.hud = true; renderHud(); },
   setTheme,
   report: (kind, blocking) => doReport(kind, blocking),
-  stop: () => { stopNav(); S.nav = null; wakeLock?.release?.(); closeAR(); go("route"); },
+  stop: () => stopGuidance(),
 };
+function stopGuidance() {
+  for (const step of [() => stopNav(), () => { S.nav = null; }, () => window.speechSynthesis?.cancel(),
+                      () => wakeLock?.release?.(), () => closeAR(), () => layers.progress.clearLayers(), () => go("route")]) {
+    try { step(); } catch (e) { console.error("Arrêt du guidage :", e); }
+  }
+  // Si l'écran de guidage est encore là 2 s plus tard (blocage), on le libère de force
+  setTimeout(() => {
+    const ar = $("ar");
+    if (S.screen === "nav" || (ar && !ar.hidden)) {
+      try { closeAR(); } catch { /* déjà fermé */ }
+      if (ar) { ar.hidden = true; ar.innerHTML = ""; }
+      S.nav = null; S.screen = "route";
+      try { render(); } catch (e) { console.error(e); }
+    }
+  }, 2000);
+}
 // Signalement : enregistré sur ce téléphone ; s'il bloque, nouvel itinéraire depuis la position
 function doReport(kind, blocking) {
   // On signale ce qu'on a devant soi : l'obstacle est placé 10 m plus loin sur l'itinéraire.
@@ -840,8 +900,34 @@ function renderKeepFocus() {
 }
 function renderNavLive() {
   renderHud();
-  if (S.nav?.marker) S.nav.marker.setLatLng([S.nav.here.lat, S.nav.here.lon]);
-  if (S.screen === "nav" && S.nav) map.panTo([S.nav.here.lat, S.nav.here.lon], {animate: false});
+  const n = S.nav;
+  if (!n) return;
+  const shown = (n.phase === "approach" || n.away || n.offRoute) && n.real ? n.real : n.here;   // N°15 : pas accroché pendant l'approche
+  n.marker?.setLatLng([shown.lat, shown.lon]);
+  if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); }
+}
+// N°16 : le tracé s'allume sur 30 m devant soi ; déjà parcouru = gris ; la suite reste visible, atténuée
+function routeSlice(a, b) {
+  const n = S.nav, g = n.route.geometry, out = [posAt(a)];
+  for (let i = 0; i < g.length; i++) if (n.cum[i] > a && n.cum[i] < b) out.push(g[i]);
+  out.push(posAt(b));
+  return out.map(p => [p.lat, p.lon]);
+}
+let progressAt = 0;
+function drawProgress(force = false) {
+  const n = S.nav;
+  if (!n || S.screen !== "nav" || (!force && performance.now() - progressAt < 700)) return;
+  progressAt = performance.now();
+  layers.progress.clearLayers();
+  const lit = Math.min(n.total, n.pos + 30);
+  if (n.pos > 0.5) L.polyline(routeSlice(0, n.pos), {color: "#8A97A6", weight: 6, opacity: .75, lineCap: "round", interactive: false}).addTo(layers.progress);
+  if (lit < n.total) L.polyline(routeSlice(lit, n.total), {color: C.route, weight: 5, opacity: .35, lineCap: "round", interactive: false}).addTo(layers.progress);
+  L.polyline(routeSlice(n.pos, lit), {color: C.routeCase, weight: 11, opacity: .9, lineCap: "round", interactive: false}).addTo(layers.progress);
+  L.polyline(routeSlice(n.pos, lit), {color: C.route, weight: 7, opacity: 1, lineCap: "round", interactive: false}).addTo(layers.progress);
+  if ((n.phase === "approach" || n.away) && n.real) {                // pointillés jusqu'au point de départ / à l'itinéraire
+    const t = posAt(n.gapAlong ?? 0);
+    L.polyline([[n.real.lat, n.real.lon], [t.lat, t.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.progress);
+  }
 }
 function go(screen) { S.screen = screen; S.message = null; render(); }
 
@@ -886,6 +972,7 @@ function chooseDest(place) {
 }
 function startGuidance() {
   startNav(S.routes[S.selected]);
+  say("Guidage lancé. Recherche de votre position.", true);
   startGps();
   go("nav");
   map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});

@@ -420,18 +420,11 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 #ar .ring-arc { fill: none; stroke: rgba(255, 255, 255, .85); stroke-width: 2.5; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 6px rgba(91, 224, 234, .9)); }
 #ar .ring circle { fill: rgba(255, 255, 255, .9); }
 [data-theme="neon"] #ar .ring-arc { stroke: #5BE0EA; }
-#ar .ring-n { position: absolute; transform: translate(-50%, -50%); font-weight: 700; font-size: 18px; color: #fff; text-shadow: 0 0 8px #2F80ED, 0 0 2px #000;
-  transition: opacity .2s; }
 #ar.map-full .dome { height: calc(100% - var(--top-h, 220px) - 12px); }
 #ar .dome-ui { position: absolute; left: 0; right: 0; bottom: 0; height: calc(min(36vh, 330px) + var(--safe-bottom)); z-index: 4; pointer-events: none; }
 #ar.map-full .dome-ui { height: calc(100% - var(--top-h, 220px) - 12px); }
 #ar .rose { position: absolute; right: calc(14px + var(--safe-right)); bottom: calc(88px + var(--safe-bottom)); width: 52px; height: 52px; border-radius: 50%;
   display: grid; place-items: center; }
-/* Bouton « Arrêter » toujours visible, à gauche au-dessus de la barre (la boussole est à droite) */
-#ar .stop-btn { position: absolute; left: calc(14px + var(--safe-left)); bottom: calc(88px + var(--safe-bottom)); height: 52px; padding: 0 16px 0 12px;
-  border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 16px; pointer-events: auto;
-  background: #C4321F; color: #fff; border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 6px 16px rgba(120, 20, 10, .35); }
-#ar .stop-btn .i { width: 22px; height: 22px; stroke-width: 2.6; }
 #ar .stop-text { font-size: 16px; color: var(--ink); }
 #ar .btn.danger { background: #C4321F; color: #fff; }
 #ar .rose.on { outline: 3px solid var(--route); }
@@ -455,6 +448,7 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 #ar .dock .pill { height: 52px; flex: 1; min-width: 0; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   font-weight: 700; font-size: 15px; padding: 0 10px; }
 #ar .dock .pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ar .dock .pill.stop { background: #C4321F; color: #fff; border-color: rgba(255, 255, 255, .85); }
 #ar .dock .center { width: 66px; height: 66px; flex: none; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .9); background: var(--accent-grad);
   color: #04222B; display: grid; place-items: center; box-shadow: 0 0 0 6px rgba(61, 220, 151, .2), 0 10px 26px rgba(0, 174, 204, .55); }
 #ar .dock .center .i { width: 30px; height: 30px; stroke-width: 2.4; }
@@ -463,7 +457,7 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 /* Feuilles : réglages et signalement */
 #ar .scrim { position: absolute; inset: 0; z-index: 10; background: rgba(6, 16, 25, .45); }
 /* Une fenêtre ouverte (réglages, signalement) passe devant tout ; les indicateurs du guidage s'effacent */
-#ar.sheet-open .dome-ui, #ar.sheet-open .bubble, #ar.sheet-open .banner, #ar.sheet-open .dome-grip, #ar.sheet-open .ring-n { visibility: hidden; }
+#ar.sheet-open .dome-ui, #ar.sheet-open .bubble, #ar.sheet-open .banner, #ar.sheet-open .dome-grip { visibility: hidden; }
 #ar .sheet { position: absolute; z-index: 11; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom));
   max-height: calc(100% - 80px - var(--safe-top)); overflow-y: auto; border-radius: 26px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
   max-width: 560px; margin: 0 auto; background: var(--surface-solid); }

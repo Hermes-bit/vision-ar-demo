@@ -20,7 +20,8 @@ import {icon, ICONS} from "./icons.js";
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
 const CAMERA_LONG_FOV_DEG = 68;   // champ de la caméra arrière principale sur le grand côté de l'image (iPhone ≈ 69°, Android 65-70°)
 const VFOV_DEG = 62;              // sans image vidéo (ordinateur)
-const AHEAD_M = 55;               // longueur d'itinéraire dessinée
+const AHEAD_M = 55;               // portée des repères (obstacles, bordures, marches)
+const PATH_AHEAD_M = 30;          // le ruban s'allume sur 30 m devant soi, au fil de la marche
 const PLACES_M = 130;             // portée des étiquettes de lieux
 const NEAR_M = 0.6;
 const BEHIND_M = 4;              // le ruban part de sous les pieds
@@ -235,7 +236,7 @@ function bandPath(left, right) {
 }
 function drawPath(cam, s, here, pos) {
   const t = theme(), dpr = devicePixelRatio;
-  const raw = [], from = Math.max(0, pos - BEHIND_M), to = Math.min(s.nav.total, pos + AHEAD_M);
+  const raw = [], from = Math.max(0, pos - BEHIND_M), to = Math.min(s.nav.total, pos + PATH_AHEAD_M);
   for (let d = from; d < to; d += 1.5) raw.push(enu(here, s.posAt(d)));
   raw.push(enu(here, s.posAt(to)));
   if (raw.length < 3) return;
@@ -285,7 +286,7 @@ function drawPath(cam, s, here, pos) {
       const q = [back(1), tip, back(-1)].map(p => cam.toCam(p));
       if (q.every(v => v.d >= NEAR_M)) {
         const along = next - (pos - from);               // distance devant soi
-        const alpha = Math.max(0, 1 - along / AHEAD_M) ** 0.8;
+        const alpha = Math.max(0, 1 - along / PATH_AHEAD_M) ** 0.8;
         ctx.strokeStyle = `rgba(${t.chevRGB},${alpha.toFixed(3)})`;
         ctx.lineWidth = Math.max(1.5 * dpr, Math.min(16 * dpr, cam.scale(q[1].d) * t.chevStroke));
         ctx.beginPath();
@@ -506,6 +507,22 @@ function drawAnchors(cam, s, here) {
   }
   toDraw.reverse().forEach(draw => draw());          // les lointains d'abord, les proches par-dessus
 }
+// N°12 : gros repère posé sur la destination, visible dès qu'elle est dans le champ, qui grossit à l'approche ;
+// il disparaît une fois l'arrivée confirmée (la flèche aussi : on ne superpose jamais les deux)
+function drawDestination(cam, s, here) {
+  const dest = s.dest;
+  if (!dest || s.st.arrived) return;
+  const d = haversineM(here.lat, here.lon, dest.lat, dest.lon);
+  if (d > 150) return;
+  const c = cam.toCam(enu(here, dest));
+  if (c.d < 1.5) return;
+  const [x, y] = cam.toScreen(c), dpr = devicePixelRatio;
+  if (x < 0 || x > canvas.width || y < 0) return;
+  const label = dest.label || "";
+  const ic = /arr[eê]t|bus/i.test(label) ? "bus" : /m[ée]tro|gare|rer|station/i.test(label) ? "train-front" : /tram/i.test(label) ? "tram-front" : "flag";
+  const H = Math.max(110 * dpr, Math.min(280 * dpr, cam.scale(c.d) * 3.6));
+  glassPin(x, Math.min(y, canvas.height), {label: "Arrivée", ic, ahead: d, color: "#C92A2A", glow: "#FF6B5B", place: true}, H);
+}
 function reservedAreas() {
   const dpr = devicePixelRatio, out = [];
   for (const el of root.querySelectorAll(".top, .dome, .dock")) {
@@ -546,15 +563,16 @@ function frame() {
   updateArrowMode(s, compass);
   if (!mapFull && nativeOn) {
     // ARCore dessine le tracé ; tant qu'il n'est pas localisé, la flèche indique la direction
-    if (!nativeLocalized()) drawGroundArrow(heading, arrowBearing(s));
+    if (!nativeLocalized() && !s.st.arrived) drawGroundArrow(heading, arrowBearing(s));
   } else if (!mapFull) {
     if (noCamera) drawGrid(cam, v.here, heading);
-    if (arrowMode) drawGroundArrow(heading, arrowBearing(s));
+    if (arrowMode) { if (!s.st.arrived) drawGroundArrow(heading, arrowBearing(s)); }
     else {
       if (v.join) drawJoin(cam, v.here, v.join);
       drawPath(cam, s, v.here, v.pos);
     }
     drawAnchors(cam, s, v.here);
+    drawDestination(cam, s, v.here);
   }
   renderUi(s, heading, compass);
 }
@@ -632,11 +650,27 @@ function renderUi(s, heading, compass) {
   const crossing = next.alerts.some(a => a.startsWith("Traversée"));
   const sub = st.arrived ? (s.dest?.label || "") : crossing ? `puis traversez au passage piéton${next.alerts.some(a => a.includes("feu sonore")) ? " (feu sonore)" : ""}`
     : next.maneuver === "arrive" ? (s.dest?.label || "") : `puis ${dist(next.distance_m)} ${next.street ? "· " + next.street : "tout droit"}`;
-  const joining = !st.arrived && !s.nav.offRoute && s.nav.away;
-  const title = st.arrived ? "Vous êtes arrivé" : joining ? "Rejoignez l'itinéraire" : TITLE[next.maneuver] || "Continuez tout droit";
-  const manIcon = joining ? "footprints" : MAN_ICON[st.arrived ? "arrive" : next.maneuver] || "arrow-up";
-  const away = st.arrived ? "" : joining ? dist(s.nav.gap) : dist(st.toManeuver);
-  const subText = joining ? `suivez les pointillés jusqu'à la rue, puis ${(TITLE[next.maneuver] || "continuez").toLowerCase()}` : sub;
+  const approach = !st.arrived && s.nav.phase === "approach";
+  const joining = !st.arrived && !approach && !s.nav.offRoute && s.nav.away;
+  const acc = s.nav.real && Date.now() - s.nav.real.at < 15000 ? s.nav.real.acc : null;
+  const vague = !nativeLocalized() && (acc === null || acc > 20);       // N°9 : pas de virage « au mètre près »
+  // N°1 : la consigne dit ce qu'il faut faire MAINTENANT, comme la flèche. Loin du virage : « Continuez »,
+  // le virage à venir est annoncé dessous ; à 25 m : « Tournez à gauche ».
+  const turnSoon = st.toManeuver <= 25 && !vague;
+  const upcoming = (TITLE[next.maneuver] || "Continuez tout droit");
+  const title = st.arrived ? "Vous êtes arrivé" : approach ? "Rejoignez le point de départ" : joining ? "Rejoignez l'itinéraire"
+    : vague ? "Suivez la flèche" : turnSoon || next.maneuver === "straight" ? upcoming : "Continuez tout droit";
+  const manIcon = approach || joining ? "footprints" : st.arrived ? MAN_ICON.arrive
+    : turnSoon ? MAN_ICON[next.maneuver] || "arrow-up" : vague ? "navigation" : "arrow-up";
+  const away = st.arrived ? "" : approach ? dist(s.nav.approachDist) : joining ? dist(s.nav.gap) : (vague ? "≈ " : "") + dist(st.toManeuver);
+  const lowerUp = upcoming.charAt(0).toLowerCase() + upcoming.slice(1);
+  const subText = approach ? "suivez les pointillés : le trajet commence au point de départ"
+    : joining ? `suivez les pointillés jusqu'à l'itinéraire, puis ${lowerUp}`
+    : st.arrived ? sub
+    : vague ? `prochain virage : ${lowerUp}, dans environ ${dist(st.toManeuver)}`
+    : turnSoon ? sub : `dans ${dist(st.toManeuver)} : ${lowerUp}${next.street ? " · " + next.street : ""}`;
+  // N°8 : « Données à confirmer » ne s'affiche plus pendant le guidage (il reste sur la fiche de l'itinéraire)
+  const shownAlerts = next.alerts.filter(a => !a.startsWith("Traversée") && a !== "Données à confirmer");
   const rer = s.nav.rerouted && Date.now() - s.nav.rerouted.at < 10000 ? s.nav.rerouted : null;
   const banner = rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
     : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
@@ -648,14 +682,13 @@ function renderUi(s, heading, compass) {
       <div class="bubble" role="status" aria-live="polite"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
         ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
-        ${!nativeOn && arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative : suivez la flèche au sol</em>` : ""}
-        ${!st.arrived && !joining && next.alerts.some(a => !a.startsWith("Traversée")) ? `<em>${icon("triangle-alert")} ${esc(next.alerts.filter(a => !a.startsWith("Traversée")).join(" · "))}</em>` : ""}</div>
+        ${!nativeOn && arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : suivez la flèche au sol</em>` : ""}
+        ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
         ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}</div>
       ${banner}
     </div>
     <div class="dome-ui">
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
-      <button class="stop-btn" data-act="ask-stop" aria-label="Arrêter le guidage">${icon("x")}<span>Arrêter</span></button>
       <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
         <span class="needle"></span><i>N</i></div>
     </div>
@@ -663,7 +696,7 @@ function renderUi(s, heading, compass) {
       <button class="round" data-act="settings" aria-label="Réglages du guidage">${icon("sliders-horizontal")}</button>
       <button class="pill" data-act="map">${icon(mapFull ? "camera" : "map")}<span>${mapFull ? "Caméra" : "Plan"}</span></button>
       <button class="center" data-act="report" aria-label="Signaler un obstacle">${icon("triangle-alert")}</button>
-      <button class="pill" data-act="hud">${icon("glasses")}<span>Lunettes</span></button>
+      <button class="pill stop" data-act="ask-stop" aria-label="Arrêter le guidage">${icon("x")}<span>Arrêter</span></button>
       <button class="round" data-act="voice" aria-label="${s.voice ? "Couper la voix" : "Activer la voix"}">${icon(s.voice ? "volume-2" : "volume-x")}</button>
     </nav>
     ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : sheet === "stop" ? stopSheet() : reportSheet()}</section>` : ""}`;
@@ -673,7 +706,6 @@ function renderUi(s, heading, compass) {
   // carte agrandie : elle s'arrête sous la consigne, pour que la poignée reste visible et attrapable
   const topH = `${Math.round(root.querySelector(".top").getBoundingClientRect().bottom)}px`;
   if (root.style.getPropertyValue("--top-h") !== topH) root.style.setProperty("--top-h", topH);
-  placeNorth(heading);
 }
 // Bord du dôme : une seule ellipse sert à découper la carte, à tracer l'anneau et à placer le « N »
 function domeEdgeY(x) {
@@ -696,16 +728,6 @@ function layoutDome() {
     return `<circle cx="${x.toFixed(1)}" cy="${(domeEdgeY(x) + 7).toFixed(1)}" r="${i % 5 === 0 ? 2 : 1.2}"/>`;
   }).join("");
   dome.querySelector(".dome-grip").style.top = `${(domeGeom.top - 22).toFixed(1)}px`;
-}
-// « N » sur l'anneau, là où se trouve le nord par rapport au regard
-function placeNorth(heading) {
-  const n = root.querySelector(".ring-n");
-  if (!n || !domeGeom) return;
-  const rel = ((-heading + 540) % 360) - 180;
-  n.style.opacity = Math.abs(rel) <= RING_DEG ? "1" : "0";
-  const x = domeGeom.W / 2 + Math.max(-1, Math.min(1, rel / RING_DEG)) * domeGeom.W * 0.4;
-  n.style.left = `${x.toFixed(1)}px`;
-  n.style.top = `${(domeEdgeY(x) - (Math.abs(x - domeGeom.W / 2) < 64 ? 40 : 16)).toFixed(1)}px`;   // au-dessus de la poignée
 }
 // Poignée du dôme : tirer vers le haut agrandit la carte, vers le bas la remet en place ; un toucher bascule
 function bindGrip() {
@@ -750,6 +772,7 @@ function settingsSheet(s) {
     <p class="sheet-label">Thème</p>
     <div class="themes">${[["verre", "Verre", "Clair, ruban lumineux"], ["neon", "Néon", "Sombre, repères flottants"]].map(([v, l, d]) =>
       `<button class="theme-card ${s.theme === v ? "on" : ""}" data-act="theme" data-v="${v}"><span class="preview pv-${v}"><i></i><i></i><i></i></span><b>${l}</b><small>${d}</small></button>`).join("")}</div>
+    <button class="btn soft" data-act="hud">${icon("glasses")} Vue lunettes connectées</button>
     <button class="btn danger-soft" data-act="stop">${icon("x")} Arrêter le guidage</button>`;
 }
 // Arrêt depuis l'écran de guidage : une confirmation évite d'arrêter par un toucher involontaire
@@ -776,7 +799,7 @@ function onAction(e) {
   else if (act === "report") { sheet = "report"; sheetMessage = null; }
   else if (act === "close-sheet") sheet = null;
   else if (act === "map") setMapFull(!mapFull);
-  else if (act === "hud") api.openHud();
+  else if (act === "hud") { sheet = null; api.openHud(); }
   else if (act === "voice") api.toggleVoice();
   else if (act === "reroute") { sheet = null; api.reroute(); }
   else if (act === "haptics") { api.setHaptics(b.checked); }
@@ -811,7 +834,6 @@ export async function openAR(options) {
   root.innerHTML = `<video playsinline muted autoplay></video><canvas></canvas>
     <div class="dome"><div class="dome-map"></div>
       <svg class="ring" preserveAspectRatio="none" aria-hidden="true"><path class="ring-arc"/><g class="ring-ticks"></g></svg>
-      <span class="ring-n">N</span>
       <button class="dome-grip" aria-label="Agrandir la carte" aria-expanded="false"><span></span></button></div>
     <div class="ar-ui"></div>`;
   video = root.querySelector("video");

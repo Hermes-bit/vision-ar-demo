@@ -281,14 +281,14 @@ function summarise(legs, profile, nodes) {
 }
 
 // ---- Consignes (instructions.py) -------------------------------------------------
-const STRAIGHT_MAX_DEG = 20, SLIGHT_MAX_DEG = 45, UTURN_MIN_DEG = 150, SLOPE_ALERT_PCT = 4.0;
+const STRAIGHT_MAX_DEG = 30, SLIGHT_MAX_DEG = 60, UTURN_MIN_DEG = 150, SLOPE_ALERT_PCT = 4.0, BEARING_SPAN_M = 12.0;
 const TEXT = {depart: "Partez", straight: "Continuez tout droit", slight_left: "Serrez à gauche", left: "Tournez à gauche",
   slight_right: "Serrez à droite", right: "Tournez à droite", uturn: "Faites demi-tour", arrive: "Vous êtes arrivé"};
 
 const turnAngle = (bIn, bOut) => (bOut - bIn + 540.0) % 360.0 - 180.0;
 function classify(angle) {
   const a = Math.abs(angle);
-  if (a <= STRAIGHT_MAX_DEG) return "straight";
+  if (a < STRAIGHT_MAX_DEG) return "straight";
   if (a >= UTURN_MIN_DEG) return "uturn";
   if (a <= SLIGHT_MAX_DEG) return angle > 0 ? "slight_right" : "slight_left";
   return angle > 0 ? "right" : "left";
@@ -299,8 +299,17 @@ function legPoints(nodes, leg) {
   const a = nodes[legFrom(leg)], b = nodes[legTo(leg)];
   return [[a.lat, a.lon], [b.lat, b.lon]];
 }
-const startBearing = (nodes, leg) => { const [[a, b], [c, d]] = legPoints(nodes, leg).slice(0, 2); return bearingDeg(a, b, c, d); };
-const endBearing = (nodes, leg) => { const [[a, b], [c, d]] = legPoints(nodes, leg).slice(-2); return bearingDeg(a, b, c, d); };
+// Cap mesuré sur 12 m de part et d'autre du carrefour (le dernier petit bout d'un trottoir est souvent de travers)
+function pointAt(pts, span) {
+  let acc = 0.0;
+  for (let i = 1; i < pts.length; i++) {
+    acc += haversineM(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+    if (acc >= span) return pts[i];
+  }
+  return pts.at(-1);
+}
+const startBearing = (nodes, leg) => { const pts = legPoints(nodes, leg), [a, b] = pts[0], [c, d] = pointAt(pts, BEARING_SPAN_M); return bearingDeg(a, b, c, d); };
+const endBearing = (nodes, leg) => { const pts = legPoints(nodes, leg), [a, b] = pointAt([...pts].reverse(), BEARING_SPAN_M), [c, d] = pts.at(-1); return bearingDeg(a, b, c, d); };
 function legAlerts(leg) {
   const alerts = [];
   if (leg.edge.is_crossing) alerts.push("Traversée" + (leg.edge.sound_signal ? " avec feu sonore" : ""));
