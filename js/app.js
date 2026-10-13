@@ -1,7 +1,7 @@
 // Vision AR — démo web mobile (installable sur l'écran d'accueil).
 // Écrans repris de l'appli Android (phone/ui/Screens.kt) ; itinéraires calculés
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
-import {arOpen, closeAR, openAR} from "./ar.js";
+import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
@@ -40,7 +40,7 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
+  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
 };
 let net = null;
@@ -94,8 +94,36 @@ function say(text, urgent = false) {
     u.lang = "fr-FR";
     speechSynthesis.speak(u);
   }
-  if (navigator.vibrate) navigator.vibrate(urgent ? [200, 100, 200] : 120);
 }
+// Vibrations de direction : le nombre d'impulsions dit où aller (même code sur Android et sur iPhone)
+//   2 = à gauche, 3 = à droite, 5 rapides = mauvais sens / demi-tour, 1 longue = arrivé
+const HAPTIC = {left: [160, 140, 160], right: [160, 140, 160, 140, 160], uturn: [70, 60, 70, 60, 70, 60, 70, 60, 70], arrive: [700], tick: [40]};
+const IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+let iosSwitch = null;
+function iosTap() {
+  // Safari (iPhone) n'a pas navigator.vibrate ; depuis iOS 18, basculer un interrupteur natif
+  // produit un petit « tic » du moteur haptique. Au mieux : rien n'est garanti hors d'un geste de l'usager.
+  if (!iosSwitch) {
+    iosSwitch = document.createElement("label");
+    iosSwitch.setAttribute("aria-hidden", "true");
+    iosSwitch.style.cssText = "position:fixed;left:-200px;top:0;width:1px;height:1px;overflow:hidden;opacity:0";
+    iosSwitch.innerHTML = '<input type="checkbox" switch tabindex="-1">';
+    document.body.append(iosSwitch);
+  }
+  iosSwitch.click();
+}
+function buzz(kind) {
+  const pattern = HAPTIC[kind];
+  if (!S.haptics || !pattern) return;
+  if (navigator.vibrate) { navigator.vibrate(pattern); return; }
+  if (!IOS) return;
+  let t = 0;
+  pattern.forEach((ms, i) => { if (i % 2 === 0) setTimeout(iosTap, t); t += Math.max(ms, 120); });
+}
+const hapticsNote = () => navigator.vibrate ? "" : IOS
+  ? "Sur iPhone, Safari ne donne pas accès au vibreur : de petits « tics » sont tentés (iOS 18 et plus), sans garantie. La voix reste le repère principal."
+  : "Ce navigateur ne permet pas les vibrations.";
+const turnSide = m => m === "left" || m === "slight_left" ? "left" : m === "right" || m === "slight_right" ? "right" : m === "uturn" ? "uturn" : null;
 function toast(text, ms = 3500) {
   const t = $("toast");
   t.innerHTML = `${icon("info")}<span>${esc(text)}</span>`;
@@ -248,7 +276,7 @@ function useMyPosition() {
       nearestNode(net, p.lat, p.lon);
     } catch {
       return toast("Vous êtes hors de la zone couverte (Gennevilliers) : le départ reste fixé sur le plan. " +
-                   "Le mode « GPS réel » ne marchera que sur place ; utilisez la simulation.", 6000);
+                   "Le guidage ne fonctionne que sur place, à Gennevilliers.", 6000);
     }
     S.origin = p;
     map.setView([p.lat, p.lon], 17);
@@ -276,7 +304,7 @@ function search(q) {
   }, 350);
 }
 
-// ---- Guidage : simulation ou GPS --------------------------------------------------------
+// ---- Guidage GPS ----------------------------------------------------------------------
 function project(p, a, b) {           // projection d'un point sur un segment, en mètres (plan local)
   const k = Math.cos(p.lat * Math.PI / 180), m = 111320;
   const ax = (a.lon - p.lon) * k * m, ay = (a.lat - p.lat) * m, bx = (b.lon - p.lon) * k * m, by = (b.lat - p.lat) * m;
@@ -284,7 +312,7 @@ function project(p, a, b) {           // projection d'un point sur un segment, e
   const t = L2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2));
   return {t, d: Math.hypot(ax + t * dx, ay + t * dy)};
 }
-function startNav(route) {
+function startNav(route, keepGps = false) {
   const g = route.geometry, cum = [0];
   for (let i = 1; i < g.length; i++) cum.push(cum[i - 1] + haversineM(g[i - 1].lat, g[i - 1].lon, g[i].lat, g[i].lon));
   // Début de chaque consigne = premier sommet du tracé à moins de 1,5 m d'elle
@@ -298,18 +326,20 @@ function startNav(route) {
     if (k < g.length - 1) j = k;                        // trouvé ; sinon on garde la position précédente
     stepAt.push(cum[j]);
   }
+  const prev = keepGps ? S.nav : null, watch = prev?.watch ?? null;    // nouveau calcul : le suivi GPS continue
+  if (prev) prev.watch = null;
   stopNav();
-  S.nav = {route, cum, total: cum.at(-1), stepAt, pos: 0, here: {...g[0]}, mode: S.nav?.mode || "sim", factor: S.nav?.factor || 5,
-           timer: null, watch: null, said: new Set(), off: 0, arrived: false};
+  S.nav = {route, cum, total: cum.at(-1), stepAt, pos: 0, here: {...g[0]}, watch, real: prev?.real || null,
+           gpsInfo: prev?.gpsInfo || "", gpsStatus: prev?.gpsStatus || "", lastReroute: prev?.lastReroute || 0,
+           said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, arrived: false};
   requestWakeLock();
   const first = route.steps[0];
   say(`${first.text}. ${short(route.length_m)}, environ ${Math.ceil(route.length_m / speed() / 60)} minutes.`, true);
 }
 function stopNav() {
   if (!S.nav) return;
-  clearInterval(S.nav.timer);
   if (S.nav.watch !== null) navigator.geolocation.clearWatch(S.nav.watch);
-  S.nav.timer = null; S.nav.watch = null;
+  S.nav.watch = null;
 }
 function posAt(d) {
   const {route: {geometry: g}, cum} = S.nav;
@@ -333,16 +363,19 @@ function navState() {
 function announce() {
   const n = S.nav, st = navState();
   if (st.arrived) {
-    if (!n.said.has("arrive")) { n.said.add("arrive"); n.arrived = true; say("Vous êtes arrivé.", true); setSim(false); }
+    if (!n.said.has("arrive")) { n.said.add("arrive"); n.arrived = true; say("Vous êtes arrivé.", true); buzz("arrive"); }
     return;
   }
   const i = st.idx + 1, alerts = st.next.alerts.length ? `. Attention : ${st.next.alerts.join(", ")}` : "";
+  const side = turnSide(st.next.maneuver);
   if (st.toManeuver <= 60 && st.toManeuver > 20 && !n.said.has(`${i}-far`)) {
     n.said.add(`${i}-far`);
     say(`${st.spoken}${alerts}`);
+    if (side) buzz(side);
   } else if (st.toManeuver <= 15 && !n.said.has(`${i}-now`)) {
     n.said.add(`${i}-now`); n.said.add(`${i}-far`);
     say(st.next.text, true);
+    if (side) buzz(side);
   }
 }
 function moveTo(pos) {
@@ -351,26 +384,56 @@ function moveTo(pos) {
   announce();
   renderNavLive();
 }
-function setSim(on) {
+function startGps() {
   const n = S.nav;
-  clearInterval(n.timer);
-  n.timer = null;
-  if (on && !n.arrived) n.timer = setInterval(() => moveTo(n.pos + speed() * n.factor * 0.25), 250);
-  renderNavLive();
+  if (n.watch !== null) navigator.geolocation.clearWatch(n.watch);
+  n.watch = null;
+  if (!navigator.geolocation) { n.gpsProblem = "Ce téléphone ne donne pas sa position : le guidage ne peut pas suivre vos pas."; return; }
+  n.gpsInfo = "Recherche de votre position… (autorisez la localisation si le téléphone le demande)";
+  n.gpsStatus = "Recherche de votre position…";
+  n.gpsProblem = null;
+  n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
 }
-function setMode(mode) {
+// Précision du GPS en mots simples (au lieu de « GPS ± 14 m »)
+function accuracyText(acc) {
+  const m = Math.max(1, Math.round(acc));
+  return acc <= 10 ? `Position précise (à ${m} m près)`
+    : acc <= 25 ? `Position correcte (à ${m} m près)`
+    : `Position approximative (à ${m} m près) : les immeubles gênent le GPS, avancez si possible à découvert`;
+}
+// Nouvel itinéraire depuis la position réelle (écart, mauvaise rue, ou demande de l'usager)
+function reroute(from, title, manual = false) {
   const n = S.nav;
-  setSim(false);
-  if (n.watch !== null) { navigator.geolocation.clearWatch(n.watch); n.watch = null; }
-  n.mode = mode;
-  drawRealPosition();
-  if (mode === "gps") {
-    if (!navigator.geolocation) { toast("Pas de GPS sur cet appareil."); n.mode = "sim"; return render(); }
-    n.gpsInfo = "Recherche de votre position… (autorisez la localisation si le téléphone le demande)";
-    n.gpsProblem = null;
-    n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
+  if (!manual && Date.now() - n.lastReroute < 10000) return;      // pas plus d'un recalcul automatique toutes les 10 s
+  n.lastReroute = Date.now();
+  n.off = 0;
+  try {
+    const res = computeRoutes(net, {origin: from, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
+    say(manual ? "Itinéraire recalculé depuis votre position." : "Vous vous êtes écarté de l'itinéraire. Nouvel itinéraire.", true);
+    if (!manual) buzz("uturn");
+    startNav(res.routes[0], true);
+    S.routes = res.routes; S.selected = 0;
+    S.nav.rerouted = {at: Date.now(), title};
+    S.nav.gpsInfo = "";
+  } catch (e) {
+    if (!(e instanceof RoutingError)) throw e;
+    n.gpsInfo = `${e.message} Revenez vers l'itinéraire affiché.`;
+    if (manual) say("Aucun autre itinéraire accessible depuis ici. Revenez vers l'itinéraire affiché.", true);
   }
   render();
+}
+function manualReroute() {
+  const n = S.nav, r = n.real;
+  if (!r || Date.now() - r.at > 30000) return toast("Votre position GPS n'est pas encore connue : patientez quelques secondes à l'extérieur.");
+  reroute({lat: r.lat, lon: r.lon}, "Itinéraire recalculé", true);
+}
+// Mauvais sens sur l'itinéraire lui-même : on le dit (voix + 5 impulsions), au plus toutes les 15 s
+function wrongWay() {
+  const n = S.nav;
+  if (Date.now() - (n.lastWrongWay || 0) < 15000) return;
+  n.lastWrongWay = Date.now();
+  say("Vous allez dans le mauvais sens. Faites demi-tour.", true);
+  buzz("uturn");
 }
 function onGpsError(err) {
   const n = S.nav;
@@ -384,9 +447,12 @@ function onGpsError(err) {
   renderNavLive();
 }
 function onGps(pos) {
-  const n = S.nav, p = {lat: pos.coords.latitude, lon: pos.coords.longitude}, acc = pos.coords.accuracy;
-  n.real = {...p, acc};
-  n.gpsInfo = acc > 30 ? `Signal GPS faible (± ${Math.round(acc)} m)` : `GPS ± ${Math.round(acc)} m`;
+  const n = S.nav;
+  if (!n) return;
+  const p = {lat: pos.coords.latitude, lon: pos.coords.longitude}, acc = pos.coords.accuracy;
+  n.real = {...p, acc, at: Date.now()};
+  n.gpsStatus = accuracyText(acc);
+  n.gpsInfo = acc > 25 ? n.gpsStatus : "";              // bandeau seulement quand la position est incertaine
   drawRealPosition();
   // Hors de la zone couverte : on le dit clairement, sans tenter de recalcul impossible
   try {
@@ -395,40 +461,59 @@ function onGps(pos) {
   } catch {
     const km = haversineM(p.lat, p.lon, MAIRIE.lat, MAIRIE.lon) / 1000;
     n.gpsProblem = `Vous êtes à ${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km de Gennevilliers. ` +
-      "Le mode GPS réel ne guide que sur place, dans la zone couverte. Ailleurs, utilisez la simulation (avec la vue Caméra si vous voulez).";
+      "Le guidage ne fonctionne que sur place, dans la zone couverte.";
     return renderNavLive();
   }
   // point le plus proche du tracé, sans revenir loin en arrière
   const g = n.route.geometry;
   let best = null;
   for (let i = 1; i < g.length; i++) {
-    if (n.cum[i] < n.pos - 40) continue;
+    if (n.cum[i] < n.pos - 60) continue;
     const pr = project(p, g[i - 1], g[i]);
     if (!best || pr.d < best.d) best = {d: pr.d, along: n.cum[i - 1] + pr.t * (n.cum[i] - n.cum[i - 1])};
   }
-  if (best && best.d <= 30) { n.off = 0; return moveTo(Math.max(n.pos, best.along)); }
-  n.gpsInfo += ` — à ${Math.round(best?.d ?? 0)} m de l'itinéraire`;
+  // Écart toléré : 20 m, plus si le GPS est imprécis (45 m au plus)
+  const limit = Math.min(45, Math.max(20, 1.5 * acc));
+  // Mauvaise rue prise à un carrefour : l'écart grandit à chaque mesure -> on n'attend pas les 20 m
+  const h = n.dHist = [...n.dHist.slice(-3), best?.d ?? 0];
+  const leaving = acc <= 15 && h.length === 4 && h[3] > 12 && h[1] > h[0] + 1.5 && h[2] > h[1] + 1.5 && h[3] > h[2] + 1.5;
+  if (best && best.d <= limit && !leaving) {
+    n.off = 0; n.offRoute = false;
+    if (best.along < n.pos - 12 && acc <= 25) {          // on remonte l'itinéraire à l'envers
+      if (++n.back >= 3) { n.back = 0; n.pos = best.along; wrongWay(); }
+    } else n.back = 0;
+    return moveTo(Math.max(n.pos, best.along));
+  }
+  n.offRoute = true; n.back = 0;
+  n.gpsInfo = `Vous vous éloignez de l'itinéraire (${Math.round(best?.d ?? 0)} m) : nouveau calcul en cours…`;
   map.panTo([p.lat, p.lon]);
   renderNavLive();
-  if (acc <= 40 && ++n.off >= 3) {                       // vraiment hors du tracé : nouveau calcul
-    n.off = 0;
-    try {
-      const res = computeRoutes(net, {origin: p, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
-      say("Nouvel itinéraire.", true);
-      startNav(res.routes[0]);
-      S.routes = res.routes; S.selected = 0;
-      S.nav.rerouted = {at: Date.now(), title: "Hors de l'itinéraire"};
-      setMode("gps");
-    } catch (e) {
-      n.gpsInfo = e instanceof RoutingError ? e.message : String(e);
-      renderNavLive();
-    }
-  }
+  if (acc <= 40 && (++n.off >= 2 || leaving)) reroute(p, leaving ? "Mauvaise rue" : "Hors de l'itinéraire");
 }
+// Repères de direction par vibration, téléphone tenu devant soi : si l'on ne fait pas face
+// au chemin (plus de 40°), 2 impulsions = tournez-vous vers la gauche, 3 = vers la droite,
+// 5 = demi-tour. Au plus une fois toutes les 6 s ; les virages ont leur propre signal.
+function steer() {
+  const n = S.nav;
+  if (!n || n.arrived || !S.haptics || S.screen !== "nav") return;
+  const heading = currentHeading();
+  if (heading === null || !n.real || Date.now() - n.real.at > 15000) return;
+  if (!n.offRoute && navState().toManeuver < 15) return;
+  if (Date.now() - (n.lastSteer || 0) < 6000) return;
+  const from = n.offRoute ? n.real : n.here, to = posAt(Math.min(n.total, n.pos + 10));
+  if (haversineM(from.lat, from.lon, to.lat, to.lon) < 3) return;
+  const k = Math.cos(from.lat * Math.PI / 180);
+  const bearing = Math.atan2((to.lon - from.lon) * k, to.lat - from.lat) * 180 / Math.PI;
+  const diff = ((bearing - heading + 540) % 360) - 180;
+  if (Math.abs(diff) < 40) return;
+  n.lastSteer = Date.now();
+  buzz(Math.abs(diff) > 135 ? "uturn" : diff < 0 ? "left" : "right");
+}
+setInterval(steer, 1000);
 let realMarker = null;
 function drawRealPosition() {
   const r = S.nav?.real;
-  if (!r || S.nav.mode !== "gps") { realMarker?.remove(); realMarker = null; return; }
+  if (!r) { realMarker?.remove(); realMarker = null; return; }
   if (!realMarker) realMarker = L.layerGroup().addTo(map);
   realMarker.clearLayers();
   L.circle([r.lat, r.lon], {radius: r.acc, color: "#C2410C", weight: 1, fillColor: "#F59E0B", fillOpacity: .15, interactive: false}).addTo(realMarker);
@@ -524,13 +609,10 @@ function routeCard(r, i) {
 const navApi = {
   map,
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
-    mobility: primary(), mode: S.nav.mode, factor: S.nav.factor, playing: !!S.nav.timer, voice: S.voice, theme: S.theme,
-    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem},
-  togglePlay: () => setSim(!S.nav.timer),
-  pause: () => setSim(false),
-  setMode: m => setMode(m),
-  setFactor: f => { S.nav.factor = f; setSim(!!S.nav.timer); },
-  rewind: () => { S.nav.arrived = false; S.nav.said.clear(); moveTo(0); },
+    mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
+    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus},
+  reroute: () => manualReroute(),
+  setHaptics: on => { S.haptics = on; store.set("va-haptics", on); if (on) buzz("left"); },
   toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) speechSynthesis?.cancel(); },
   openHud: () => { S.hud = true; renderHud(); },
   setTheme,
@@ -547,10 +629,9 @@ function doReport(kind, blocking) {
   if (blocking) {
     try {
       const res = computeRoutes(net, {origin: here, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
-      startNav(res.routes[0]);
+      startNav(res.routes[0], true);
       S.routes = res.routes; S.selected = 0;
       S.nav.rerouted = {at: Date.now(), title: kind === "elevator_out" ? "Ascenseur en panne" : "Trottoir bloqué"};
-      if (S.nav.mode === "gps") setMode("gps");
       msg += " Itinéraire recalculé depuis votre position.";
     } catch (e) {
       if (!(e instanceof RoutingError)) throw e;
@@ -733,6 +814,7 @@ function chooseDest(place) {
 }
 function startGuidance() {
   startNav(S.routes[S.selected]);
+  startGps();
   go("nav");
   map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
 }

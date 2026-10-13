@@ -7,25 +7,30 @@
 //   « neon »  : grands chevrons lumineux au sol, repères en goutte flottant dans la rue.
 //
 // Pas de reconnaissance d'image : tout vient des données (itinéraire, signalements,
-// bordures, marches, pentes, équipements) placées par la position (GPS ou simulation),
-// la boussole et l'inclinaison du téléphone. Précision : quelques mètres.
+// bordures, marches, pentes, équipements) placées par la position GPS, la boussole
+// et l'inclinaison du téléphone. Précision : quelques mètres.
+//
+// Le dessin colle au sol parce que la caméra virtuelle reproduit la vraie : même hauteur
+// (debout ou en fauteuil), même direction (boussole), même inclinaison et même roulis
+// (vecteur de gravité), même champ de vision (calculé d'après l'image vidéo affichée).
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 
-// Hauteur de la caméra « virtuelle ». Plus haute que le téléphone (~1,4 m) : comme sur les maquettes,
-// le chemin monte dans l'image au lieu de s'écraser en un trait à l'horizon.
-const CAMERA_HEIGHT_M = 2.6;
-const VFOV_DEG = 62;              // champ vertical approximatif d'une caméra arrière en portrait
+// Hauteur du téléphone au-dessus du trottoir, tenu devant soi
+const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
+const CAMERA_LONG_FOV_DEG = 68;   // champ de la caméra arrière principale sur le grand côté de l'image (iPhone ≈ 69°, Android 65-70°)
+const VFOV_DEG = 62;              // sans image vidéo (ordinateur)
 const AHEAD_M = 55;               // longueur d'itinéraire dessinée
 const PLACES_M = 130;             // portée des étiquettes de lieux
-const NEAR_M = 1.2;
-const START_M = 2.5;
+const NEAR_M = 0.6;
+const BEHIND_M = 4;              // le ruban part de sous les pieds
+const CHEV_START_M = 2;
 const RING_DEG = 55;              // demi-ouverture de l'anneau de boussole du dôme
 const THEMES = {
   // Verre (maquette 1) : ruban turquoise -> vert lumineux, chevrons blancs
-  verre: {ribbon: true, chevW: 1.0, chevL: 0.55, chevGap: 4, chevStroke: 0.17, chevRGB: "255,255,255", glow: "rgba(61,220,151,.9)", pins: false},
+  verre: {ribbon: true, half: 0.6, chevW: 0.62, chevL: 0.38, chevGap: 2.6, chevStroke: 0.09, chevRGB: "255,255,255", glow: "rgba(61,220,151,.9)", pins: false},
   // Néon (maquette 2) : grands chevrons turquoise lumineux, léger halo au sol
-  neon: {ribbon: false, chevW: 1.7, chevL: 0.85, chevGap: 3.2, chevStroke: 0.32, chevRGB: "140,244,248", glow: "rgba(91,224,234,1)", pins: true},
+  neon: {ribbon: false, half: 0.75, chevW: 0.95, chevL: 0.55, chevGap: 2.4, chevStroke: 0.15, chevRGB: "140,244,248", glow: "rgba(91,224,234,1)", pins: true},
 };
 const TITLE = {left: "Tournez à gauche", slight_left: "Serrez à gauche", right: "Tournez à droite", slight_right: "Serrez à droite",
   uturn: "Faites demi-tour", straight: "Continuez tout droit", depart: "Continuez tout droit", arrive: "Vous arrivez"};
@@ -54,7 +59,8 @@ const POI = {elevator: ["elevator", "Ascenseur"], accessible_toilet: ["toilet", 
   accessible_entrance: ["door-open", "Entrée accessible"], audio_beacon: ["volume-2", "Balise sonore"]};
 
 let api = null, root = null, video = null, canvas = null, ctx = null, stream = null, raf = 0, noCamera = false;
-let sensors = {heading: null, pitch: null, roll: 0}, useCompass = false, smoothHeading = null, mapFull = false, sheet = null;
+let sensors = {heading: null, pitch: null, roll: 0}, smoothHeading = null, mapFull = false, sheet = null;
+let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
 let blocking = true, sheetMessage = null, lastUi = "";
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -64,22 +70,37 @@ const theme = () => THEMES[api.state()?.theme] || THEMES.verre;
 
 // ---- Capteurs --------------------------------------------------------------------------
 function screenAngle() { return (screen.orientation?.angle ?? window.orientation ?? 0) % 360; }
+// Direction visée par la caméra arrière (méthode du W3C « compass heading ») : valable téléphone
+// tenu droit ou incliné, quelle que soit l'orientation de l'écran.
+function backCameraHeading(alpha, beta, gamma) {
+  const d = Math.PI / 180, x = beta * d, y = gamma * d, z = alpha * d;
+  const vx = -Math.cos(z) * Math.sin(y) - Math.sin(z) * Math.sin(x) * Math.cos(y);
+  const vy = -Math.sin(z) * Math.sin(y) + Math.cos(z) * Math.sin(x) * Math.cos(y);
+  if (Math.hypot(vx, vy) < 0.15) return null;                  // téléphone à plat : direction indéfinie
+  return (Math.atan2(vx, vy) / d + 360) % 360;
+}
+let lastAbsolute = 0;
 function onOrientation(e) {
-  const angle = screenAngle();
+  if (typeof e.beta !== "number" || typeof e.gamma !== "number") return;
   let heading = null;
-  if (typeof e.webkitCompassHeading === "number") heading = e.webkitCompassHeading;            // iPhone
-  else if (e.absolute && typeof e.alpha === "number") heading = (360 - e.alpha) % 360;           // Android
-  if (heading !== null) sensors.heading = (heading + angle + 360) % 360;
-  if (typeof e.beta === "number") {
-    sensors.pitch = angle === 90 || angle === 270 ? 90 - Math.abs(e.gamma) : 90 - e.beta;
-    sensors.roll = angle === 0 ? e.gamma : 0;
-  }
+  if (typeof e.webkitCompassHeading === "number" && e.webkitCompassHeading >= 0) heading = e.webkitCompassHeading;   // iPhone
+  else if (e.absolute && typeof e.alpha === "number") { heading = backCameraHeading(e.alpha, e.beta, e.gamma); lastAbsolute = performance.now(); }
+  else if (performance.now() - lastAbsolute < 2000) return;   // Android : l'événement relatif ne remplace pas l'absolu
+  if (heading !== null) sensors.heading = heading;
+  // Gravité dans le repère du téléphone -> inclinaison sous l'horizon et roulis de l'image
+  const d = Math.PI / 180, cb = Math.cos(e.beta * d);
+  const gx = cb * Math.sin(e.gamma * d), gy = -Math.sin(e.beta * d), gz = -cb * Math.cos(e.gamma * d);
+  const pitch = Math.asin(Math.max(-1, Math.min(1, -gz))) / d;
+  const roll = Math.atan2(gx, -gy) / d + screenAngle();
+  sensors.pitch = sensors.pitch === null ? pitch : sensors.pitch + (pitch - sensors.pitch) * 0.3;
+  const dr = ((roll - sensors.roll + 540) % 360) - 180;
+  sensors.roll = (((sensors.roll + dr * 0.3) + 540) % 360) - 180;
 }
 async function startSensors() {
   try {
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function")
       await DeviceOrientationEvent.requestPermission();                                            // iPhone : autorisation
-  } catch { /* refus : on suit l'itinéraire */ }
+  } catch { /* refus : on suit le sens de l'itinéraire */ }
   window.addEventListener("deviceorientationabsolute", onOrientation);
   window.addEventListener("deviceorientation", onOrientation);
 }
@@ -91,18 +112,28 @@ function stopSensors() {
 // ---- Géométrie : monde (mètres autour de soi) -> écran ----------------------------------------
 function enu(origin, p) {
   const k = Math.cos(origin.lat * Math.PI / 180);
-  return {x: (p.lon - origin.lon) * k * 111320, y: (p.lat - origin.lat) * 111320, z: -CAMERA_HEIGHT_M};
+  return {x: (p.lon - origin.lon) * k * 111320, y: (p.lat - origin.lat) * 111320, z: -camHeight};
 }
-function makeCamera(headingDeg, pitchDeg, w, h) {
-  const yaw = headingDeg * Math.PI / 180, pitch = pitchDeg * Math.PI / 180;
-  const f = (h / 2) / Math.tan(VFOV_DEG * Math.PI / 360);
-  const sy = Math.sin(yaw), cyw = Math.cos(yaw), sp = Math.sin(pitch), cp = Math.cos(pitch);
+// Focale en pixels du canevas : celle de la vidéo, à l'échelle de son affichage (object-fit: cover)
+function focalPx(w, h) {
+  const vw = video?.videoWidth, vh = video?.videoHeight;
+  if (noCamera || !vw || !vh) return (h / 2) / Math.tan(VFOV_DEG * Math.PI / 360);
+  const fVideo = (Math.max(vw, vh) / 2) / Math.tan(CAMERA_LONG_FOV_DEG * Math.PI / 360);
+  return fVideo * Math.max(w / vw, h / vh);
+}
+function makeCamera(headingDeg, pitchDeg, rollDeg, w, h) {
+  const yaw = headingDeg * Math.PI / 180, pitch = pitchDeg * Math.PI / 180, roll = -rollDeg * Math.PI / 180;
+  const f = focalPx(w, h);
+  const sy = Math.sin(yaw), cyw = Math.cos(yaw), sp = Math.sin(pitch), cp = Math.cos(pitch), sr = Math.sin(roll), cr = Math.cos(roll);
   return {
     toCam(p) {
       const fwd = p.x * sy + p.y * cyw, right = p.x * cyw - p.y * sy;
       return {r: right, v: fwd * sp + p.z * cp, d: fwd * cp - p.z * sp};
     },
-    toScreen(c) { return [w / 2 + c.r / c.d * f, h / 2 - c.v / c.d * f]; },
+    toScreen(c) {                                   // projection puis roulis autour du centre de l'image
+      const x = c.r / c.d * f, y = -c.v / c.d * f;
+      return [w / 2 + x * cr - y * sr, h / 2 + x * sr + y * cr];
+    },
     scale(depth) { return f / depth; },
   };
 }
@@ -161,13 +192,14 @@ function bandPath(left, right) {
   for (let k = right.length - 1; k >= 0; k--) ctx.lineTo(right[k][0], right[k][1]);
   ctx.closePath();
 }
-function drawPath(cam, s, here) {
+function drawPath(cam, s, here, pos) {
   const t = theme(), dpr = devicePixelRatio;
-  const raw = [];
-  for (let d = s.nav.pos + START_M; d <= Math.min(s.nav.total, s.nav.pos + AHEAD_M); d += 1.5) raw.push(enu(here, s.posAt(d)));
+  const raw = [], from = Math.max(0, pos - BEHIND_M), to = Math.min(s.nav.total, pos + AHEAD_M);
+  for (let d = from; d < to; d += 1.5) raw.push(enu(here, s.posAt(d)));
+  raw.push(enu(here, s.posAt(to)));
   if (raw.length < 3) return;
   const pts = chaikin(raw);
-  const [left, right] = bandEdges(cam, pts, t.ribbon ? 0.8 : 1.0);
+  const [left, right] = bandEdges(cam, pts, t.half);
   if (left.length < 2) return;
   const yNear = Math.max(left[0][1], right[0][1]), yFar = Math.min(left.at(-1)[1], right.at(-1)[1]);
   const fade = (c0, c1, c2) => {                          // opaque devant soi, transparent au loin
@@ -183,7 +215,7 @@ function drawPath(cam, s, here) {
     ctx.fillStyle = fade("rgba(0,174,204,.80)", "rgba(20,190,200,.62)", "rgba(61,220,151,0)");
     ctx.fill();
     ctx.shadowBlur = 0;
-    const [cl, cr] = bandEdges(cam, pts, 0.3);
+    const [cl, cr] = bandEdges(cam, pts, t.half * 0.35);
     if (cl.length > 1) { bandPath(cl, cr); ctx.fillStyle = fade("rgba(200,255,240,.55)", "rgba(170,250,225,.35)", "rgba(61,220,151,0)"); ctx.fill(); }
     ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = fade("rgba(255,255,255,.75)", "rgba(255,255,255,.35)", "rgba(255,255,255,0)");
     ctx.beginPath(); left.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
@@ -200,7 +232,7 @@ function drawPath(cam, s, here) {
   ctx.save();
   ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.shadowColor = t.glow; ctx.shadowBlur = (t.ribbon ? 8 : 26) * dpr;
-  let acc = 0, next = t.chevGap * 0.6;
+  let acc = 0, next = (pos - from) + CHEV_START_M;      // premier chevron à 2 m devant soi
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1], b = pts[i], seg = Math.hypot(b.x - a.x, b.y - a.y);
     if (!seg) continue;
@@ -211,10 +243,10 @@ function drawPath(cam, s, here) {
       const back = (side) => ({x: c.x - ux * t.chevL / 2 - uy * side * t.chevW / 2, y: c.y - uy * t.chevL / 2 + ux * side * t.chevW / 2, z: c.z});
       const q = [back(1), tip, back(-1)].map(p => cam.toCam(p));
       if (q.every(v => v.d >= NEAR_M)) {
-        const along = next;                              // distance depuis le début du ruban
-        const alpha = Math.max(0, 1 - along / (AHEAD_M - START_M)) ** 0.8;
+        const along = next - (pos - from);               // distance devant soi
+        const alpha = Math.max(0, 1 - along / AHEAD_M) ** 0.8;
         ctx.strokeStyle = `rgba(${t.chevRGB},${alpha.toFixed(3)})`;
-        ctx.lineWidth = Math.max(2 * dpr, Math.min(46 * dpr, cam.scale(q[1].d) * t.chevStroke));
+        ctx.lineWidth = Math.max(1.5 * dpr, Math.min(16 * dpr, cam.scale(q[1].d) * t.chevStroke));
         ctx.beginPath();
         q.forEach((v, k) => { const [x, y] = cam.toScreen(v); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
         ctx.stroke();
@@ -238,7 +270,7 @@ function drawGrid(cam, here, headingDeg) {
     const [x1, y1] = cam.toScreen(c[0]), [x2, y2] = cam.toScreen(c[1]);
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
   };
-  const z = -CAMERA_HEIGHT_M;
+  const z = -camHeight;
   for (let r = -20; r <= 20; r += 4) line({x: rx * r + fx * 1, y: ry * r + fy * 1, z}, {x: rx * r + fx * 120, y: ry * r + fy * 120, z});
   for (let f = 2; f <= 120; f += 6) line({x: rx * -40 + fx * f, y: ry * -40 + fy * f, z}, {x: rx * 40 + fx * f, y: ry * 40 + fy * f, z});
   ctx.restore();
@@ -434,7 +466,7 @@ function routeBearing(s) {
   let ahead = Math.min(15, turnAt - s.nav.pos);
   if (ahead < 3) ahead = 8;
   const a = s.posAt(s.nav.pos), b = s.posAt(Math.min(s.nav.total, s.nav.pos + ahead));
-  if (a.lat === b.lat && a.lon === b.lon) return smoothHeading ?? 0;
+  if (a.lat === b.lat && a.lon === b.lon) return smoothHeading ?? 0;   // (sans boussole : ordinateur, capteurs refusés)
   const k = Math.cos(a.lat * Math.PI / 180);
   return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
 }
@@ -458,22 +490,36 @@ function frame() {
   const dpr = devicePixelRatio, w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
-  const compass = useCompass && sensors.heading !== null;
+  const compass = sensors.heading !== null;
   const heading = smooth(compass ? sensors.heading : routeBearing(s));
   document.documentElement.style.setProperty("--heading", `${heading.toFixed(1)}deg`);
-  const pitch = Math.max(5, Math.min(70, sensors.pitch ?? 10));   // sans capteur : téléphone tenu presque droit
-  const cam = makeCamera(heading, pitch, w, h);
-  const here = s.nav.here;
+  const pitch = Math.max(-30, Math.min(80, sensors.pitch ?? 10));  // sans capteur : téléphone tenu presque droit
+  const cam = makeCamera(heading, pitch, compass ? sensors.roll : 0, w, h);
+  const {here, pos} = viewpoint(s);
   if (!mapFull) {
-    ctx.save();
-    if (sensors.roll) { ctx.translate(w / 2, h / 2); ctx.rotate(-sensors.roll * Math.PI / 180 * 0.5); ctx.translate(-w / 2, -h / 2); }
     if (noCamera) drawGrid(cam, here, heading);
-    drawPath(cam, s, here);
+    drawPath(cam, s, here, pos);
     drawAnchors(cam, s, here);
-    ctx.restore();
   }
   renderUi(s, cam, here, heading, compass);
 }
+// Point de vue : sur l'itinéraire, la position projetée sur le tracé (le ruban part de sous les pieds) ;
+// loin du tracé, la vraie position GPS (le ruban montre où le rejoindre). Glissement doux entre deux mesures GPS.
+let lastView = 0;
+function viewpoint(s) {
+  const n = s.nav, off = n.real && n.offRoute;
+  const target = off ? {lat: n.real.lat, lon: n.real.lon} : n.here;
+  const now = performance.now(), k = 1 - Math.exp(-Math.min(1, (now - lastView) / 1000) / 0.45);
+  lastView = now;
+  if (!view || haversineM(view.here.lat, view.here.lon, target.lat, target.lon) > 40) view = {here: {...target}, pos: n.pos};
+  else {
+    view.here = {lat: view.here.lat + (target.lat - view.here.lat) * k, lon: view.here.lon + (target.lon - view.here.lon) * k};
+    view.pos += (n.pos - view.pos) * k;
+  }
+  if (!off) view.here = s.posAt(view.pos);
+  return view;
+}
+export const currentHeading = () => (arOpen() ? sensors.heading : null);
 
 // ---- Interface (DOM) -----------------------------------------------------------------------------------
 function chip(cls, ic, label, value) {
@@ -490,8 +536,8 @@ function renderUi(s, cam, here, heading, compass) {
   const manIcon = MAN_ICON[st.arrived ? "arrive" : next.maneuver] || "arrow-up";
   const rer = s.nav.rerouted && Date.now() - s.nav.rerouted.at < 10000 ? s.nav.rerouted : null;
   const banner = rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
-    : s.mode === "gps" && s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
-    : s.mode === "gps" && s.gpsInfo ? `<div class="banner info">${icon("locate-fixed")}<span>${esc(s.gpsInfo)}</span></div>` : "";
+    : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
+    : s.gpsInfo ? `<div class="banner ${s.nav.offRoute ? "warn" : "info"}">${icon(s.nav.offRoute ? "route" : "locate-fixed")}<span>${esc(s.gpsInfo)}</span></div>` : "";
   const alt = s.alt;
   const html = `
     <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
@@ -502,9 +548,8 @@ function renderUi(s, cam, here, heading, compass) {
     <div class="dome-ui">
       <div class="next-pill"><span>${icon(manIcon)}</span><b>${st.arrived ? "Arrivé" : dist(st.toManeuver)}</b></div>
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
-      <button class="rose ${compass ? "on" : ""}" data-act="compass" aria-label="Orientation : ${compass ? "boussole" : "sens de l'itinéraire"}">
-        <span class="needle"></span><i>N</i></button>
-      ${s.mode === "sim" ? `<button class="sim-btn" data-act="play" aria-label="${s.playing ? "Pause" : "Marcher"}">${icon(s.playing ? "pause" : "play")}</button>` : ""}
+      <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
+        <span class="needle"></span><i>N</i></div>
     </div>
     <nav class="dock" aria-label="Commandes du guidage">
       <button class="round" data-act="settings" aria-label="Réglages du guidage">${icon("sliders-horizontal")}</button>
@@ -557,10 +602,16 @@ function settingsSheet(s) {
   const seg = (act, opts, cur) => `<div class="seg">${opts.map(([v, l, ic]) =>
     `<button data-act="${act}" data-v="${v}" class="${cur === v ? "on" : ""}">${ic ? icon(ic) : ""}${l}</button>`).join("")}</div>`;
   return `<div class="sheet-head"><h3>${icon("sliders-horizontal")} Réglages du guidage</h3><button class="x" data-act="close-sheet" aria-label="Fermer">${icon("x")}</button></div>
-    <p class="sheet-label">Position</p>${seg("mode", [["sim", "Simulation", "play"], ["gps", "GPS réel", "locate-fixed"]], s.mode)}
-    ${s.mode === "sim" ? `<div class="sheet-row"><button class="btn soft" data-act="play">${icon(s.playing ? "pause" : "play")} ${s.playing ? "Pause" : "Marcher"}</button>
-      ${seg("speed", [[1, "×1"], [5, "×5"], [20, "×20"]], s.factor)}<button class="icon-btn" data-act="rewind" aria-label="Recommencer">${icon("rotate-ccw")}</button></div>` : ""}
-    <p class="sheet-label">Orientation de la vue</p>${seg("orient", [["route", "Sens de l'itinéraire", "route"], ["compass", "Boussole", "compass"]], useCompass ? "compass" : "route")}
+    <p class="sheet-label">Ma position</p>
+    <div class="gps-state">${icon("locate-fixed")}<span>${esc(s.gpsStatus || "Recherche de votre position…")}</span></div>
+    <button class="btn soft" data-act="reroute">${icon("rotate-ccw")} Recalculer l'itinéraire</button>
+    <p class="sheet-label">Vibrations de direction</p>
+    <label class="setting">${icon("vibrate")}<span class="grow">Vibrer pour indiquer la direction</span>
+      <input type="checkbox" class="switch" data-act="haptics" ${s.haptics ? "checked" : ""}></label>
+    <ul class="haptic-legend">
+      <li><b>2 impulsions</b> tournez à gauche</li><li><b>3 impulsions</b> tournez à droite</li>
+      <li><b>5 impulsions rapides</b> mauvais sens : faites demi-tour</li><li><b>1 longue</b> vous êtes arrivé</li></ul>
+    ${s.hapticsNote ? `<p class="fine">${icon("info")} ${esc(s.hapticsNote)}</p>` : ""}
     <p class="sheet-label">Thème</p>
     <div class="themes">${[["verre", "Verre", "Clair, ruban lumineux"], ["neon", "Néon", "Sombre, repères flottants"]].map(([v, l, d]) =>
       `<button class="theme-card ${s.theme === v ? "on" : ""}" data-act="theme" data-v="${v}"><span class="preview pv-${v}"><i></i><i></i><i></i></span><b>${l}</b><small>${d}</small></button>`).join("")}</div>
@@ -579,16 +630,13 @@ function onAction(e) {
   if (!b) return;
   const act = b.dataset.act, v = b.dataset.v;
   if (act === "settings") sheet = "settings";
-  else if (act === "report") { sheet = "report"; sheetMessage = null; api.pause(); }
+  else if (act === "report") { sheet = "report"; sheetMessage = null; }
   else if (act === "close-sheet") sheet = null;
   else if (act === "map") setMapFull(!mapFull);
   else if (act === "hud") api.openHud();
   else if (act === "voice") api.toggleVoice();
-  else if (act === "compass" || act === "orient") useCompass = act === "compass" ? !useCompass : v === "compass";
-  else if (act === "play") api.togglePlay();
-  else if (act === "mode") api.setMode(v);
-  else if (act === "speed") api.setFactor(+v);
-  else if (act === "rewind") api.rewind();
+  else if (act === "reroute") { sheet = null; api.reroute(); }
+  else if (act === "haptics") { api.setHaptics(b.checked); }
   else if (act === "theme") api.setTheme(v);
   else if (act === "blocking") { blocking = b.checked; return; }
   else if (act === "report-kind") { sheetMessage = api.report(v, blocking); setTimeout(() => { if (sheet === "report") { sheet = null; lastUi = ""; } }, 1800); }
@@ -604,8 +652,10 @@ function setMapFull(on) {
 // ---- Ouverture / fermeture ------------------------------------------------------------------------------
 export async function openAR(options) {
   api = options;
-  useCompass = api.state()?.mode === "gps";
-  smoothHeading = null; mapFull = false; sheet = null; lastUi = "";
+  const mob = api.state()?.mobility || "";
+  camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
+  smoothHeading = null; view = null; mapFull = false; sheet = null; lastUi = "";
+  sensors = {heading: null, pitch: null, roll: 0};
   root = document.getElementById("ar");
   root.hidden = false;
   root.className = "";

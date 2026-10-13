@@ -22,11 +22,17 @@ rien n'est envoyé) ; les boutons Google et Apple seront actifs avec de vrais co
    consigne accrochée au prochain virage, repères des obstacles, bordures abaissées, marches, ascenseurs,
    toilettes adaptées… En haut : marches, heure d'arrivée, distance. En bas : mini-carte en dôme avec
    boussole, et la barre de commandes :
-   - ⚙ réglages : **Simulation** (la position avance seule, ×1 ×5 ×20) ou **GPS réel** (sur place à
-     Gennevilliers), orientation (sens de l'itinéraire ou boussole), thème, arrêt ;
+   - ⚙ réglages : état de la position en clair (« Position précise, à 4 m près »), **Recalculer
+     l'itinéraire**, **vibrations de direction**, thème, arrêt ;
    - **Plan** : agrandit la carte ; bouton central : **signaler un obstacle** ; **Lunettes** : vue des
      lunettes connectées ; 🔊 : voix.
    Les repères viennent des données, pas d'une reconnaissance d'image : précision de quelques mètres.
+   Le guidage suit le **GPS** (sur place, à Gennevilliers). Le dessin est calé sur la boussole, l'inclinaison
+   du téléphone et sa hauteur (debout ou en fauteuil). Si l'on s'écarte de l'itinéraire ou si l'on prend
+   une mauvaise rue, un nouvel itinéraire est calculé automatiquement ; en sens inverse, l'appli dit
+   « faites demi-tour ».
+   **Vibrations** : 2 impulsions = à gauche, 3 = à droite, 5 rapides = mauvais sens, 1 longue = arrivé
+   (Android ; sur iPhone, Safari ne donne pas accès au vibreur : de petits « tics » sont tentés).
 5. **Gestes** : glisser depuis le **bord gauche** vers la droite pour revenir en arrière, depuis le
    **bord droit** vers la gauche pour avancer (profil → recherche → démarrer le guidage). Quitter un
    guidage par geste demande une confirmation. Le choix d'itinéraire a un bouton « Fermer » sur le plan

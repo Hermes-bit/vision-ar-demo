@@ -353,7 +353,7 @@ body.nav-ar #panel { display: none; }
 [data-theme="neon"] #ar.no-camera { background: linear-gradient(180deg, #0f3242 0%, #071722 44%, #040b12 44%, #02070b 100%); }
 #ar .ar-ui { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
 #ar .ar-ui button, #ar .sheet, #ar .scrim { pointer-events: auto; }
-.glass, #ar .chip, #ar .bubble, #ar .dock .pill, #ar .dock .round, #ar .banner, #ar .sheet, #ar .rose, #ar .sim-btn {
+.glass, #ar .chip, #ar .bubble, #ar .dock .pill, #ar .dock .round, #ar .banner, #ar .sheet, #ar .rose {
   background: var(--nav-bg); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter);
   border: 1px solid var(--glass-border); box-shadow: var(--shadow); color: var(--nav-ink); }
 
@@ -417,9 +417,6 @@ body.nav-ar #panel { display: none; }
 #ar .rose .needle { position: absolute; width: 6px; height: 34px; transform: rotate(calc(-1 * var(--heading)));
   background: linear-gradient(#E5484D 50%, #A7B7C7 50%); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 #ar .rose i { position: absolute; top: 2px; font-style: normal; font-size: 11px; font-weight: 700; }
-#ar .sim-btn { position: absolute; right: calc(74px + var(--safe-right)); bottom: calc(88px + var(--safe-bottom)); width: 52px; height: 52px; border-radius: 50%;
-  display: grid; place-items: center; }
-#ar .sim-btn .i { width: 24px; height: 24px; }
 #ar .alt-note { display: none; }
 .alt-tag { display: inline-block; white-space: nowrap; transform: translate(-50%, -50%); padding: 4px 10px; border-radius: 999px; font: 700 13px "Atkinson Hyperlegible", sans-serif;
   color: #fff; background: linear-gradient(135deg, #E8457C, #C2389E); box-shadow: 0 4px 12px rgba(194, 56, 158, .45); }
@@ -575,3 +572,11 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
 .social-btn svg { width: 26px; height: 26px; }
 .social-btn.apple { background: #000; color: #fff; }
 .hello { color: var(--muted); font-size: 16px; margin-top: -4px; }
+
+/* Réglages du guidage : état du GPS en clair, légende des vibrations */
+#ar .gps-state { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: var(--surface-2);
+  color: var(--ink); font-size: 16px; line-height: 1.35; }
+#ar .gps-state .i { width: 20px; height: 20px; flex: none; margin-top: 1px; color: var(--primary); }
+#ar .haptic-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 15px; color: var(--ink); }
+#ar .haptic-legend li { padding: 8px 12px; border-radius: 12px; background: var(--surface-2); }
+#ar .haptic-legend b { color: var(--primary); margin-right: 4px; }
