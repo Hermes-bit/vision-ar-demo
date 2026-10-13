@@ -850,8 +850,7 @@ function screenRoute() {
   <div class="pick"><span>${icon("map-pin")} Toucher le plan pour placer</span>
     <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button>
       <button data-pick="dest" class="${S.pick === "dest" ? "on" : ""}">l'arrivée</button></div></div>
-  ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
-    <button class="close-btn" id="closeRoutes" aria-label="Fermer le choix d'itinéraire">${icon("x")}<span>Fermer</span></button></div>` : ""}
+  ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3></div>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`;
@@ -1218,7 +1217,6 @@ function bind() {
   on("steps", "onchange", e => { S.steps = e.target.checked; });
   on("voice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("cont", "onclick", forward);
-  on("closeRoutes", "onclick", back);
   on("install", "onclick", async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); });
   on("toProfile", "onclick", () => go("profile"));
   on("gpsHere", "onclick", useMyPosition);

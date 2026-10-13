@@ -499,9 +499,6 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 /* ---- Choix d'itinéraire : bouton « Fermer » bien visible --------------------------------------- */
 .routes-head { display: flex; align-items: center; gap: 10px; }
 .routes-head h3 { flex: 1; color: var(--primary); }
-.close-btn { min-height: 48px; padding: 0 16px 0 12px; border-radius: 999px; border: 0; background: var(--ink); color: var(--bg);
-  font-weight: 700; font-size: 16px; display: inline-flex; align-items: center; gap: 6px; flex: none; box-shadow: var(--shadow); }
-.close-btn .i { width: 20px; height: 20px; stroke-width: 2.6; }
 .map-close { position: fixed; top: calc(12px + var(--safe-top)); right: calc(12px + var(--safe-right)); z-index: 520;
   height: 52px; padding: 0 18px 0 14px; border-radius: 999px; border: 2px solid rgba(255, 255, 255, .85); background: #0F2537; color: #fff;
   font-weight: 700; font-size: 16px; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 8px 24px rgba(6, 20, 32, .45); }

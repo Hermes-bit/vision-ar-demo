@@ -484,7 +484,8 @@ export function computeRoutes(net, req, reports = []) {
     // Le plus court en respectant le profil PMR : Dijkstra sur la distance, avec les mêmes interdits
     let shortAcc = null;
     try { shortAcc = engineRoute(net, origin, dest, profile, reports, "length"); } catch (e) { if (!(e instanceof RoutingError)) throw e; }
-    if (shortAcc && ids(shortAcc) !== ids(best)) routes.push(out(net, shortAcc, "Le plus court accessible", true, []));
+    // proposé seulement s'il est vraiment plus court (au moins 10 m) que le plus accessible
+    if (shortAcc && ids(shortAcc) !== ids(best) && shortAcc.length_m < best.length_m - 10) routes.push(out(net, shortAcc, "Le plus court accessible", true, []));
     // Le plus court sans adaptation (pour comparer : souvent impraticable en fauteuil)
     let shortest = null;
     try { shortest = engineRoute(net, origin, dest, preset("pedestrian"), reports); } catch (e) { if (!(e instanceof RoutingError)) throw e; }
