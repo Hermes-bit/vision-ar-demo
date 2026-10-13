@@ -593,6 +593,9 @@ function renderUi(s, heading, compass) {
   const ui = root.querySelector(".ar-ui");
   if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
   root.classList.toggle("sheet-open", !!sheet);
+  // carte agrandie : elle s'arrête sous la consigne, pour que la poignée reste visible et attrapable
+  const topH = `${Math.round(root.querySelector(".top").getBoundingClientRect().bottom)}px`;
+  if (root.style.getPropertyValue("--top-h") !== topH) root.style.setProperty("--top-h", topH);
   placeNorth(heading);
 }
 // Bord du dôme : une seule ellipse sert à découper la carte, à tracer l'anneau et à placer le « N »
@@ -639,7 +642,7 @@ function bindGrip() {
   grip.addEventListener("pointermove", e => {
     if (y0 === null) return;
     moved = e.clientY - y0;
-    const max = root.clientHeight - 64;
+    const max = root.clientHeight - root.querySelector(".top").getBoundingClientRect().bottom - 12;
     dome.style.height = `${Math.max(120, Math.min(max, h0 - moved)).toFixed(0)}px`;
     layoutDome();
   });

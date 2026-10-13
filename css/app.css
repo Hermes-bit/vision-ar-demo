@@ -410,9 +410,9 @@ body.nav-ar #panel { display: none; }
 [data-theme="neon"] #ar .ring-arc { stroke: #5BE0EA; }
 #ar .ring-n { position: absolute; transform: translate(-50%, -50%); font-weight: 700; font-size: 18px; color: #fff; text-shadow: 0 0 8px #2F80ED, 0 0 2px #000;
   transition: opacity .2s; }
-#ar.map-full .dome { height: calc(100% - 64px - var(--safe-top)); }
+#ar.map-full .dome { height: calc(100% - var(--top-h, 220px) - 12px); }
 #ar .dome-ui { position: absolute; left: 0; right: 0; bottom: 0; height: calc(min(36vh, 330px) + var(--safe-bottom)); z-index: 4; pointer-events: none; }
-#ar.map-full .dome-ui { height: calc(100% - 64px - var(--safe-top)); }
+#ar.map-full .dome-ui { height: calc(100% - var(--top-h, 220px) - 12px); }
 #ar .rose { position: absolute; right: calc(14px + var(--safe-right)); bottom: calc(88px + var(--safe-bottom)); width: 52px; height: 52px; border-radius: 50%;
   display: grid; place-items: center; }
 #ar .rose.on { outline: 3px solid var(--route); }
