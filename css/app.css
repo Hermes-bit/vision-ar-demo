@@ -525,6 +525,8 @@ body:not(.sheet) .map-settings { display: none; }
 .set-info[open] summary > .i:last-child { transform: rotate(90deg); }
 .set-text { padding: 0 0 12px 36px; color: var(--ink); font-size: 15px; display: flex; flex-direction: column; gap: 8px; }
 .set-version { justify-content: center; text-align: center; }
+.set-check { color: var(--primary); display: grid; place-items: center; }
+.set-row[aria-pressed="true"] { font-weight: 700; }
 
 /* ---- Glisser depuis un bord : retour / suivant ---------------------------------------------------- */
 .swipe-hint { position: fixed; top: 50%; z-index: 1400; width: 64px; height: 64px; margin-top: -32px; border-radius: 50%;

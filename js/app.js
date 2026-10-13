@@ -140,11 +140,36 @@ function toast(text, ms = 3500) {
 
 // ---- Carte ---------------------------------------------------------------------------------
 const map = L.map("map", {zoomControl: false, preferCanvas: true}).setView([MAIRIE.lat, MAIRIE.lon], 16);
-// keepBuffer : quelques tuiles d'avance autour de l'écran, pour que la carte qui suit vos pas ne montre pas de trou
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19, keepBuffer: 4, updateWhenIdle: false,
-  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · relief © IGN'}).addTo(map);
+// Fonds de carte au choix (Paramètres). Google Maps et Plans d'Apple ne sont pas proposés : leurs conditions
+// imposent leurs propres kits (clé payante / compte développeur) et interdisent de reprendre leurs tuiles ici.
+const IGN_WMTS = layer => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}`;
+const OSM_ATTR = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const BASEMAPS = {
+  osm: {label: "OpenStreetMap", sub: "Plan détaillé : trottoirs, passages piétons, commerces",
+        url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19, attribution: `${OSM_ATTR} · relief © IGN`},
+  ign: {label: "Plan IGN", sub: "Carte officielle française, lisible et sobre",
+        url: IGN_WMTS("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png"), maxZoom: 19, attribution: "© IGN · réseau © OpenStreetMap"},
+  ortho: {label: "Photos aériennes", sub: "Vue du ciel (IGN), comme le mode satellite",
+          url: IGN_WMTS("ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg"), maxZoom: 19, attribution: "Photos © IGN · réseau © OpenStreetMap"},
+  voyager: {label: "Épuré", sub: "Style clair et simple, proche de Google Maps ou Plans",
+            url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", maxZoom: 19, subdomains: "abcd",
+            attribution: `${OSM_ATTR} · © <a href="https://carto.com/attributions">CARTO</a>`},
+};
+let baseLayer = null;
+function setBasemap(key) {
+  const b = BASEMAPS[key] || BASEMAPS.osm;
+  S.basemap = BASEMAPS[key] ? key : "osm";
+  store.set("va-basemap", S.basemap);
+  baseLayer?.remove();
+  // keepBuffer : quelques tuiles d'avance autour de l'écran, pour que la carte qui suit vos pas ne montre pas de trou
+  baseLayer = L.tileLayer(b.url, {maxZoom: b.maxZoom, subdomains: b.subdomains || "abc", keepBuffer: 4, updateWhenIdle: false,
+    attribution: b.attribution}).addTo(map);
+  baseLayer.bringToBack();
+}
 // Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
 map.attributionControl.setPosition("topright");
+// après le déplacement de la mention (sinon Leaflet compte deux fois la source du premier fond)
+setBasemap(store.get("va-basemap", "osm"));
 const layers = {progress: L.layerGroup().addTo(map), transit: L.layerGroup().addTo(map), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 
@@ -754,6 +779,12 @@ function screenSettings() {
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
+  <section class="card"><h3>${icon("map")} Fond de carte</h3>
+    ${Object.entries(BASEMAPS).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
+      <span class="grow">${b.label}<small>${b.sub}</small></span>${S.basemap === k ? `<span class="set-check">${icon("check")}</span>` : ""}</button>`).join("")}
+    <p class="fine">${icon("info")} Google Maps et Plans (Apple) ne peuvent pas être proposés gratuitement : leurs conditions d'utilisation
+      exigent leurs propres outils, avec une clé payante ou un compte développeur Apple.</p>
+  </section>
   <section class="card"><h3>${icon("scan-eye")} Obstacles vus par la caméra</h3>
     ${sw("setDetect", "scan-eye", "Détecter les obstacles (expérimental)", S.detect)}
     <p class="fine">${icon("info")} Télécharge un modèle de 6 Mo à la première utilisation. Reconnaît déjà : vélos, deux-roues, voitures,
@@ -1203,6 +1234,7 @@ function bind() {
   on("setProfile", "onclick", () => go("profile"));
   on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
+  all("[data-basemap]", b => b.onclick = () => { setBasemap(b.dataset.basemap); render(); });
   on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
   on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
