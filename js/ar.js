@@ -450,11 +450,12 @@ function drawAnchors(cam, s, here) {
   const rank = a => a.obstacle ? 0 : a.place || a.poi ? 2 : 1;   // obstacles d'abord, puis le trajet, puis les lieux
   const anchors = anchorsAhead(s).sort((a, b) => rank(a) - rank(b) || a.ahead - b.ahead).slice(0, 10);
   const taken = reservedAreas(), toDraw = [];
+  const topLimit = (root.querySelector(".top")?.getBoundingClientRect().bottom ?? 0) * dpr + 6 * dpr;
   for (const a of anchors) {
     const c = cam.toCam(enu(here, a.at));
     if (c.d < 2) continue;
     const [x, y] = cam.toScreen(c);
-    if (x < -60 * dpr || x > w + 60 * dpr || y < 0 || y > h) continue;
+    if (x < -60 * dpr || x > w + 60 * dpr || y < topLimit || y > h) continue;
     // taille de la goutte : selon la distance, mais jamais sous les pastilles ou l'alerte du haut
     const ceiling = Math.max(0, ...taken.filter(t => t.ui && !t.bubble && t.top + t.h <= y).map(t => t.top + t.h));
     const H = Math.min(Math.max(70 * dpr, Math.min(240 * dpr, cam.scale(c.d) * 3.2)), y - ceiling - 12 * dpr);
@@ -475,7 +476,7 @@ function drawAnchors(cam, s, here) {
         labelY = t.top - 8 * dpr;
         est.top = labelY - 36 * dpr; est.h = 36 * dpr;
       }
-      if (taken.some(hit) || est.top < ceiling) continue;
+      if (taken.some(hit) || est.top < Math.max(ceiling, topLimit)) continue;
     } else if (taken.some(t => hit(t) && !t.bubble)) continue;       // une goutte peut passer derrière la bulle
     taken.push(est);
     toDraw.push(() => neon ? glassPin(x, y, a, H) : glassLabel(x, labelY, a, y));
@@ -518,13 +519,58 @@ function frame() {
   const roll = compass ? ((F.roll.filter(sensors.roll + 180, now) + 360) % 360) - 180 : 0;
   const cam = makeCamera(heading, pitch, roll, w, h);
   const v = viewpoint(s);
+  updateArrowMode(s, compass);
   if (!mapFull) {
     if (noCamera) drawGrid(cam, v.here, heading);
-    if (v.join) drawJoin(cam, v.here, v.join);
-    drawPath(cam, s, v.here, v.pos);
+    if (arrowMode) drawGroundArrow(heading, arrowBearing(s));
+    else {
+      if (v.join) drawJoin(cam, v.here, v.join);
+      drawPath(cam, s, v.here, v.pos);
+    }
     drawAnchors(cam, s, v.here);
   }
   renderUi(s, heading, compass);
+}
+// Mode flèche : quand le GPS n'est pas assez précis pour poser le ruban au bon endroit (en ville, souvent
+// 10 à 30 m d'erreur), on n'affiche pas un tracé faux. Une grande flèche au sol, devant soi, indique la
+// direction à prendre : elle ne dépend que de la boussole, elle reste juste même si la position est approximative.
+// Passage en flèche au-delà de 12 m d'incertitude ; retour au ruban sous 8 m, stable pendant 3 s.
+let arrowMode = false, preciseSince = 0;
+function updateArrowMode(s, compass) {
+  const r = s.nav.real, acc = r && Date.now() - r.at < 15000 ? r.acc : null;
+  if (!compass) { arrowMode = false; return; }                 // ordinateur : pas de boussole, pas de flèche
+  if (acc === null || acc > 12) { arrowMode = true; preciseSince = 0; return; }
+  if (acc <= 8) {
+    preciseSince ||= performance.now();
+    if (performance.now() - preciseSince > 3000) arrowMode = false;
+  } else preciseSince = 0;
+}
+// Direction de la flèche : vers le point où rejoindre l'itinéraire, ou le long de l'itinéraire, 15 m devant
+function arrowBearing(s) {
+  const n = s.nav, fresh = n.real && Date.now() - n.real.at < 15000;
+  let a = s.posAt(n.pos), b = s.posAt(Math.min(n.total, n.pos + 15));
+  if (fresh && (n.offRoute || n.away)) { a = n.real; b = s.posAt(n.gapAlong ?? n.pos); }
+  else if (fresh && haversineM(n.real.lat, n.real.lon, b.lat, b.lon) > 4) a = n.real;
+  const k = Math.cos(a.lat * Math.PI / 180);
+  return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
+}
+function drawGroundArrow(heading, bearing) {
+  // Flèche dessinée à l'écran, couchée « au sol » par un aplatissement vertical : toujours lisible,
+  // même téléphone penché, et elle ne prétend pas à une position précise.
+  const t = theme(), dpr = devicePixelRatio, W = canvas.width, H = canvas.height;
+  const rel = ((bearing - heading + 540) % 360) - 180, size = Math.min(W, H) * 0.26;
+  const domeTop = (root.querySelector(".dome")?.getBoundingClientRect().top ?? H / dpr * 0.65) * dpr;
+  const topBottom = (root.querySelector(".top")?.getBoundingClientRect().bottom ?? 0) * dpr;
+  const cx = W / 2, cy = Math.max(topBottom + size, domeTop - size * 0.95);
+  ctx.save();
+  ctx.translate(cx, cy); ctx.scale(1, 0.58); ctx.rotate(rel * Math.PI / 180);
+  const L = size, path = [[-0.2, 0.95], [-0.2, 0.05], [-0.5, 0.05], [0, -0.95], [0.5, 0.05], [0.2, 0.05], [0.2, 0.95]];
+  ctx.beginPath(); path.forEach(([x, y], k) => k ? ctx.lineTo(x * L, y * L) : ctx.moveTo(x * L, y * L)); ctx.closePath();
+  ctx.shadowColor = t.glow; ctx.shadowBlur = 28 * dpr;
+  ctx.fillStyle = t.ribbon ? "rgba(0,174,204,.9)" : "rgba(91,224,234,.6)";
+  ctx.fill();
+  ctx.shadowBlur = 0; ctx.lineWidth = 4 * dpr; ctx.lineJoin = "round"; ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.stroke();
+  ctx.restore();
 }
 // Point de vue : sur l'itinéraire, la position projetée sur le tracé (le ruban part de sous les pieds).
 // À l'écart du tracé (à l'intérieur, de l'autre côté de la rue, hors itinéraire), la vraie position GPS :
@@ -574,6 +620,7 @@ function renderUi(s, heading, compass) {
       <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
       <div class="bubble" role="status" aria-live="polite"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
+        ${arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative : suivez la flèche au sol</em>` : ""}
         ${!st.arrived && !joining && next.alerts.some(a => !a.startsWith("Traversée")) ? `<em>${icon("triangle-alert")} ${esc(next.alerts.filter(a => !a.startsWith("Traversée")).join(" · "))}</em>` : ""}</div>
         ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}</div>
       ${banner}
@@ -727,7 +774,7 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  view = null; mapFull = false; sheet = null; lastUi = "";
+  view = null; mapFull = false; sheet = null; lastUi = ""; arrowMode = false; preciseSince = 0;
   Object.values(F).forEach(f => f.reset());
   sensors = {heading: null, pitch: null, roll: 0};
   root = document.getElementById("ar");

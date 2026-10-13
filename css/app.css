@@ -392,6 +392,7 @@ body.nav-ar #panel { display: none; }
 [data-theme="neon"] #ar .bubble span { color: #B9D3DE; }
 #ar .bubble em { font-style: normal; font-size: 13px; font-weight: 700; color: var(--warn); display: flex; align-items: center; gap: 4px; margin-top: 2px; }
 #ar .bubble em .i { width: 14px; height: 14px; }
+#ar .bubble em.arrow-note { color: var(--primary); }
 #ar .bubble-ic { flex: none; width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
   background: var(--accent-grad); color: #04222B; box-shadow: 0 4px 12px rgba(0, 174, 204, .45); }
 #ar .bubble-ic .i { width: 28px; height: 28px; stroke-width: 2.6; }
