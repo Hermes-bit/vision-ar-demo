@@ -516,6 +516,7 @@ function renderUi(s, cam, here, heading, compass) {
     ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : reportSheet()}</section>` : ""}`;
   const ui = root.querySelector(".ar-ui");
   if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
+  root.classList.toggle("sheet-open", !!sheet);
   placeBubble(s, cam, here);
   placeNorth(heading);
 }
