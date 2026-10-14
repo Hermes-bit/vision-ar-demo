@@ -230,12 +230,25 @@ const logoDir = (k = S.logo) => k === "vert" ? "icons/" : `icons/logos/${k}/`;
 function setLogo(k) {
   S.logo = LOGOS[k] ? k : "vert";
   store.set("va-logo", S.logo);
-  // l'iPhone et Android lisent ces liens au moment d'ajouter l'appli à l'écran d'accueil
-  document.querySelector('link[rel="manifest"]').href = (S.logo === "vert" ? "manifest.webmanifest" : `manifest-${S.logo}.webmanifest`) + "?v=3";
-  document.querySelectorAll('link[rel="apple-touch-icon"], link[rel="icon"]').forEach(l => {
-    l.href = logoDir() + l.getAttribute("href").split("/").pop();
-  });
+  const manifest = document.querySelector('link[rel="manifest"]');          // absent sur iPhone (voir index.html)
+  if (manifest) manifest.href = (S.logo === "vert" ? "manifest.webmanifest" : `manifest-${S.logo}.webmanifest`) + "?v=3";
+  document.querySelector('link[rel="icon"]').href = `${logoDir()}favicon-32.png?v=3`;
+  embedLogo();
 }
+// L'icône d'écran d'accueil est intégrée à la page (data:) : l'appli lit elle-même le fichier, ce qui marche
+// là où le téléchargement fait par l'iPhone au moment de l'ajout échoue
+async function embedLogo() {
+  const link = $("touchIcon"), logo = S.logo;
+  if (!link) return;
+  try {
+    const blob = await fetch(`${logoDir(logo)}apple-touch-icon.png?v=3`).then(r => r.blob());
+    const data = await new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = ko; fr.readAsDataURL(blob); });
+    if (S.logo !== logo) return;                          // un autre logo a été choisi entre-temps
+    link.href = data;
+    try { logo === "vert" ? localStorage.removeItem("va-logo-icon") : localStorage.setItem("va-logo-icon", data); } catch { /* navigation privée */ }
+  } catch { /* hors ligne : on réessaiera au prochain lancement */ }
+}
+if (S.logo !== "vert") embedLogo();                     // copie intégrée remise à jour à chaque lancement
 // Mention des sources (exigée par les licences des fonds) : recopiée dans une bande fixe en bas de l'écran,
 // toujours lisible par-dessus le panneau. Celle de Leaflet ne sert plus qu'à la mini-carte du guidage caméra.
 map.attributionControl.setPosition("topright");
