@@ -72,6 +72,10 @@ p { margin: 0; }
 .muted { color: var(--muted); font-size: 15px; display: flex; gap: 8px; align-items: flex-start; }
 .muted .i { width: 18px; height: 18px; margin-top: 2px; }
 
+/* Barres de défilement masquées partout : le défilement au doigt, à la molette et au clavier reste actif */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
 /* ---- Mise en page : plan en haut, panneau en bas (portrait) --------------------------------- */
 #map { position: fixed; left: 0; right: 0; top: 0; height: 40vh; height: 40dvh; z-index: 0; background: var(--surface-2); }
 #panel { position: fixed; left: 0; right: 0; bottom: 0; top: calc(40vh - 20px); top: calc(40dvh - 20px);
@@ -206,6 +210,17 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 .search:focus-within { border-color: var(--primary); background: var(--surface); }
 .search input { border: 0; outline: 0; background: transparent; width: 100%; font-size: 17px; color: var(--ink); min-height: 48px; }
 .search input::placeholder { color: var(--muted); }
+.search input { -webkit-appearance: none; appearance: none; }
+.search input::-webkit-search-cancel-button, .search input::-webkit-search-decoration { -webkit-appearance: none; display: none; }
+/* Croix « effacer » : pastille ronde aux couleurs de l'appli, zone tactile de 44 px */
+.search-clear { flex: none; display: grid; place-items: center; width: 44px; height: 44px; margin-right: -8px; padding: 0; border: 0;
+  background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.search-clear[hidden] { display: none; }
+.search-clear .i { width: 26px; height: 26px; padding: 5px; border-radius: 50%; background: var(--primary-soft); color: var(--primary);
+  stroke-width: 2.6; transition: transform .15s ease, background .15s ease; }
+.search-clear:active .i { transform: scale(.88); background: var(--primary); color: var(--on-primary); }
+.search-clear:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: 50%; }
+.places-box { display: contents; }
 .places { -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); outline: 1px solid var(--glass-border); outline-offset: -1px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .place { width: 100%; min-height: 60px; border: 0; background: transparent; display: flex; align-items: center; gap: 12px; padding: 8px 14px; text-align: left; }
 .place + .place { border-top: 1px solid var(--hair); }
@@ -312,8 +327,23 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 10px rgba(0, 174, 204, 0); background: rgba(0, 174, 204, .4); } }
 @media (prefers-reduced-motion: reduce) { .me { animation: none; } * { transition: none !important; } }
 .leaflet-control-attribution { border-radius: 0 0 0 8px; font-size: 11px; }
-/* sous la rangée des boutons ⚙ et « Fermer » */
-.leaflet-top.leaflet-right { top: calc(var(--safe-top) + 72px); }
+/* Mention des sources : bande fixe en bas de l'écran (voir app.js) ; sur le plan, seulement dans la vue caméra */
+body .leaflet-control-attribution { display: none; }
+#ar .leaflet-control-attribution { display: block; }
+.map-credits { position: fixed; left: 0; right: 0; bottom: 0; z-index: 502; pointer-events: auto;
+  padding: 3px calc(10px + var(--safe-right)) calc(3px + var(--safe-bottom)) calc(10px + var(--safe-left));
+  font-size: 11px; line-height: 16px; text-align: center; color: var(--muted); background: var(--bg);
+  border-top: 1px solid var(--hair); }
+.map-credits a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.map-credits .leaflet-attribution-flag { display: none !important; }   /* petit drapeau de Leaflet : inutile ici */
+body.full .map-credits { display: none; }
+/* le bas du panneau laisse la place à la bande */
+body:not(.full) #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom) + 24px); }
+body.sheet::after { display: none; }
+@media (orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px) {
+  .map-credits { left: var(--side); border-top: 0; border-radius: 8px 0 0 0; background: color-mix(in srgb, var(--bg) 85%, transparent); }
+  body:not(.full) #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom)); }
+}
 /* carte du dôme (guidage) : la mention reste en bas, dans la partie visible */
 #ar .leaflet-top.leaflet-right { top: auto; bottom: 0; }
 #ar .leaflet-control-attribution { border-radius: 8px 0 0 0; }

@@ -222,8 +222,15 @@ new ResizeObserver(() => {
   cancelAnimationFrame(mapResizeFrame);
   mapResizeFrame = requestAnimationFrame(() => map.invalidateSize());
 }).observe(document.getElementById("map"));
-// Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
+// Mention des sources (exigée par les licences des fonds) : recopiée dans une bande fixe en bas de l'écran,
+// toujours lisible par-dessus le panneau. Celle de Leaflet ne sert plus qu'à la mini-carte du guidage caméra.
 map.attributionControl.setPosition("topright");
+const credits = document.createElement("div");
+credits.id = "mapCredits";
+credits.className = "map-credits";
+document.body.append(credits);
+new MutationObserver(() => { credits.innerHTML = map.attributionControl.getContainer().innerHTML; })
+  .observe(map.attributionControl.getContainer(), {childList: true, subtree: true, characterData: true});
 // après le déplacement de la mention (sinon Leaflet compte deux fois la source du premier fond)
 setBasemap(store.get("va-basemap", "osm"));
 const layers = {progress: L.layerGroup().addTo(map), transit: L.layerGroup().addTo(map), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
@@ -463,14 +470,14 @@ function useMyPosition() {
 let searchTimer = null;
 function search(q) {
   clearTimeout(searchTimer);
-  if (q.trim().length < 3) { S.places = []; return renderKeepFocus(); }
+  if (q.trim().length < 3) { S.places = []; return renderPlaces(); }
   searchTimer = setTimeout(async () => {
     // 1) lieux, stations, arrêts et commerces connus de l'appli (instantané, hors ligne)
     const local = net ? searchPlaces(q, {places: net.places, stops: transit, streetOf, from: S.origin}).map(r => ({
       label: r.label, lat: r.lat, lon: r.lon, type: "poi", kind: r.kind, icon: r.icon, color: r.color,
       sub: `${r.typeLabel}${r.rue ? " · " + r.rue : ""} · ${short(r.dist)}`})) : [];
     S.places = local;
-    renderKeepFocus();
+    renderPlaces();
     // 2) adresses (Géoplateforme IGN en France, Photon / OpenStreetMap ailleurs), ajoutées à la suite
     try {
       const url = ZONE.france
@@ -489,7 +496,7 @@ function search(q) {
     } catch {
       if (!local.length) toast("Recherche d'adresse impossible (hors ligne ?) : touchez le plan pour choisir l'arrivée.");
     }
-    renderKeepFocus();
+    renderPlaces();
   }, 300);
 }
 const norm2 = t => String(t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -916,12 +923,11 @@ function screenRoute() {
       <button class="icon-btn" id="gpsHere" aria-label="Partir de ma position">${icon("locate-fixed")}</button></div>
     <div class="trip-line" aria-hidden="true"></div>
     <div class="trip-row"><span class="trip-dot end" aria-hidden="true"></span>
-      <label class="search grow">${icon("search")}<input type="text" id="q" placeholder="Adresse, lieu, station, commerce…"
-        value="${esc(S.query)}" autocomplete="off" enterkeyhint="search" aria-label="Destination"></label></div>
+      <label class="search grow">${icon("search")}<input type="search" id="q" placeholder="Adresse, lieu, station, commerce…"
+        value="${esc(S.query)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Destination">
+        <button type="button" class="search-clear" id="qClear" aria-label="Effacer la saisie" ${S.query ? "" : "hidden"}>${icon("x")}</button></label></div>
   </div>
-  ${S.places.length ? `<div class="places">${S.places.map((p, i) => `<button class="place" data-place="${i}">
-      <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
-      ${icon("chevron-right")}</button>`).join("")}</div>` : ""}
+  <div id="placesBox" class="places-box">${placesHtml()}</div>
   <div class="pick"><span>${icon("map-pin")} Toucher le plan pour placer</span>
     <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button>
       <button data-pick="dest" class="${S.pick === "dest" ? "on" : ""}">l'arrivée</button></div></div>
@@ -929,6 +935,20 @@ function screenRoute() {
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`;
+}
+// Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
+// sinon le clavier perd des lettres et l'appui long sur « effacer » s'arrête à chaque caractère)
+function placesHtml() {
+  return S.places.length ? `<div class="places">${S.places.map((p, i) => `<button class="place" data-place="${i}">
+      <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
+      ${icon("chevron-right")}</button>`).join("")}</div>` : "";
+}
+function renderPlaces() {
+  const box = $("placesBox");
+  if (!box) return;
+  box.innerHTML = placesHtml();
+  box.querySelectorAll("[data-place]").forEach(p => p.onclick = () => chooseDest(S.places[+p.dataset.place]));
+  layoutSheet();
 }
 function routeCard(r, i) {
   const min = Math.ceil(r.duration_s / 60);
@@ -1139,12 +1159,6 @@ const authCtx = {
     toast(`Bienvenue ${currentSession()?.name.split(" ")[0] || ""} !`);
   },
 };
-function renderKeepFocus() {
-  const q = $("q"), pos = q?.selectionStart;
-  render();
-  const q2 = $("q");
-  if (q2 && q) { q2.focus(); q2.setSelectionRange(pos, pos); }
-}
 function renderNavLive() {
   renderHud();
   const n = S.nav;
@@ -1298,7 +1312,10 @@ function bind() {
   on("install", "onclick", async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); });
   on("toProfile", "onclick", () => go("profile"));
   on("gpsHere", "onclick", useMyPosition);
-  on("q", "oninput", e => { S.query = e.target.value; search(S.query); });
+  on("q", "oninput", e => { S.query = e.target.value; $("qClear").hidden = !S.query; search(S.query); });
+  // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
+  on("qClear", "onmousedown", e => e.preventDefault());
+  on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
   on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
   all("[data-place]", p => p.onclick = () => chooseDest(S.places[+p.dataset.place]));
