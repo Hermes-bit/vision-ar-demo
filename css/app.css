@@ -731,3 +731,11 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
   @keyframes stk-in { from { opacity: 0; } to { opacity: 1; transform: rotate(-6deg); } }
   @keyframes stk-out { from { opacity: 1; transform: rotate(-6deg); } to { opacity: 0; transform: rotate(-6deg); } }
 }
+
+/* ---- Choix du logo (Paramètres) ---------------------------------------------------------------- */
+.logos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.logo-pick { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px 8px; border-radius: 16px;
+  border: 2px solid transparent; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.logo-pick img { width: 100%; max-width: 64px; height: auto; border-radius: 14px; }
+.logo-pick.on { border-color: var(--primary); background: var(--primary-soft); }
+.logo-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }

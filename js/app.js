@@ -50,6 +50,7 @@ const S = {
   voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", false), detectDebug: store.get("va-detect-debug", false),
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
+  logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
 let net = null, transit = [], streetOf = () => null;
 let installPrompt = null;
@@ -223,6 +224,18 @@ new ResizeObserver(() => {
   cancelAnimationFrame(mapResizeFrame);
   mapResizeFrame = requestAnimationFrame(() => map.invalidateSize());
 }).observe(document.getElementById("map"));
+// Logo de l'appli (écran d'accueil) : dossier icons/logos/<nom>/ ; « vert » = icônes par défaut à la racine de icons/
+const LOGOS = {vert: "Vert", soleil: "Soleil", nuit: "Nuit", pastille: "Pastille"};
+const logoDir = (k = S.logo) => k === "vert" ? "icons/" : `icons/logos/${k}/`;
+function setLogo(k) {
+  S.logo = LOGOS[k] ? k : "vert";
+  store.set("va-logo", S.logo);
+  // l'iPhone et Android lisent ces liens au moment d'ajouter l'appli à l'écran d'accueil
+  document.querySelector('link[rel="manifest"]').href = S.logo === "vert" ? "manifest.webmanifest" : `manifest-${S.logo}.webmanifest`;
+  document.querySelectorAll('link[rel="apple-touch-icon"], link[rel="icon"]').forEach(l => {
+    l.href = logoDir() + l.getAttribute("href").split("/").pop();
+  });
+}
 // Mention des sources (exigée par les licences des fonds) : recopiée dans une bande fixe en bas de l'écran,
 // toujours lisible par-dessus le panneau. Celle de Leaflet ne sert plus qu'à la mini-carte du guidage caméra.
 map.attributionControl.setPosition("topright");
@@ -793,7 +806,7 @@ function screenProfile() {
       <input type="checkbox" class="switch" id="${id}" ${on ? "checked" : ""}></label>`;
   return `<header class="hero stk-host">
     <div class="brand">${profileReturn || store.get("va-profile", null) ? `<button class="icon-btn" id="profileBack" aria-label="Retour">${icon("arrow-left")}</button>` : ""}
-      <img src="icons/icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
+      <img src="${logoDir()}icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
       <button class="btn soft small" id="logout" aria-label="Se déconnecter">${icon("log-out")} Déconnexion</button></div>
     ${currentSession() ? `<p class="hello">Bonjour ${esc(currentSession().name.split(" ")[0])}&nbsp;!</p>` : ""}
     <h1>Comment vous déplacez-vous&nbsp;?</h1>
@@ -849,6 +862,14 @@ function screenSettings() {
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
+  <section class="card"><h3>${icon("smartphone")} Logo sur l'écran d'accueil</h3>
+    <div class="logos" role="group" aria-label="Logo de l'appli">
+      ${Object.entries(LOGOS).map(([k, label]) => `<button class="logo-pick ${S.logo === k ? "on" : ""}" data-logo="${k}" aria-pressed="${S.logo === k}">
+        <img src="icons/logos/${k}/apercu.png" alt="" width="64" height="64"><span>${label}</span></button>`).join("")}</div>
+    <p class="fine">${icon("info")} Le logo choisi est repris quand vous ajoutez l'appli à l'écran d'accueil. Si elle y est déjà :
+      supprimez l'icône, rechargez cette page, puis ajoutez-la de nouveau (${/iphone|ipad|ipod/i.test(navigator.userAgent)
+        ? "bouton Partager, puis « Sur l'écran d'accueil »" : "menu ⋮, puis « Ajouter à l'écran d'accueil »"}).</p>
+  </section>
   <section class="card"><h3>${icon("map")} Fond de carte</h3>
     ${Object.entries(BASEMAPS).filter(([k]) => basemapAvailable(k)).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
       <span class="grow">${b.label}<small>${b.sub}</small></span>${S.basemap === k ? `<span class="set-check">${icon("check")}</span>` : ""}</button>`).join("")}
@@ -1367,6 +1388,7 @@ function bind() {
     location.reload();                                     // tout l'état dépend de la zone : on repart proprement
   });
   all("[data-basemap]", b => b.onclick = () => { setBasemap(b.dataset.basemap); render(); });
+  all("[data-logo]", b => b.onclick = () => { setLogo(b.dataset.logo); render(); toast(`Logo « ${LOGOS[S.logo]} » choisi pour l'écran d'accueil.`); });
   on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
   on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
