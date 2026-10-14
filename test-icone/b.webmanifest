@@ -1,0 +1,14 @@
+{
+  "id": "test-icone-b",
+  "name": "Test B",
+  "short_name": "Test B",
+  "start_url": "b.html",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#0F2A3D",
+  "background_color": "#0F2A3D",
+  "icons": [
+    {"src": "https://hermes-bit.github.io/vision-ar-demo/icons/apple-touch-icon.png?v=4", "sizes": "180x180", "type": "image/png", "purpose": "any"},
+    {"src": "https://hermes-bit.github.io/vision-ar-demo/icons/icon-512.png?v=4", "sizes": "512x512", "type": "image/png", "purpose": "any"}
+  ]
+}
