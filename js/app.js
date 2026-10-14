@@ -231,7 +231,7 @@ function setLogo(k) {
   S.logo = LOGOS[k] ? k : "vert";
   store.set("va-logo", S.logo);
   // l'iPhone et Android lisent ces liens au moment d'ajouter l'appli à l'écran d'accueil
-  document.querySelector('link[rel="manifest"]').href = S.logo === "vert" ? "manifest.webmanifest" : `manifest-${S.logo}.webmanifest`;
+  document.querySelector('link[rel="manifest"]').href = (S.logo === "vert" ? "manifest.webmanifest" : `manifest-${S.logo}.webmanifest`) + "?v=3";
   document.querySelectorAll('link[rel="apple-touch-icon"], link[rel="icon"]').forEach(l => {
     l.href = logoDir() + l.getAttribute("href").split("/").pop();
   });

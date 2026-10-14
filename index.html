@@ -7,12 +7,13 @@
 <meta name="description" content="Guidage piéton accessible — Gennevilliers et Ouagadougou">
 <meta name="theme-color" content="#E8F4F8" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A1622" media="(prefers-color-scheme: dark)">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" type="image/png" href="icons/favicon-32.png?v=2">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png?v=2">
-<link rel="apple-touch-icon" sizes="167x167" href="icons/apple-touch-icon-167.png?v=2">
-<link rel="apple-touch-icon" sizes="152x152" href="icons/apple-touch-icon-152.png?v=2">
-<link rel="apple-touch-icon" sizes="120x120" href="icons/apple-touch-icon-120.png?v=2">
+<link rel="manifest" href="manifest.webmanifest?v=3">
+<link rel="icon" type="image/png" href="icons/favicon-32.png?v=3">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=3">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png?v=3">
+<link rel="apple-touch-icon" sizes="167x167" href="icons/apple-touch-icon-167.png?v=3">
+<link rel="apple-touch-icon" sizes="152x152" href="icons/apple-touch-icon-152.png?v=3">
+<link rel="apple-touch-icon" sizes="120x120" href="icons/apple-touch-icon-120.png?v=3">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -25,7 +26,7 @@
 try {
   const logo = JSON.parse(localStorage.getItem("va-logo"));
   if (["soleil", "nuit", "pastille"].includes(logo)) {
-    document.querySelector('link[rel="manifest"]').href = `manifest-${logo}.webmanifest`;
+    document.querySelector('link[rel="manifest"]').href = `manifest-${logo}.webmanifest?v=3`;
     document.querySelectorAll('link[rel="apple-touch-icon"], link[rel="icon"]').forEach(l => {
       l.href = l.getAttribute("href").replace("icons/", `icons/logos/${logo}/`);
     });
