@@ -191,7 +191,8 @@ async function setBasemap(key) {
   if (b.style) {
     try { await loadMaplibre(); } catch { toast("Ce fond de carte ne peut pas se charger (connexion ?) : retour au plan OpenStreetMap."); return setBasemap("osm"); }
     if (request !== basemapRequest) return;               // un autre fond a été choisi entre-temps
-    layer = L.maplibreGL({style: b.style, interactive: false});          // mention fournie par le style lui-même
+    // padding : marge dessinée autour de l'écran, pour qu'un glissement rapide ne découvre pas de bord vide
+    layer = L.maplibreGL({style: b.style, interactive: false, padding: 0.25, updateInterval: 16});  // mention fournie par le style lui-même
   } else {
     // keepBuffer : quelques tuiles d'avance autour de l'écran, pour que la carte qui suit vos pas ne montre pas de trou
     layer = L.tileLayer(b.url, {maxZoom: b.maxZoom, subdomains: b.subdomains || "abc", keepBuffer: 4, updateWhenIdle: false,
@@ -205,6 +206,22 @@ async function setBasemap(key) {
   baseLayer = layer.addTo(map);
   baseLayer.bringToBack?.();
 }
+// Le plugin MapLibre agrandit son conteneur quand la carte change de taille, mais pas le dessin lui-même :
+// sans ceci, le fond vectoriel garde la taille du plan réduit (40 % de l'écran) et le reste reste vide.
+map.on("resize", () => {
+  const gl = baseLayer?.getMaplibreMap?.();
+  if (!gl) return;
+  baseLayer._resizeContainer();
+  gl.resize();
+  baseLayer._update();
+});
+// La carte change de taille sans prévenir (barre de Safari qui se replie, rotation, panneau) : on suit
+// la taille réelle du cadre pour que Leaflet charge toujours tout l'écran.
+let mapResizeFrame = 0;
+new ResizeObserver(() => {
+  cancelAnimationFrame(mapResizeFrame);
+  mapResizeFrame = requestAnimationFrame(() => map.invalidateSize());
+}).observe(document.getElementById("map"));
 // Mention des sources fixée en haut à droite : elle ne suit plus le panneau quand on le fait glisser
 map.attributionControl.setPosition("topright");
 // après le déplacement de la mention (sinon Leaflet compte deux fois la source du premier fond)
