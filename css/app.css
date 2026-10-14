@@ -221,6 +221,7 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 .search-clear:active .i { transform: scale(.88); background: var(--primary); color: var(--on-primary); }
 .search-clear:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: 50%; }
 .places-box { display: contents; }
+.places-box > * { flex: none; }            /* la liste garde sa hauteur même quand le panneau déborde */
 .places { -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); outline: 1px solid var(--glass-border); outline-offset: -1px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .place { width: 100%; min-height: 60px; border: 0; background: transparent; display: flex; align-items: center; gap: 12px; padding: 8px 14px; text-align: left; }
 .place + .place { border-top: 1px solid var(--hair); }
@@ -755,3 +756,14 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 /* Mention des sources : verre translucide */
 .map-credits { background: color-mix(in srgb, var(--bg) 45%, transparent); border-top-color: rgba(255, 255, 255, .14);
   -webkit-backdrop-filter: blur(14px) saturate(1.5); backdrop-filter: blur(14px) saturate(1.5); }
+
+/* ---- Départ modifiable (recherche façon Citymapper) ----------------------------------------------------- */
+.trip-origin { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 52px; padding: 4px 6px 4px 0; border: 0; background: transparent;
+  color: var(--ink); font: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
+.trip-origin .grow { min-width: 0; }
+.trip-origin b .i { vertical-align: -3px; }
+.trip-origin b .i { width: 18px; height: 18px; color: var(--primary); }
+.trip-edit { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 50%; background: var(--surface-2); color: var(--primary); }
+.trip-edit .i { width: 18px; height: 18px; }
+.trip-origin:active .trip-edit { background: var(--primary-soft); }
+.trip-origin:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }

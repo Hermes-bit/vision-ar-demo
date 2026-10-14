@@ -48,7 +48,9 @@ const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
   voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", false), detectDebug: store.get("va-detect-debug", false),
-  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, pick: "dest", query: "", places: [],
+  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, query: "", places: [],
+  // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
+  originMode: "auto", searchFor: "dest", oquery: "",
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
   logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
@@ -431,12 +433,6 @@ function gradientLine(ll) {
   }
   return out;
 }
-map.on("click", e => {
-  if (S.screen !== "route") return;
-  const p = {lat: e.latlng.lat, lon: e.latlng.lng, label: "Point choisi sur le plan"};
-  if (S.pick === "origin") { S.origin = p; computeRoute(); }
-  else chooseDest(p);
-});
 
 // ---- Itinéraire ---------------------------------------------------------------------------
 function computeRoute() {
@@ -463,37 +459,43 @@ function fitRoute() {
 }
 // Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
 // le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
+// Au premier affichage de la recherche : si la localisation est déjà autorisée, le départ devient « Ma position »
+// sans attendre (aucune demande d'autorisation surprise : sinon elle est demandée au choix de l'arrivée)
 let autoOriginDone = false;
 async function autoOrigin() {
-  if (autoOriginDone || !net || !navigator.geolocation || S.origin.label !== MAIRIE.label) return;
+  if (autoOriginDone || !net || !navigator.geolocation || S.originMode !== "auto") return;
   autoOriginDone = true;
   try {
     const perm = await navigator.permissions?.query({name: "geolocation"});
     if (perm?.state !== "granted") return;
   } catch { return; }
-  navigator.geolocation.getCurrentPosition(pos => {
-    const p = {lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Ma position"};
-    try { nearestNode(net, p.lat, p.lon); } catch { return; }          // hors zone : on garde la Mairie
-    if (S.origin.label !== MAIRIE.label) return;                      // l'usager a déjà choisi entre-temps
-    S.origin = p;
-    if (S.screen === "route") { render(); if (S.dest) computeRoute(); }
-  }, () => {}, {enableHighAccuracy: true, timeout: 10000, maximumAge: 30000});
+  locateOrigin(true);
 }
-function useMyPosition() {
-  if (!navigator.geolocation) return toast("La localisation n'est pas disponible sur cet appareil.");
-  toast("Recherche de votre position…");
+// Met à jour la ligne « Départ » sans reconstruire le panneau (la saisie en cours n'est pas interrompue)
+function showOrigin() {
+  const b = $("editOrigin");
+  if (!b) return render();
+  b.querySelector("b").innerHTML = `${S.origin.gps ? icon("locate-fixed") + " " : ""}${esc(S.origin.label)}`;
+  b.setAttribute("aria-label", `Départ : ${S.origin.label}. Toucher pour changer`);
+}
+// Départ = « Ma position ». quiet : sans message d'attente, et sans écraser un départ choisi entre-temps
+function locateOrigin(quiet = false) {
+  if (!navigator.geolocation) { if (!quiet) toast("La localisation n'est pas disponible sur cet appareil."); return; }
+  if (!quiet) toast("Recherche de votre position…");
   navigator.geolocation.getCurrentPosition(pos => {
-    const p = {lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Ma position"};
+    const p = {lat: pos.coords.latitude, lon: pos.coords.longitude, label: "Ma position", gps: true};
+    if (quiet && S.originMode === "manual") return;         // l'usager a choisi un autre départ entre-temps
     try {
       nearestNode(net, p.lat, p.lon);
     } catch {
-      return toast(`Vous êtes hors de la zone couverte (${zoneLabel(ZONE)}) : le départ reste fixé sur le plan. ` +
-                   "Le guidage ne fonctionne que sur place. Changez de ville dans les Paramètres si besoin.", 6000);
+      S.originMode = "out";
+      return toast(`Vous êtes hors de la zone couverte (${zoneLabel(ZONE)}) : départ fixé à « ${S.origin.label} ». ` +
+                   "Touchez « Départ » pour en choisir un autre.", 6000);
     }
-    S.origin = p;
-    map.setView([p.lat, p.lon], 17);
-    computeRoute();
-  }, () => toast("Position refusée ou indisponible."), {enableHighAccuracy: true, timeout: 15000});
+    S.origin = p; S.originMode = "gps";
+    if (S.screen === "route") S.dest ? computeRoute() : showOrigin();
+  }, () => { if (!quiet) toast("Position refusée ou indisponible : touchez « Départ » pour choisir une adresse."); },
+  {enableHighAccuracy: true, timeout: 15000, maximumAge: 20000});
 }
 let searchTimer = null;
 function search(q) {
@@ -512,7 +514,7 @@ function search(q) {
         ? `${GEOCODER}?${new URLSearchParams({q, limit: 6, index: "address,poi", lat: S.origin.lat, lon: S.origin.lon})}`
         : `${PHOTON}?${new URLSearchParams({q, limit: 8, lang: "fr", lat: S.origin.lat, lon: S.origin.lon})}`;
       const data = await fetch(url).then(r => r.json());
-      if (S.query !== q) return;                            // la saisie a changé entre-temps
+      if ((S.searchFor === "origin" ? S.oquery : S.query) !== q) return;    // la saisie a changé entre-temps
       const addr = (data.features || []).map(f => {
         const p = f.properties, [lon, lat] = f.geometry.coordinates;
         const type = ZONE.france ? p._type : (p.name && p.osm_key !== "highway" && p.osm_key !== "place" ? "poi" : "address");
@@ -522,7 +524,7 @@ function search(q) {
       }).filter(a => a.label).filter(a => haversineM(S.origin.lat, S.origin.lon, a.lat, a.lon) < 15000);   // pas de « Calmels-et-le-Viala » à 550 km
       S.places = [...local, ...addr].filter((p, i, all) => all.findIndex(o => norm2(o.label) === norm2(p.label) && haversineM(o.lat, o.lon, p.lat, p.lon) < 150) === i).slice(0, 10);
     } catch {
-      if (!local.length) toast("Recherche d'adresse impossible (hors ligne ?) : touchez le plan pour choisir l'arrivée.");
+      if (!local.length) toast("Recherche d'adresse impossible (hors ligne ?) : essayez le nom d'un lieu ou d'un arrêt.");
     }
     renderPlaces();
   }, 300);
@@ -959,8 +961,13 @@ function screenRoute() {
   </div>
   <div class="trip">
     <div class="trip-row"><span class="trip-dot start" aria-hidden="true"></span>
-      <div class="grow"><small>Départ</small><b>${esc(S.origin.label)}</b></div>
-      <button class="icon-btn" id="gpsHere" aria-label="Partir de ma position">${icon("locate-fixed")}</button></div>
+      ${S.searchFor === "origin"
+        ? `<label class="search grow">${icon("search")}<input type="search" id="qo" placeholder="Départ : adresse, lieu, arrêt…"
+            value="${esc(S.oquery)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Point de départ">
+            <button type="button" class="search-clear" id="qoCancel" aria-label="Garder le départ actuel">${icon("x")}</button></label>`
+        : `<button class="trip-origin grow" id="editOrigin" aria-label="Départ : ${esc(S.origin.label)}. Toucher pour changer">
+            <span class="grow"><small>Départ</small><b>${S.origin.gps ? icon("locate-fixed") + " " : ""}${esc(S.origin.label)}</b></span>
+            <span class="trip-edit">${icon("pencil")}</span></button>`}</div>
     <div class="trip-line" aria-hidden="true"></div>
     <div class="trip-row"><span class="trip-dot end" aria-hidden="true"></span>
       <label class="search grow">${icon("search")}<input type="search" id="q" placeholder="Adresse, lieu, station, commerce…"
@@ -968,18 +975,23 @@ function screenRoute() {
         <button type="button" class="search-clear" id="qClear" aria-label="Effacer la saisie" ${S.query ? "" : "hidden"}>${icon("x")}</button></label></div>
   </div>
   <div id="placesBox" class="places-box">${placesHtml()}</div>
-  <div class="pick"><span>${icon("map-pin")} Toucher le plan pour placer</span>
-    <div class="seg"><button data-pick="origin" class="${S.pick === "origin" ? "on" : ""}">le départ</button>
-      <button data-pick="dest" class="${S.pick === "dest" ? "on" : ""}">l'arrivée</button></div></div>
+  ${S.searchFor === "origin" ? "" : `
   ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3></div>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
-  ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`;
+  ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
 }
 // Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
 // sinon le clavier perd des lettres et l'appui long sur « effacer » s'arrête à chaque caractère)
+const MY_POSITION = {label: "Ma position", sub: "Partir d'où je suis (GPS)", icon: "locate-fixed", type: "gps"};
+const placeList = () => S.searchFor === "origin" ? [MY_POSITION, ...S.places] : S.places;
+function pickPlace(i) {
+  const p = placeList()[i];
+  if (p) S.searchFor === "origin" ? chooseOrigin(p) : chooseDest(p);
+}
 function placesHtml() {
-  return S.places.length ? `<div class="places">${S.places.map((p, i) => `<button class="place" data-place="${i}">
+  const list = placeList();
+  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}">
       <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
       ${icon("chevron-right")}</button>`).join("")}</div>` : "";
 }
@@ -987,7 +999,7 @@ function renderPlaces() {
   const box = $("placesBox");
   if (!box) return;
   box.innerHTML = placesHtml();
-  box.querySelectorAll("[data-place]").forEach(p => p.onclick = () => chooseDest(S.places[+p.dataset.place]));
+  box.querySelectorAll("[data-place]").forEach(p => p.onclick = () => pickPlace(+p.dataset.place));
   layoutSheet();
 }
 function routeCard(r, i) {
@@ -1262,6 +1274,7 @@ function stepBack() {
   if (S.screen === "welcome") return;
   if (S.hud) { S.hud = false; renderHud(); return; }
   if (S.screen === "nav") return confirmQuit();
+  if (S.screen === "route" && S.searchFor === "origin") return cancelOrigin();
   if (S.screen === "route" && S.dest) return closeRoutes();
   if (S.screen === "route") return go("profile");
   if (S.screen === "settings") return go("route");
@@ -1290,8 +1303,16 @@ function closeRoutes() {
 function chooseDest(place) {
   sheetCollapsed = false;                                 // les itinéraires doivent se voir
   S.dest = place; S.query = place.label; S.places = [];
-  computeRoute();
+  computeRoute();                                         // tout de suite avec le départ actuel…
+  if (S.originMode === "auto") locateOrigin(true);       // …puis depuis « Ma position » dès qu'elle est connue
 }
+function chooseOrigin(place) {
+  S.searchFor = "dest"; S.oquery = ""; S.places = [];
+  if (place.type === "gps") { S.originMode = "gps"; render(); return locateOrigin(); }
+  S.origin = {lat: place.lat, lon: place.lon, label: place.label}; S.originMode = "manual";
+  S.dest ? computeRoute() : render();
+}
+function cancelOrigin() { S.searchFor = "dest"; S.oquery = ""; S.places = []; render(); }
 function startGuidance() {
   startNav(S.routes[S.selected]);
   say("Guidage lancé. Recherche de votre position.", true);
@@ -1378,15 +1399,17 @@ function bind() {
   on("install", "onclick", async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); });
   on("toProfile", "onclick", () => go("profile"));
   on("profileBack", "onclick", back);
-  on("gpsHere", "onclick", useMyPosition);
+  on("editOrigin", "onclick", () => { S.searchFor = "origin"; S.oquery = ""; S.places = []; render(); $("qo")?.focus(); });
+  on("qo", "oninput", e => { S.oquery = e.target.value; search(S.oquery); });
+  on("qoCancel", "onmousedown", e => e.preventDefault());
+  on("qoCancel", "onclick", cancelOrigin);
   on("q", "oninput", e => { S.query = e.target.value; $("qClear").hidden = !S.query; search(S.query); });
   // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
   on("qClear", "onmousedown", e => e.preventDefault());
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
   on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
-  all("[data-place]", p => p.onclick = () => chooseDest(S.places[+p.dataset.place]));
-  all("[data-pick]", b => b.onclick = () => { S.pick = b.dataset.pick; render(); });
+  all("[data-place]", p => p.onclick = () => pickPlace(+p.dataset.place));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
   on("start", "onclick", startGuidance);
   // Paramètres
