@@ -188,7 +188,7 @@ async function setBasemap(key) {
   if (!basemapAvailable(key)) key = "osm";               // fonds IGN : France seulement
   const b = BASEMAPS[key] || BASEMAPS.osm, request = ++basemapRequest;
   S.basemap = BASEMAPS[key] ? key : "osm";
-  store.set("va-basemap", S.basemap);
+  store.set("va-basemap2", S.basemap);
   let layer;
   if (b.style) {
     try { await loadMaplibre(); } catch { toast("Ce fond de carte ne peut pas se charger (connexion ?) : retour au plan OpenStreetMap."); return setBasemap("osm"); }
@@ -259,7 +259,8 @@ document.body.append(credits);
 new MutationObserver(() => { credits.innerHTML = map.attributionControl.getContainer().innerHTML; })
   .observe(map.attributionControl.getContainer(), {childList: true, subtree: true, characterData: true});
 // après le déplacement de la mention (sinon Leaflet compte deux fois la source du premier fond)
-setBasemap(store.get("va-basemap", "osm"));
+// « Style Plans » par défaut ; nouvelle clé : les choix « OpenStreetMap » enregistrés automatiquement avant ne comptent plus
+setBasemap(store.get("va-basemap2", "liberty"));
 const layers = {progress: L.layerGroup().addTo(map), transit: L.layerGroup().addTo(map), pois: L.layerGroup(), reports: L.layerGroup().addTo(map),
   routes: L.layerGroup().addTo(map), marks: L.layerGroup().addTo(map)};
 
