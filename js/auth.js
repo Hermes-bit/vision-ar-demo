@@ -5,6 +5,7 @@
 // sel aléatoire). Rien n'est envoyé à un serveur. Pour de vrais comptes partagés
 // entre appareils, remplacer createAccount / checkLogin par un service (Supabase).
 import {icon} from "./icons.js";
+import {sticker} from "./stickers.js";
 
 const ACCOUNTS = "va-accounts", SESSION = "va-session";
 const store = {
@@ -62,7 +63,8 @@ function field(id, label, ic, {type = "text", autocomplete, inputmode, hint} = {
     <small id="m-${id}" class="${err ? "field-err" : "field-hint"}">${err ? `${icon("circle-alert")} ${esc(err)}` : hint || ""}</small>
   </div>`;
 }
-const hero = title => `<header class="auth-hero">
+const hero = (title, stk) => `<header class="auth-hero">
+    ${sticker(stk, "stk-hero")}
     <img class="hero-bg" src="img/auth-bg.jpg" alt="">
     <img class="hero-logo" src="img/geomessen-blanc.png" alt="Geomessen Burkina Faso">
     <h1>${title}</h1>
@@ -82,7 +84,8 @@ export function screenWelcome() {
     <i class="blob b1" aria-hidden="true"></i><i class="blob b2" aria-hidden="true"></i>
     <i class="blob b3" aria-hidden="true"></i><i class="blob b4" aria-hidden="true"></i>
     <img class="welcome-logo" src="img/geomessen.png" alt="Geomessen Burkina Faso">
-    <div class="welcome-illu" aria-hidden="true"><img src="img/accueil.jpg" alt=""><span class="welcome-badge">${icon("accessibility")}</span></div>
+    <div class="welcome-illu" aria-hidden="true"><img src="img/accueil.jpg" alt=""><span class="welcome-badge">${icon("accessibility")}</span>
+      ${sticker("salut", "stk-welcome")}</div>
     <h1>Bienvenue</h1>
     <p class="lead">Vision AR vous guide à pied, en fauteuil ou avec une canne, par les trajets les plus accessibles.</p>
     <button class="btn ink" data-auth="start">Commencer ${icon("chevron-right")}</button>
@@ -90,7 +93,7 @@ export function screenWelcome() {
   </div>`;
 }
 export function screenLogin() {
-  return `<div class="auth with-hero">${hero("Connexion")}
+  return `<div class="auth with-hero">${hero("Connexion", "vision-ar")}
     <form class="auth-form" data-form="login" novalidate>
       ${formError()}
       ${field("email", "Adresse e-mail", "mail", {type: "email", autocomplete: "email", inputmode: "email"})}
@@ -103,7 +106,7 @@ export function screenLogin() {
   </div>`;
 }
 export function screenSignup() {
-  return `<div class="auth with-hero">${hero("Inscription")}
+  return `<div class="auth with-hero">${hero("Inscription", "on-y-va")}
     <form class="auth-form" data-form="signup" novalidate>
       ${formError()}
       ${field("name", "Prénom et nom", "user-round", {autocomplete: "name"})}

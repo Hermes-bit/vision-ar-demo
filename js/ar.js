@@ -15,6 +15,7 @@
 // (vecteur de gravité), même champ de vision (calculé d'après l'image vidéo affichée).
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
+import {sticker, stickerPop} from "./stickers.js";
 import {captureSample, detect, groundPosition, loadModel, modelReady, sideText} from "./obstacles.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
@@ -60,6 +61,7 @@ const WHEEL = {yes: ["#2B8A3E", "Accessible en fauteuil"], limited: ["#E67700", 
 const POI = {elevator: ["elevator", "Ascenseur"], accessible_toilet: ["toilet", "WC adaptés"], disabled_parking: ["square-parking", "Place PMR"],
   accessible_entrance: ["door-open", "Entrée accessible"], audio_beacon: ["volume-2", "Balise sonore"]};
 
+let arrivalCheered = false;
 let api = null, root = null, video = null, canvas = null, ctx = null, stream = null, raf = 0, noCamera = false;
 let sensors = {heading: null, pitch: null, roll: 0}, mapFull = false, sheet = null, domeGeom = null, domeObserver = null;
 let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
@@ -752,6 +754,8 @@ function renderUi(s, heading, compass) {
     : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
     : s.gpsInfo ? `<div class="banner ${s.nav.offRoute ? "warn" : "info"}">${icon(s.nav.offRoute ? "route" : "locate-fixed")}<span>${esc(s.gpsInfo)}</span></div>` : "";
   const alt = s.alt;
+  if (st.arrived && !arrivalCheered) { arrivalCheered = true; stickerPop("bien-arrive", 2400); }   // une seule fois par trajet
+  if (!st.arrived) arrivalCheered = false;
   const html = `
     <div class="top">
       <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
@@ -762,7 +766,7 @@ function renderUi(s, heading, compass) {
         ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
         ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
-        ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}</div>
+        ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}${st.arrived ? sticker("bien-arrive", "stk-arrive") : ""}</div>
       ${banner}
     </div>
     <div class="dome-ui">
@@ -892,6 +896,7 @@ async function saveSample(kind) {
   try {
     await captureSample(video, {kind, detections: performance.now() - detsAt < 2000 ? dets : [], meta: sampleMeta(s)});
     sheetMessage = "Merci : image enregistrée (visages et plaques floutés) sur ce téléphone.";
+    stickerPop("merci");
   } catch (err) { sheetMessage = `Enregistrement impossible : ${err.message}`; }
   lastUi = "";
 }

@@ -7,6 +7,7 @@ import {clearSamples, exportZip, listSamples} from "./obstacles.js";
 import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
+import {sticker, stickerPop} from "./stickers.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -790,17 +791,18 @@ function screenProfile() {
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const sw = (id, ic, label, on) => `<label class="setting">${icon(ic)}<span class="grow">${label}</span>
       <input type="checkbox" class="switch" id="${id}" ${on ? "checked" : ""}></label>`;
-  return `<header class="hero">
+  return `<header class="hero stk-host">
     <div class="brand"><img src="icons/icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
       <button class="btn soft small" id="logout" aria-label="Se déconnecter">${icon("log-out")} Déconnexion</button></div>
     ${currentSession() ? `<p class="hello">Bonjour ${esc(currentSession().name.split(" ")[0])}&nbsp;!</p>` : ""}
     <h1>Comment vous déplacez-vous&nbsp;?</h1>
-    <p class="lead">Choisissez un ou plusieurs profils : l'itinéraire s'adapte à vos besoins.</p></header>
+    <p class="lead">Choisissez un ou plusieurs profils : l'itinéraire s'adapte à vos besoins.</p>
+    ${sticker("je-te-guide", "stk-corner stk-profile")}</header>
   <div class="tiles" role="group" aria-label="Profils de mobilité">
     ${MOB.map(([m, l, ic]) => `<button class="tile ${S.mobilities.has(m) ? "on" : ""}" data-mob="${m}" aria-pressed="${S.mobilities.has(m)}">
       <span class="tile-ic">${icon(ic)}</span><span class="tile-label">${l}</span><span class="tile-check">${icon("check")}</span></button>`).join("")}
   </div>
-  <section class="card">
+  <section class="card stk-host">${sticker("bordure-abaissee", "stk-card")}
     <h3>${icon("sliders-horizontal")} Mes réglages</h3>
     <div class="slider"><div class="row"><span class="grow">Pente maximale</span>
       <b id="slopeLbl">${S.maxSlope == null ? "selon le profil" : `${S.maxSlope} %`}</b></div>
@@ -838,7 +840,7 @@ function screenSettings() {
     ${sess ? `<div class="set-row static">${icon("user-round")}<span class="grow">Compte</span><span class="set-val">Bonjour ${esc(sess.name.split(" ")[0])}&nbsp;!</span></div>` : ""}
     ${row("setProfile", mob?.[2] || "accessibility", "Mon profil de mobilité", esc(mob?.[1] || ""))}
   </section>
-  <section class="card"><h3>${icon("navigation")} Guidage</h3>
+  <section class="card stk-host">${sticker(S.voice ? "ca-vibre" : "lis-sans-son", "stk-card")}<h3>${icon("navigation")} Guidage</h3>
     ${sw("setVoice", "volume-2", "Consignes à la voix", S.voice)}
     ${sw("setHaptics", "vibrate", "Vibrations de direction", S.haptics)}
     ${row("testHaptics", "vibrate", "Tester la vibration", "", false)}
@@ -867,7 +869,7 @@ function screenSettings() {
     ${row("exportSamples", "share-2", "Exporter les images (ZIP)", "", false)}
     ${row("clearSamples", "trash-2", "Tout effacer", "", false)}
   </section>
-  <section class="card"><h3>${icon("triangle-alert")} Mes signalements</h3>
+  <section class="card stk-host">${sticker("obstacle-signale", "stk-card")}<h3>${icon("triangle-alert")} Mes signalements</h3>
     ${mine.length ? mine.map(r => {
       const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
       return `<div class="set-row static">${icon(k[2])}<span class="grow">${k[1]}${r.blocking ? " — bloquant" : ""}
@@ -893,6 +895,7 @@ function screenSettings() {
     ${info("scale", "Mentions légales", `<p>Vision AR — Geomessen Burkina Faso.<br>Icônes : Lucide (licence ISC). Police : Atkinson Hyperlegible
       (licence SIL OFL).</p>`)}
   </section>
+  ${sticker("merci", "stk-footer")}
   <p class="fine set-version">Vision AR version ${APP_VERSION} · Geomessen Burkina Faso</p>`;
 }
 function screenZones() {
@@ -912,6 +915,7 @@ function screenZones() {
 function screenRoute() {
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
+    ${S.dest ? "" : sticker("on-y-va", "stk-sheet")}
     <button class="handle" id="sheetHandle" aria-expanded="${!sheetCollapsed}"
       aria-label="${sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
     <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
@@ -959,7 +963,8 @@ function routeCard(r, i) {
     ? r.warnings.filter(w => w !== "marche" && w !== "données incomplètes").map(w => `<span class="tag">${esc(w)}</span>`)
       .concat(incomplete ? [`<span class="tag warn">${icon("info")} données à confirmer</span>`] : [])
     : r.blocking_issues.map(w => `<span class="tag danger">${icon("triangle-alert")} ${esc(w)}</span>`);
-  return `<div class="rcard ${i === S.selected ? "sel" : ""}" data-route="${i}" role="button" tabindex="0"
+  const stk = i === 0 && r.accessible ? (!r.steps_count ? "zero-marche" : r.max_slope_pct <= 5 ? "pente-douce" : "") : "";
+  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" role="button" tabindex="0"
       aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}${i === S.selected ? ", sélectionné" : ""}">
     <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge}</div><div class="rc-time"><b>${min}</b> min</div></div>
     <div class="rc-meta">
@@ -968,7 +973,7 @@ function routeCard(r, i) {
       ${net && r.edge_ids.every(id => net.edges[id]?.slope_pct === null)
         ? `<span>${icon("mountain")} pente à vérifier</span>`
         : `<span class="${r.max_slope_pct > 5 ? "bad" : "good"}">${icon("mountain")} pente max ${fmt1(r.max_slope_pct)} %</span>`}</div>
-    ${notes.length ? `<div class="tags">${notes.join("")}</div>` : ""}</div>`;
+    ${notes.length ? `<div class="tags">${notes.join("")}</div>` : ""}${stk ? sticker(stk, "stk-route") : ""}</div>`;
 }
 // Commandes et état exposés à l'écran de guidage en réalité augmentée (js/ar.js)
 const navApi = {
@@ -1011,6 +1016,7 @@ function doReport(kind, blocking) {
   const here = S.nav.here, at = posAt(Math.min(S.nav.total, S.nav.pos + 10));
   addReport(kind, blocking, at);
   let msg = "Merci, obstacle enregistré sur ce téléphone.";
+  stickerPop("obstacle-signale");
   if (blocking) {
     try {
       const res = computeRoutes(net, {origin: here, destination: S.dest, profile: profileJson(), compare_shortest: false}, reports());
@@ -1235,6 +1241,7 @@ function chooseDest(place) {
 function startGuidance() {
   startNav(S.routes[S.selected]);
   say("Guidage lancé. Recherche de votre position.", true);
+  stickerPop("je-te-guide");
   startGps();
   go("nav");
   map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});

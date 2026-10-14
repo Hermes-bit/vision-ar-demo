@@ -691,3 +691,43 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
   .ld-dash:nth-child(3) { transform: translate(150px, 245px) scale(1.2); } .ld-dash:nth-child(4) { display: none; }
   .ld-tree { transform: translate(110px, 120px) scale(.6); } .ld-tree.ld-r { transform: translate(190px, 120px) scale(.6); }
 }
+
+/* ---- Stickers (js/stickers.js) : décoratifs, posés de travers comme de vrais autocollants -------------- */
+.stk { position: absolute; z-index: 2; height: auto; pointer-events: none; user-select: none; -webkit-user-select: none;
+  filter: drop-shadow(0 5px 8px rgba(15, 37, 55, .28)); }
+.stk-host { position: relative; }
+/* Bienvenue : « Salut ! » collé sur le coin de l'illustration */
+.welcome-illu img.stk-welcome { left: -16%; top: -6%; width: 44%; height: auto; border: 0; border-radius: 0; object-fit: contain; box-shadow: none; transform: rotate(-11deg); }
+/* Connexion / inscription : dans le bandeau, au-dessus de la vague */
+.auth-hero > img.stk-hero { position: absolute; z-index: 4; right: calc(16px + var(--safe-right)); bottom: 14px; width: 86px; transform: rotate(9deg); }
+/* Profil : « Je te guide » à côté du titre */
+.stk-profile { right: -4px; top: 56px; width: 92px; transform: rotate(8deg); }
+.hero.stk-host h1 { padding-right: 92px; }
+/* Coin d'une carte de réglages */
+.stk-card { right: -8px; top: -18px; width: 66px; transform: rotate(9deg); }
+.card.stk-host > h3 { padding-right: 56px; }
+/* Itinéraire recommandé : « Zéro marche » ou « Pente douce » */
+.stk-route { right: -8px; bottom: -14px; width: 64px; transform: rotate(-9deg); }
+.rcard.stk-host .rc-meta, .rcard.stk-host .tags { padding-right: 46px; }
+/* Recherche : « On y va ? » entre le titre et le bouton profil, tant qu'aucune destination n'est choisie */
+.sheet-head { position: relative; }
+.stk-sheet { right: 74px; top: 22px; width: 64px; transform: rotate(10deg); }
+@media (max-width: 389px) { .stk-sheet { display: none; } }
+/* Paramètres : « Merci ! » en bas de page */
+.stk-footer { position: static; display: block; width: 104px; margin: 6px auto -4px; transform: rotate(-6deg); }
+/* Guidage : « Bien arrivé·e ! » collé sur la bulle de consigne */
+#ar .bubble { position: relative; }
+.stk-arrive { right: -10px; top: -30px; width: 76px; transform: rotate(10deg); }
+
+/* Sticker qui saute au milieu de l'écran (départ, signalement, arrivée) */
+.stk-pop { position: fixed; inset: 0; z-index: 1400; display: grid; place-items: center; pointer-events: none; }
+.stk-pop[hidden] { display: none; }
+.stk-pop img { width: min(52vw, 220px); height: auto; filter: drop-shadow(0 14px 24px rgba(15, 37, 55, .35)); }
+.stk-pop.in img { animation: stk-in .55s cubic-bezier(.2, 1.5, .4, 1) both; }
+.stk-pop.out img { animation: stk-out .3s ease-in both; }
+@keyframes stk-in { from { opacity: 0; transform: scale(.3) rotate(-24deg); } to { opacity: 1; transform: scale(1) rotate(-6deg); } }
+@keyframes stk-out { from { opacity: 1; transform: scale(1) rotate(-6deg); } to { opacity: 0; transform: scale(.7) rotate(4deg) translateY(30px); } }
+@media (prefers-reduced-motion: reduce) {
+  @keyframes stk-in { from { opacity: 0; } to { opacity: 1; transform: rotate(-6deg); } }
+  @keyframes stk-out { from { opacity: 1; transform: rotate(-6deg); } to { opacity: 0; transform: rotate(-6deg); } }
+}
