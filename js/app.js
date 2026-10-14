@@ -792,7 +792,8 @@ function screenProfile() {
   const sw = (id, ic, label, on) => `<label class="setting">${icon(ic)}<span class="grow">${label}</span>
       <input type="checkbox" class="switch" id="${id}" ${on ? "checked" : ""}></label>`;
   return `<header class="hero stk-host">
-    <div class="brand"><img src="icons/icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
+    <div class="brand">${profileReturn || store.get("va-profile", null) ? `<button class="icon-btn" id="profileBack" aria-label="Retour">${icon("arrow-left")}</button>` : ""}
+      <img src="icons/icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
       <button class="btn soft small" id="logout" aria-label="Se déconnecter">${icon("log-out")} Déconnexion</button></div>
     ${currentSession() ? `<p class="hello">Bonjour ${esc(currentSession().name.split(" ")[0])}&nbsp;!</p>` : ""}
     <h1>Comment vous déplacez-vous&nbsp;?</h1>
@@ -1196,7 +1197,13 @@ function drawProgress(force = false) {
     L.polyline([[n.real.lat, n.real.lon], [t.lat, t.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.progress);
   }
 }
-function go(screen) { S.screen = screen; S.message = null; render(); }
+let profileReturn = null;
+function go(screen) {
+  // Profil ouvert depuis la recherche ou les Paramètres : le retour y ramène
+  if (screen === "profile" && ["route", "settings"].includes(S.screen)) profileReturn = S.screen;
+  else if (screen !== "profile") profileReturn = null;
+  S.screen = screen; S.message = null; render();
+}
 
 // ---- Retour / avancer : gestes, boutons et bouton « retour » du navigateur ----------------------
 // Nos gestes et boutons reviennent en arrière directement : l'appli ne peut jamais être quittée
@@ -1204,13 +1211,17 @@ function go(screen) { S.screen = screen; S.message = null; render(); }
 // le geste retour de Safari reviennent alors d'un écran dans l'appli au lieu de la fermer.
 let guarded = false;
 function syncGuard() {
-  if (!["profile", "welcome"].includes(S.screen) && !guarded) {
+  if (S.screen !== "welcome" && !guarded) {
     try { history.pushState({va: true}, ""); guarded = true; } catch { /* sans historique */ }
   }
 }
-window.addEventListener("popstate", () => { guarded = false; stepBack(); syncGuard(); });
+window.addEventListener("popstate", () => { guarded = false; hideSwipe(); stepBack(); syncGuard(); });
 function back() { stepBack(); }
+let lastStep = 0;
 function stepBack() {
+  // le geste de Safari et le nôtre peuvent arriver ensemble : un seul retour à la fois
+  if (Date.now() - lastStep < 450) return;
+  lastStep = Date.now();
   if (S.screen === "signup") { resetForm(); return go("login"); }
   if (S.screen === "login") { resetForm(); return go("welcome"); }
   if (S.screen === "welcome") return;
@@ -1220,6 +1231,14 @@ function stepBack() {
   if (S.screen === "route") return go("profile");
   if (S.screen === "settings") return go("route");
   if (S.screen === "zones") return go("settings");
+  if (S.screen === "profile") {
+    // retour = on garde les choix faits sur l'écran, puis on revient d'où l'on venait
+    if (!profileReturn && !store.get("va-profile", null)) return toast("Choisissez votre profil, puis touchez « Continuer ».");
+    saveProfile();
+    const to = profileReturn || "route";
+    go(to);
+    if (to === "route") computeRoute();
+  }
 }
 function forward() {
   if (S.screen === "welcome") { resetForm(); return go("login"); }
@@ -1296,14 +1315,19 @@ document.addEventListener("touchmove", e => {
   swipeHint.innerHTML = `${icon(backDir ? "arrow-left" : "arrow-right")}<span>${backDir ? "Retour" : S.screen === "route" ? "Démarrer" : "Suivant"}</span>`;
 }, {passive: false});
 document.addEventListener("touchend", () => {
-  if (swipe?.on && Math.abs(swipe.dx) >= SWIPE_MIN) {
+  const done = swipe?.on && Math.abs(swipe.dx) >= SWIPE_MIN, dir = swipe?.dx;
+  hideSwipe();
+  if (done) {
     if (navigator.vibrate) navigator.vibrate(15);
-    swipe.dx > 0 ? back() : forward();
+    dir > 0 ? back() : forward();
   }
-  swipe = null;
-  swipeHint.hidden = true;
 });
-document.addEventListener("touchcancel", () => { swipe = null; swipeHint.hidden = true; });
+// Safari peut reprendre le geste à son compte (retour du navigateur) sans prévenir : l'indice ne reste jamais affiché
+function hideSwipe() { swipe = null; swipeHint.hidden = true; }
+document.addEventListener("touchcancel", hideSwipe);
+addEventListener("pageshow", hideSwipe);
+addEventListener("blur", hideSwipe);
+document.addEventListener("visibilitychange", hideSwipe);
 function saveProfile() { store.set("va-profile", {mobilities: [...S.mobilities], maxSlope: S.maxSlope, steps: S.steps}); }
 
 function bind() {
@@ -1318,6 +1342,7 @@ function bind() {
   on("cont", "onclick", forward);
   on("install", "onclick", async () => { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; render(); });
   on("toProfile", "onclick", () => go("profile"));
+  on("profileBack", "onclick", back);
   on("gpsHere", "onclick", useMyPosition);
   on("q", "oninput", e => { S.query = e.target.value; $("qClear").hidden = !S.query; search(S.query); });
   // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
