@@ -98,7 +98,7 @@ export function loadNetwork(data) {
     adj[e.source].push([e, true]);
     adj[e.target].push([e, false]);
   }
-  return {nodes, edges, adj, zone: data.zone, pois: data.pois, places: data.places || []};
+  return {nodes, edges, adj, zone: data.zone, pois: data.pois, places: data.places || [], obstacles: data.obstacles || []};
 }
 
 // ---- Coût d'effort (cost.py) -----------------------------------------------------

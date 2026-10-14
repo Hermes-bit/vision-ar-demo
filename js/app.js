@@ -51,6 +51,8 @@ const S = {
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, query: "", places: [],
   // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
   originMode: "auto", searchFor: "dest", oquery: "",
+  // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
+  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true),
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
   logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
@@ -95,6 +97,7 @@ function addReport(kind, blocking, at) {
   const now = Date.now();
   const r = {id: now, kind, blocking, lat: at.lat, lon: at.lon, created: now, expires: now + (REPORT_TTL_H[kind] ?? 336) * 3600e3};
   store.set("va-reports", [...reports(), r]);
+  return r;
 }
 
 // ---- Voix et vibrations ---------------------------------------------------------------
@@ -561,7 +564,90 @@ function startNav(route, keepGps = false) {
            said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, away: false, gap: 0, gapAlong: 0, arrived: false,
            // N°15 : « approach » tant que le point de départ n'est pas atteint ; « route » ensuite
            phase: "approach", approachDist: 0, quietStart: keepGps};
+  S.nav.hazards = hazardsOn(S.nav);
   requestWakeLock();
+}
+// ---- Alertes de proximité ----------------------------------------------------------------------
+// Chaque obstacle du trajet est annoncé une fois, à l'approche (S.alertDist mètres) : voix, vibration et
+// bandeau à l'écran. Tout est calculé sur le téléphone, avec les données de la zone : ça marche sans réseau.
+// Sources : les tronçons (marche, bordure haute, forte pente, passage étroit), les obstacles fixes
+// ponctuels (borne, poteau… : table va_obstacle) et les signalements encore actifs.
+const OBSTACLE_KINDS = {bollard: ["Borne", "circle-alert"], pole: ["Poteau", "circle-alert"], barrier: ["Barrière", "construction"],
+  street_furniture: ["Mobilier urbain", "lamp-floor"], step: ["Marche", "stairs"], kerb: ["Bordure", "triangle-alert"],
+  hole: ["Trou", "triangle-alert"], low_obstacle: ["Obstacle bas", "triangle-alert"], other: ["Obstacle", "circle-alert"]};
+const HAZARD_NEAR_ROUTE_M = 6;                          // un obstacle ponctuel compte s'il est à moins de 6 m du tracé
+const hazardAlerted = new Set();                        // déjà annoncés pendant ce trajet (recalculs compris)
+// Position d'un point sur l'itinéraire : distance depuis le départ, écart au tracé, côté (gauche / droite)
+function alongRoute(n, p) {
+  const g = n.route.geometry;
+  let best = null;
+  for (let i = 1; i < g.length; i++) {
+    const pr = project(p, g[i - 1], g[i]);
+    if (!best || pr.d < best.d) {
+      const k = Math.cos(p.lat * Math.PI / 180);
+      const cross = (g[i].lon - g[i - 1].lon) * k * (p.lat - g[i - 1].lat) - (g[i].lat - g[i - 1].lat) * (p.lon - g[i - 1].lon) * k;
+      best = {d: pr.d, along: n.cum[i - 1] + pr.t * (n.cum[i] - n.cum[i - 1]), side: cross > 0 ? "gauche" : "droite"};
+    }
+  }
+  return best;
+}
+function hazardsOn(n) {
+  const out = [];
+  let along = 0, lastSlope = -1e9;
+  for (const id of n.route.edge_ids || []) {
+    const e = net.edges[id];
+    if (!e) continue;
+    let len = 0;
+    for (let i = 1; i < e.shape.length; i++) len += haversineM(e.shape[i - 1][0], e.shape[i - 1][1], e.shape[i][0], e.shape[i][1]);
+    const at = along + Math.min(1.5, len / 2);
+    if (e.has_step) out.push({id: `e${id}-step`, along: at, label: "Marche", ic: "stairs"});
+    if (e.is_crossing && e.kerb_lowered === false) out.push({id: `e${id}-kerb`, along: at, label: "Bordure haute", ic: "triangle-alert"});
+    if (e.width_m !== null && e.width_m < 0.9)
+      out.push({id: `e${id}-narrow`, along: at, label: `Passage étroit, ${String(Math.round(e.width_m * 100) / 100).replace(".", ",")} mètre`, ic: "narrow"});
+    // forte pente : annoncée au début de la côte, pas à chaque tronçon de la même côte
+    if (e.slope_pct !== null && Math.abs(e.slope_pct) >= 6) {
+      if (at - lastSlope > 40) out.push({id: `e${id}-slope`, along: at, label: `${e.slope_pct > 0 ? "Forte montée" : "Forte descente"}, ${Math.round(Math.abs(e.slope_pct))} pour cent`, ic: "mountain"});
+      lastSlope = along + len;
+    }
+    along += len;
+  }
+  const points = [
+    ...(net.obstacles || []).map(([kind, lat, lon, severity], i) => ({id: `o${i}-${lat}-${lon}`, lat, lon,
+      label: (OBSTACLE_KINDS[kind] || OBSTACLE_KINDS.other)[0] + (severity === 3 ? ", infranchissable en fauteuil" : ""),
+      ic: (OBSTACLE_KINDS[kind] || OBSTACLE_KINDS.other)[1]})),
+    ...reports().map(r => { const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1); return {id: `r${r.id}`, lat: r.lat, lon: r.lon, label: k[1], ic: k[2]}; }),
+  ];
+  for (const o of points) {
+    const pos = alongRoute(n, o);
+    if (pos && pos.d <= HAZARD_NEAR_ROUTE_M) out.push({...o, along: pos.along, side: pos.d > 2 ? pos.side : ""});
+  }
+  return out.sort((a, b) => a.along - b.along);
+}
+function checkHazards() {
+  const n = S.nav;
+  if (!n?.hazards || n.phase === "approach" || n.arrived) return;
+  const h = n.hazards.find(x => !hazardAlerted.has(x.id) && x.along - n.pos >= 0 && x.along - n.pos <= S.alertDist);
+  if (!h) return;
+  hazardAlerted.add(h.id);
+  const m = Math.max(1, Math.round(h.along - n.pos)), where = h.side ? `sur votre ${h.side}` : "devant vous";
+  n.hazard = {...h, dist: m, where, at: Date.now()};       // bandeau à l'écran (malentendance : le repère principal)
+  say(`Attention, ${h.label.charAt(0).toLowerCase()}${h.label.slice(1)}, à ${m} mètre${m > 1 ? "s" : ""}, ${where}.`, true);
+  buzz("obstacle");
+}
+// Économie de batterie : loin du prochain virage et de tout obstacle, la vue caméra s'allège (moins d'images
+// par seconde, détection d'obstacles espacée) et le GPS peut resservir une position de moins de 4 s
+function ecoNow() {
+  const n = S.nav;
+  if (!S.eco || !n || n.phase !== "route" || n.offRoute || n.away || n.arrived) return false;
+  const st = navState(), nextHazard = n.hazards?.find(h => h.along >= n.pos);
+  return st.toManeuver > 120 && (!nextHazard || nextHazard.along - n.pos > 80);
+}
+function updateGpsMode() {
+  const n = S.nav, eco = ecoNow();
+  if (!n || n.watch === null || n.gpsEco === eco || Date.now() - (n.gpsModeAt || 0) < 20000) return;
+  n.gpsEco = eco; n.gpsModeAt = Date.now();
+  navigator.geolocation.clearWatch(n.watch);
+  n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: eco ? 4000 : 1000, timeout: 20000});
 }
 // Le trajet commence : on est au point de départ (ou sur le tout début de l'itinéraire)
 function beginRoute(along) {
@@ -630,6 +716,8 @@ function moveTo(pos) {
   S.nav.pos = Math.min(S.nav.total, Math.max(0, pos));
   S.nav.here = posAt(S.nav.pos);
   announce();
+  checkHazards();
+  updateGpsMode();
   renderNavLive();
 }
 function startGps() {
@@ -875,6 +963,13 @@ function screenSettings() {
     ${sw("setHaptics", "vibrate", "Vibrations de direction", S.haptics)}
     ${row("testHaptics", "vibrate", "Tester la vibration", "", false)}
     ${sw("setStopsVoice", "bus", "Annoncer les arrêts de transport proches", S.stopsVoice)}
+    <div class="slider"><div class="row"><span class="grow">Alerte des obstacles à</span><b id="alertDistLbl">${S.alertDist} m</b></div>
+      <input type="range" min="5" max="10" step="1" value="${S.alertDist}" id="setAlertDist" aria-label="Distance d'alerte des obstacles, en mètres">
+      <div class="scale"><span>5 m</span><span>10 m</span></div></div>
+    <div class="slider"><div class="row"><span class="grow">Lieux affichés dans la caméra jusqu'à</span><b id="placesRangeLbl">${S.placesRange} m</b></div>
+      <input type="range" min="20" max="130" step="10" value="${S.placesRange}" id="setPlacesRange" aria-label="Distance des lieux affichés dans la caméra, en mètres">
+      <div class="scale"><span>20 m</span><span>130 m</span></div></div>
+    ${sw("setEco", "battery", "Économie de batterie pendant le guidage", S.eco)}
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
@@ -1029,7 +1124,8 @@ const navApi = {
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
     mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
     detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
-    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus},
+    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus,
+    placesRange: S.placesRange, eco: ecoNow()},
   reroute: () => manualReroute(),
   setOption: (key, value) => { S[key] = value; store.set(OPTION_KEYS[key], value); },
   obstacleAlert: text => { say(text, true); buzz("obstacle"); },
@@ -1062,8 +1158,9 @@ function doReport(kind, blocking) {
   // On signale ce qu'on a devant soi : l'obstacle est placé 10 m plus loin sur l'itinéraire.
   // (À sa propre position, il bloquerait les trottoirs autour de soi et aucun détour ne serait possible.)
   const here = S.nav.here, at = posAt(Math.min(S.nav.total, S.nav.pos + 10));
-  addReport(kind, blocking, at);
+  hazardAlerted.add(`r${addReport(kind, blocking, at).id}`);
   let msg = "Merci, obstacle enregistré sur ce téléphone.";
+  S.nav.hazards = hazardsOn(S.nav);
   stickerPop("obstacle-signale");
   if (blocking) {
     try {
@@ -1314,6 +1411,7 @@ function chooseOrigin(place) {
 }
 function cancelOrigin() { S.searchFor = "dest"; S.oquery = ""; S.places = []; render(); }
 function startGuidance() {
+  hazardAlerted.clear();                                  // nouveau trajet : tous les obstacles seront annoncés
   startNav(S.routes[S.selected]);
   say("Guidage lancé. Recherche de votre position.", true);
   stickerPop("je-te-guide");
@@ -1417,6 +1515,9 @@ function bind() {
   on("setProfile", "onclick", () => go("profile"));
   on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
   on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
+  on("setAlertDist", "oninput", e => { S.alertDist = +e.target.value; store.set("va-alert-dist", S.alertDist); $("alertDistLbl").textContent = `${S.alertDist} m`; });
+  on("setPlacesRange", "oninput", e => { S.placesRange = +e.target.value; store.set("va-places-range", S.placesRange); $("placesRangeLbl").textContent = `${S.placesRange} m`; });
+  on("setEco", "onchange", e => { S.eco = e.target.checked; store.set("va-eco", S.eco); });
   on("setZone", "onclick", () => go("zones"));
   on("zonesBack", "onclick", () => go("settings"));
   all("[data-zone]", b => b.onclick = () => {

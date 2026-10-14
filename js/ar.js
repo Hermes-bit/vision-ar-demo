@@ -24,7 +24,7 @@ const CAMERA_LONG_FOV_DEG = 68;   // champ de la caméra arrière principale sur
 const VFOV_DEG = 62;              // sans image vidéo (ordinateur)
 const AHEAD_M = 55;               // portée des repères (obstacles, bordures, marches)
 const PATH_AHEAD_M = 30;          // le ruban s'allume sur 30 m devant soi, au fil de la marche
-const PLACES_M = 130;             // portée des étiquettes de lieux
+const PLACES_M = 50;              // portée des étiquettes de lieux, par défaut (réglable dans les Paramètres : 20 à 130 m)
 const NEAR_M = 0.6;
 const BEHIND_M = 4;              // le ruban part de sous les pieds
 const CHEV_START_M = 2;
@@ -365,14 +365,14 @@ function anchorsAhead(s) {
   }
   for (const [cat, lat, lon, name, wheel] of net.places || []) {
     const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
-    if (d > PLACES_M || !PLACE[cat]) continue;
+    if (d > (s.placesRange ?? PLACES_M) || !PLACE[cat]) continue;
     const [ic, color, label] = PLACE[cat];
     out.push({at: {lat, lon}, label: name || label, ic, ahead: d, color, glow: "#5BE0EA", place: true, wheel: WHEEL[wheel]});
   }
   for (const [kind, lat, lon, name] of net.pois) {
     if (!POI[kind]) continue;
     const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
-    if (d < 90) out.push({at: {lat, lon}, label: POI[kind][1], sub: name, ic: POI[kind][0], ahead: d, color: "#007489", glow: "#5BE0EA", poi: true});
+    if (d < (s.placesRange ?? PLACES_M)) out.push({at: {lat, lon}, label: POI[kind][1], sub: name, ic: POI[kind][0], ahead: d, color: "#007489", glow: "#5BE0EA", poi: true});
   }
   return out;
 }
@@ -518,7 +518,7 @@ function detView() {
   return {vw: video.videoWidth, vh: video.videoHeight, W, H, focal: focalPx(W, H), pitchDeg: lastPitch, height: camHeight};
 }
 function runDetection(s) {
-  if (detBusy || performance.now() - detsAt < 350 || !video?.videoWidth) return;
+  if (detBusy || performance.now() - detsAt < (s.eco ? 1000 : 350) || !video?.videoWidth) return;   // économie : 1 image par seconde
   if (!modelReady()) {
     if (detState !== "loading" && detState !== "error") {
       detState = "loading"; lastUi = "";
@@ -621,10 +621,14 @@ function routeBearing(s) {
   return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
 }
 // ---- Boucle d'affichage -------------------------------------------------------------------------------
+let lastFrameAt = 0;
 function frame() {
   raf = requestAnimationFrame(frame);
   const s = api.state();
   if (!s) return;
+  // Économie de batterie (loin du prochain virage et des obstacles) : 20 images par seconde au lieu de 60
+  if (s.eco && performance.now() - lastFrameAt < 48) return;
+  lastFrameAt = performance.now();
   const dpr = devicePixelRatio, w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
@@ -750,7 +754,9 @@ function renderUi(s, heading, compass) {
   // N°8 : « Données à confirmer » ne s'affiche plus pendant le guidage (il reste sur la fiche de l'itinéraire)
   const shownAlerts = next.alerts.filter(a => !a.startsWith("Traversée") && a !== "Données à confirmer");
   const rer = s.nav.rerouted && Date.now() - s.nav.rerouted.at < 10000 ? s.nav.rerouted : null;
-  const banner = rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
+  const haz = s.nav.hazard && Date.now() - s.nav.hazard.at < 6000 ? s.nav.hazard : null;   // alerte de proximité : 6 s à l'écran
+  const banner = haz ? `<div class="banner danger" role="alert">${icon(haz.ic)}<span><b>${esc(haz.label)}</b> à ${haz.dist} m, ${esc(haz.where)}</span></div>`
+    : rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
     : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
     : s.gpsInfo ? `<div class="banner ${s.nav.offRoute ? "warn" : "info"}">${icon(s.nav.offRoute ? "route" : "locate-fixed")}<span>${esc(s.gpsInfo)}</span></div>` : "";
   const alt = s.alt;
