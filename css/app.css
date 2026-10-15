@@ -767,3 +767,18 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .trip-edit .i { width: 18px; height: 18px; }
 .trip-origin:active .trip-edit { background: var(--primary-soft); }
 .trip-origin:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ---- Trajets favoris ------------------------------------------------------------------------------- */
+.favs { display: flex; flex-direction: column; gap: 8px; }
+.favs h3 { color: var(--primary); display: flex; align-items: center; gap: 8px; }
+.favs h3 .i { width: 20px; height: 20px; }
+.fav-row { display: flex; align-items: stretch; }
+.fav-row + .fav-row { border-top: 1px solid var(--hair); }
+.fav-row .place { flex: 1; min-width: 0; border-top: 0 !important; }
+.fav-del { flex: none; width: 52px; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.fav-del .i { width: 20px; height: 20px; }
+.fav-del:active { color: var(--danger); }
+.favs-empty { margin: 0; }
+.fav-toggle .i { width: 18px; height: 18px; }
+.fav-toggle.on { color: var(--primary); }
+.fav-toggle.on .i { fill: currentColor; }

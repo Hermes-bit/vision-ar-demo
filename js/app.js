@@ -1071,7 +1071,9 @@ function screenRoute() {
   </div>
   <div id="placesBox" class="places-box">${placesHtml()}</div>
   ${S.searchFor === "origin" ? "" : `
-  ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3></div>` : ""}
+  ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
+    <button class="btn soft small fav-toggle ${currentFavIndex() >= 0 ? "on" : ""}" id="favToggle" aria-pressed="${currentFavIndex() >= 0}">
+      ${icon("star")} ${currentFavIndex() >= 0 ? "Enregistré" : "Enregistrer"}</button></div>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
@@ -1079,6 +1081,61 @@ function screenRoute() {
 // Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
 // sinon le clavier perd des lettres et l'appui long sur « effacer » s'arrête à chaque caractère)
 const MY_POSITION = {label: "Ma position", sub: "Partir d'où je suis (GPS)", icon: "locate-fixed", type: "gps"};
+// ---- Trajets favoris (gardés sur ce téléphone, par ville) ---------------------------------------
+// Départ « Ma position » enregistré comme tel : le trajet repart de là où l'on est au moment de le relancer.
+const FAV_KEY = `va-favorites-${ZONE_ID}`, FAV_MAX = 12;
+const favorites = () => store.get(FAV_KEY, []);
+const samePlace = (a, b) => a && b && haversineM(a.lat, a.lon, b.lat, b.lon) < 30;
+const favOrigin = () => S.origin.gps ? {gps: true, label: "Ma position"} : {lat: S.origin.lat, lon: S.origin.lon, label: S.origin.label};
+function currentFavIndex() {
+  if (!S.dest) return -1;
+  const o = favOrigin();
+  return favorites().findIndex(f => samePlace(f.dest, S.dest) && (f.origin.gps ? o.gps : !o.gps && samePlace(f.origin, o)));
+}
+function toggleFavorite() {
+  const list = favorites(), i = currentFavIndex();
+  if (i >= 0) {
+    list.splice(i, 1);
+    toast("Trajet retiré des favoris.");
+  } else {
+    if (list.length >= FAV_MAX) return toast(`${FAV_MAX} favoris au plus : retirez-en un pour en ajouter un autre.`);
+    list.unshift({id: Date.now(), origin: favOrigin(), dest: {lat: S.dest.lat, lon: S.dest.lon, label: S.dest.label}});
+    toast("Trajet enregistré dans vos favoris.");
+  }
+  store.set(FAV_KEY, list);
+  render();
+}
+function useFavorite(id) {
+  const f = favorites().find(x => x.id === id);
+  if (!f) return;
+  if (f.origin.gps) {
+    if (!S.origin.gps) S.originMode = "auto";            // repart de « Ma position » dès qu'elle est connue
+  } else {
+    S.origin = {lat: f.origin.lat, lon: f.origin.lon, label: f.origin.label}; S.originMode = "manual";
+  }
+  chooseDest({...f.dest, type: "poi"});
+}
+function removeFavorite(id) {
+  store.set(FAV_KEY, favorites().filter(x => x.id !== id));
+  toast("Trajet retiré des favoris.");
+  renderPlaces();
+}
+function favoritesHtml() {
+  const list = favorites();
+  return `<section class="favs" aria-labelledby="favsTitle"><h3 id="favsTitle">${icon("star")} Mes trajets favoris</h3>
+    ${list.length ? `<div class="places">${list.map(f => `<div class="fav-row">
+        <button class="place" data-fav="${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
+          <span class="place-ic">${icon("route")}</span><span class="grow">${esc(f.dest.label)}<small>depuis ${esc(f.origin.label)}</small></span>
+          ${icon("chevron-right")}</button>
+        <button class="fav-del" data-unfav="${f.id}" aria-label="Retirer ${esc(f.dest.label)} des favoris">${icon("trash-2")}</button></div>`).join("")}</div>`
+      : `<p class="fine favs-empty">${icon("info")} Choisissez une destination, puis touchez « Enregistrer » pour retrouver ce trajet ici en un geste.</p>`}
+  </section>`;
+}
+function bindPlaces(root) {
+  root.querySelectorAll("[data-place]").forEach(p => p.onclick = () => pickPlace(+p.dataset.place));
+  root.querySelectorAll("[data-fav]").forEach(b => b.onclick = () => useFavorite(+b.dataset.fav));
+  root.querySelectorAll("[data-unfav]").forEach(b => b.onclick = () => removeFavorite(+b.dataset.unfav));
+}
 const placeList = () => S.searchFor === "origin" ? [MY_POSITION, ...S.places] : S.places;
 function pickPlace(i) {
   const p = placeList()[i];
@@ -1086,6 +1143,7 @@ function pickPlace(i) {
 }
 function placesHtml() {
   const list = placeList();
+  if (!list.length && S.searchFor === "dest" && !S.dest && !S.query.trim()) return favoritesHtml();
   return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}">
       <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
       ${icon("chevron-right")}</button>`).join("")}</div>` : "";
@@ -1094,7 +1152,7 @@ function renderPlaces() {
   const box = $("placesBox");
   if (!box) return;
   box.innerHTML = placesHtml();
-  box.querySelectorAll("[data-place]").forEach(p => p.onclick = () => pickPlace(+p.dataset.place));
+  bindPlaces(box);
   layoutSheet();
 }
 function routeCard(r, i) {
@@ -1507,7 +1565,8 @@ function bind() {
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
   on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
-  all("[data-place]", p => p.onclick = () => pickPlace(+p.dataset.place));
+  bindPlaces(document);
+  on("favToggle", "onclick", toggleFavorite);
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
   on("start", "onclick", startGuidance);
   // Paramètres
