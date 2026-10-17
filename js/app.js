@@ -8,6 +8,7 @@ import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
+import {closeIndoor, indoorOpen, loadIndoor, openIndoor, openPhotoPlan} from "./indoor.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -981,6 +982,14 @@ function screenSettings() {
       supprimez l'icône, rechargez cette page, puis ajoutez-la de nouveau (${/iphone|ipad|ipod/i.test(navigator.userAgent)
         ? "bouton Partager, puis « Sur l'écran d'accueil »" : "menu ⋮, puis « Ajouter à l'écran d'accueil »"}).</p>
   </section>
+  <section class="card"><h3>${icon("building-2")} Plans intérieurs (test)</h3>
+    ${indoorBuildings.map(b => `<button class="set-row" data-indoor="${b.id}">${icon("building-2")}<span class="grow">${esc(b.name)}
+      <small>${b.floors.length} étages · plan de démonstration</small></span>${icon("chevron-right")}</button>`).join("")}
+    <label class="set-row" for="planPhoto">${icon("image")}<span class="grow">Ouvrir une photo de plan<small>Plan d'étage pris en photo ou image du téléphone</small></span>
+      ${icon("chevron-right")}<input type="file" accept="image/*" id="planPhoto" hidden></label>
+    <p class="fine">${icon("info")} Essai du guidage à l'intérieur d'un bâtiment, sur des plans fictifs. Avec un vrai plan, il faudra placer
+      les pièces, les couloirs et l'ascenseur.</p>
+  </section>
   <section class="card"><h3>${icon("map")} Fond de carte</h3>
     ${Object.entries(BASEMAPS).filter(([k]) => basemapAvailable(k)).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
       <span class="grow">${b.label}<small>${b.sub}</small></span>${S.basemap === k ? `<span class="set-check">${icon("check")}</span>` : ""}</button>`).join("")}
@@ -1074,6 +1083,8 @@ function screenRoute() {
   ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
     <button class="btn soft small fav-toggle ${currentFavIndex() >= 0 ? "on" : ""}" id="favToggle" aria-pressed="${currentFavIndex() >= 0}">
       ${icon("star")} ${currentFavIndex() >= 0 ? "Enregistré" : "Enregistrer"}</button></div>` : ""}
+  ${buildingNear(S.dest) ? `<button class="btn soft indoor-btn" data-indoor="${buildingNear(S.dest).id}">${icon("building-2")}
+    <span class="grow">Plan intérieur<small>${esc(buildingNear(S.dest).name)} · test</small></span>${icon("chevron-right")}</button>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
@@ -1081,6 +1092,16 @@ function screenRoute() {
 // Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
 // sinon le clavier perd des lettres et l'appui long sur « effacer » s'arrête à chaque caractère)
 const MY_POSITION = {label: "Ma position", sub: "Partir d'où je suis (GPS)", icon: "locate-fixed", type: "gps"};
+// ---- Plans intérieurs (TEST, js/indoor.js) ------------------------------------------------------
+// Bâtiments de la ville dont on a le plan des étages : bouton « Plan intérieur » quand la destination en
+// est proche, et liste dans les Paramètres. Profil sans marches : le trajet passe par l'ascenseur.
+let indoorBuildings = [];
+loadIndoor().then(list => { indoorBuildings = list.filter(b => b.zone === ZONE_ID); if (S.screen === "settings") render(); });
+const buildingNear = p => p && indoorBuildings.find(b => haversineM(b.lat, b.lon, p.lat, p.lon) < 80);
+function openBuilding(id) {
+  const b = indoorBuildings.find(x => x.id === id);
+  if (b) openIndoor(b, {avoidStairs: !resolveProfile(profileJson()).steps_allowed, say: t => say(t, true)});
+}
 // ---- Trajets favoris (gardés sur ce téléphone, par ville) ---------------------------------------
 // Départ « Ma position » enregistré comme tel : le trajet repart de là où l'on est au moment de le relancer.
 const FAV_KEY = `va-favorites-${ZONE_ID}`, FAV_MAX = 12;
@@ -1424,6 +1445,7 @@ function stepBack() {
   // le geste de Safari et le nôtre peuvent arriver ensemble : un seul retour à la fois
   if (Date.now() - lastStep < 450) return;
   lastStep = Date.now();
+  if (indoorOpen()) return closeIndoor();                 // plan intérieur ouvert : le retour le ferme
   if (S.screen === "signup") { resetForm(); return go("login"); }
   if (S.screen === "login") { resetForm(); return go("welcome"); }
   if (S.screen === "welcome") return;
@@ -1567,6 +1589,8 @@ function bind() {
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
+  all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
+  on("planPhoto", "onchange", e => { const f = e.target.files?.[0]; if (f) openPhotoPlan(f); e.target.value = ""; });
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
   on("start", "onclick", startGuidance);
   // Paramètres

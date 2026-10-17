@@ -1,9 +1,9 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
-const VERSION = "vision-ar-v53";
+const VERSION = "vision-ar-v54";
 const MAX_TILES = 600;
 const APP = [
-  "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js", "js/ar.js", "js/icons.js", "js/auth.js", "js/stickers.js",
+  "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js", "js/ar.js", "js/icons.js", "js/auth.js", "js/stickers.js", "js/indoor.js", "data/indoor.json", "img/indoor/demo-rdc.svg", "img/indoor/demo-etage1.svg",
   "img/geomessen.png", "img/stickers/salut.webp", "img/stickers/zero-marche.webp", "img/stickers/je-te-guide.webp", "img/stickers/ca-vibre.webp", "img/stickers/pente-douce.webp", "img/stickers/obstacle-signale.webp", "img/stickers/bien-arrive.webp", "img/stickers/vision-ar.webp", "img/stickers/bordure-abaissee.webp", "img/stickers/on-y-va.webp", "img/stickers/lis-sans-son.webp", "img/stickers/merci.webp", "img/geomessen-blanc.png", "img/auth-bg.jpg", "img/accueil.jpg",
   "fonts/atkinson-hyperlegible-400.woff2", "fonts/atkinson-hyperlegible-700.woff2", "icons/maskable-512.png",
   "data/gennevilliers.json", "data/transit.json", "js/transit.js", "js/obstacles.js", "js/zones.js", "data/ouaga2000.json", "data/ouaga2000.transit.json", "vendor/leaflet/leaflet.min.js", "vendor/leaflet/leaflet.min.css",
