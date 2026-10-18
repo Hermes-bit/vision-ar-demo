@@ -860,3 +860,11 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .hm-left { font-size: 20px; color: var(--muted); margin: 0; min-height: 1.4em; }
 .hm-route { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 16px; background: var(--surface); outline: 1px solid var(--glass-border); font-size: 18px; font-weight: 700; }
 .hm-route small { display: block; font-size: 14px; font-weight: 400; color: var(--muted); }
+/* Balises : l'image de la caméra en fond, les consignes par-dessus */
+.bc-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -1; opacity: .35; }
+#home:has(.bc-video) { background: #061019; color: #fff; }
+#home:has(.bc-video) .hm-now { text-shadow: 0 2px 8px rgba(0, 0, 0, .6); }
+.bc-explore { background: var(--surface); color: var(--ink); outline: 2px solid var(--primary); }
+.bc-explore .i { color: var(--primary); }
+.bc-quiet { background: var(--surface-2); color: var(--ink); }
+.bc-sugg { flex-direction: row; flex-wrap: wrap; }
