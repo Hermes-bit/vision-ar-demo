@@ -242,7 +242,16 @@ async function analyse(file, key) {
     say(`J'ai trouvé ${plan.rooms.length} pièces : ${plan.rooms.map(r => r.name).join(", ")}.`);
     screenStart();
   } catch (e) {
-    const msg = e?.status === 401 ? "Clé d'API refusée." : e?.message || "Lecture impossible.";
+    // Erreurs de l'API traduites en clair (le message brut, en anglais et en JSON, ne disait rien à l'usager)
+    const raw = String(e?.message || "");
+    const msg = /credit balance/i.test(raw)
+        ? "Le compte Anthropic lié à cette clé n'a plus de crédit. Ajoutez des crédits dans la console Anthropic, rubrique Plans and Billing, puis réessayez."
+      : e?.status === 401 ? "Clé d'API refusée : vérifiez-la ou créez-en une nouvelle dans la console Anthropic."
+      : e?.status === 403 ? "Cette clé n'a pas le droit d'utiliser ce service."
+      : e?.status === 429 ? "Trop de demandes en peu de temps : réessayez dans une minute."
+      : e?.status === 529 || e?.status >= 500 ? "Le service est momentanément surchargé : réessayez dans quelques minutes."
+      : /fetch|network|Failed to load/i.test(raw) ? "Pas de connexion internet : la lecture du plan demande le réseau."
+      : raw && !raw.startsWith("4") && !raw.startsWith("{") ? raw : "Lecture du plan impossible. Réessayez avec une photo plus nette.";
     shell(`<p class="hm-lead" role="alert">${esc(msg)}</p><button class="hm-big" data-hm="retry">${icon("rotate-ccw")}<span>Réessayer</span></button>`);
     root.querySelector("[data-hm=retry]").onclick = screenStart;
     say(msg);

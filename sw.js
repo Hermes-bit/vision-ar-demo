@@ -1,6 +1,6 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
-const VERSION = "vision-ar-v55";
+const VERSION = "vision-ar-v56";
 const MAX_TILES = 600;
 const APP = [
   "./", "index.html", "manifest.webmanifest", "css/app.css", "js/app.js", "js/routing.js", "js/ar.js", "js/icons.js", "js/auth.js", "js/stickers.js", "js/indoor.js", "js/home.js", "data/indoor.json", "img/indoor/demo-rdc.svg", "img/indoor/demo-etage1.svg",
