@@ -16,14 +16,15 @@
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {captureSample, detect, groundPosition, loadModel, modelReady, sideText} from "./obstacles.js";
+import {captureSample, detect, groundPosition, loadModel, modelReady} from "./obstacles.js";
+import {CORRIDOR, MAX_SHOWN, makeTracker, nextAnnouncement} from "./corridor.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
 const CAMERA_LONG_FOV_DEG = 68;   // champ de la caméra arrière principale sur le grand côté de l'image (iPhone ≈ 69°, Android 65-70°)
 const VFOV_DEG = 62;              // sans image vidéo (ordinateur)
 const AHEAD_M = 55;               // portée des repères (obstacles, bordures, marches)
-const PATH_AHEAD_M = 30;          // le ruban s'allume sur 30 m devant soi, au fil de la marche
+const PATH_AHEAD_M = 15;          // le ruban ne montre que les 15 m devant soi (retour terrain : au-delà, il flottait)
 const PLACES_M = 50;              // portée des étiquettes de lieux, par défaut (réglable dans les Paramètres : 20 à 130 m)
 const NEAR_M = 0.6;
 const BEHIND_M = 4;              // le ruban part de sous les pieds
@@ -67,7 +68,10 @@ let sensors = {heading: null, pitch: null, roll: 0}, mapFull = false, sheet = nu
 let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
 let blocking = true, sheetMessage = null, lastUi = "";
 // Détection d'obstacles (N°5, N°17, N°18)
-let dets = [], detsAt = 0, detBusy = false, detState = "", lastPitch = 10, alerted = {}, lastAlert = 0, lastAutoSample = 0;
+let dets = [], detsAt = 0, detBusy = false, detState = "", lastPitch = 10, lastAutoSample = 0;
+// Couloir de marche (js/corridor.js) : suivi des obstacles d'une image à l'autre, annonces une seule fois
+const tracker = makeTracker();
+let annState = {}, lastMovePos = null, lastMoveAt = 0;
 
 // ---- Appli Android de terrain : ARCore Geospatial dessine le tracé sous la page (pont « VisionARNative ») ----
 const NATIVE = globalThis.VisionARNative;
@@ -279,7 +283,9 @@ function drawPath(cam, s, here, pos) {
   ctx.save();
   ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.shadowColor = t.glow; ctx.shadowBlur = (t.ribbon ? 8 : 26) * dpr;
-  let acc = 0, next = (pos - from) + CHEV_START_M;      // premier chevron à 2 m devant soi
+  // chevrons ancrés à l'itinéraire (ils ne glissent pas avec soi) : ils approchent, puis s'effacent sous les pieds
+  let acc = 0, next = Math.ceil((pos - 1.5) / t.chevGap) * t.chevGap - from;
+  const wave = (performance.now() / 1000 * 7) % (PATH_AHEAD_M + 6) - 1;   // onde lumineuse, de soi vers l'avant
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1], b = pts[i], seg = Math.hypot(b.x - a.x, b.y - a.y);
     if (!seg) continue;
@@ -291,7 +297,9 @@ function drawPath(cam, s, here, pos) {
       const q = [back(1), tip, back(-1)].map(p => cam.toCam(p));
       if (q.every(v => v.d >= NEAR_M)) {
         const along = next - (pos - from);               // distance devant soi
-        const alpha = Math.max(0, 1 - along / PATH_AHEAD_M) ** 0.8;
+        const passed = along < CHEV_START_M ? Math.max(0, (along + 1.5) / (CHEV_START_M + 1.5)) : 1;
+        const pulse = Math.exp(-((along - wave) ** 2) / 3);
+        const alpha = passed * Math.max(0, 1 - along / PATH_AHEAD_M) ** 0.8 * (0.5 + 0.5 * pulse);
         ctx.strokeStyle = `rgba(${t.chevRGB},${alpha.toFixed(3)})`;
         ctx.lineWidth = Math.max(1.5 * dpr, Math.min(16 * dpr, cam.scale(q[1].d) * t.chevStroke));
         ctx.beginPath();
@@ -517,8 +525,15 @@ function detView() {
   const W = canvas.clientWidth, H = canvas.clientHeight;
   return {vw: video.videoWidth, vh: video.videoHeight, W, H, focal: focalPx(W, H), pitchDeg: lastPitch, height: camHeight};
 }
+// Fréquence d'analyse adaptée à la batterie : 2,5 images par seconde en marchant, 1 en mode économie,
+// 1 toutes les 2 s à l'arrêt (aucun progrès d'1 m depuis 6 s)
+function detectInterval(s) {
+  const now = performance.now(), pos = s.nav.pos;
+  if (lastMovePos === null || Math.abs(pos - lastMovePos) > 1) { lastMovePos = pos; lastMoveAt = now; }
+  return now - lastMoveAt > 6000 ? 2000 : s.eco ? 1000 : 400;
+}
 function runDetection(s) {
-  if (detBusy || performance.now() - detsAt < (s.eco ? 1000 : 350) || !video?.videoWidth) return;   // économie : 1 image par seconde
+  if (detBusy || performance.now() - detsAt < detectInterval(s) || !video?.videoWidth) return;
   if (!modelReady()) {
     if (detState !== "loading" && detState !== "error") {
       detState = "loading"; lastUi = "";
@@ -531,19 +546,37 @@ function runDetection(s) {
     dets = found; detsAt = performance.now();
     const view = detView();
     for (const d of dets) d.ground = groundPosition(d, view);
+    // seuls les objets sûrs (≥ 50 %), d'une classe d'obstacle, posés au sol, alimentent le suivi
+    tracker.update(dets.filter(d => d.alert && d.score >= CORRIDOR.minScore && d.ground), detsAt);
     obstacleAlerts(s);
     autoSample(s);
   }).catch(() => {}).finally(() => { detBusy = false; });
 }
-// Alerte (voix + vibration) : objet sûr à plus de 50 %, au sol, à moins de 8 m et dans le couloir de marche
+// Alerte (voix + vibration) : obstacle confirmé dans le couloir, une seule fois, le plus proche d'abord,
+// avec le côté pour passer (« Potelet légèrement à droite, 3 mètres, passez à gauche »)
 function obstacleAlerts(s) {
-  const now = performance.now();
-  const near = dets.filter(d => d.alert && d.score >= 0.5 && d.ground && d.ground.dist < 8 && Math.abs(d.ground.lateral) < 1.3)
-    .sort((a, b) => a.ground.dist - b.ground.dist)[0];
-  if (!near || now - lastAlert < 4000 || now - (alerted[near.cls] || 0) < 10000) return;
-  lastAlert = now; alerted[near.cls] = now;
-  const m = Math.max(1, Math.round(near.ground.dist));
-  api.obstacleAlert(`${near.label} à ${m} mètre${m > 1 ? "s" : ""} ${sideText(near.ground.lateral)}.`);
+  const a = nextAnnouncement(tracker, performance.now(), annState, {wheelchair: (s.mobility || "").includes("wheelchair")});
+  if (a) api.obstacleAlert(a.text);
+}
+// Repères à l'écran : au plus 3 obstacles du couloir, un anneau orange posé au sol et son nom (pas de boîte)
+function drawCorridorMarks() {
+  if (performance.now() - detsAt > 2500) return;
+  const {W, H, focal, pitchDeg, height} = detView(), dpr = devicePixelRatio;
+  ctx.save();
+  ctx.font = font(700, 14 * dpr); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  for (const t of tracker.confirmed().slice(0, MAX_SHOWN)) {
+    const below = Math.atan(height / t.dist) - pitchDeg * Math.PI / 180;
+    const x = (W / 2 + t.lateral * focal / t.dist) * dpr, y = (H / 2 + focal * Math.tan(below)) * dpr;
+    if (y < 0 || y > H * dpr) continue;
+    const r = Math.max(10 * dpr, Math.min(60 * dpr, (t.halfWidth + 0.15) * focal / t.dist * dpr));
+    ctx.lineWidth = 4 * dpr; ctx.strokeStyle = "#FF8A00"; ctx.shadowColor = "rgba(255,138,0,.8)"; ctx.shadowBlur = 14 * dpr;
+    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.35, 0, 0, 2 * Math.PI); ctx.stroke();
+    ctx.shadowBlur = 0;
+    const text = `${t.label} · ${Math.max(1, Math.round(t.dist))} m`, tw = ctx.measureText(text).width + 14 * dpr;
+    ctx.fillStyle = "rgba(15,37,55,.85)"; ctx.fillRect(x - tw / 2, y - r * 0.35 - 30 * dpr, tw, 24 * dpr);
+    ctx.fillStyle = "#FFB45C"; ctx.fillText(text, x, y - r * 0.35 - 10 * dpr);
+  }
+  ctx.restore();
 }
 // Collecte automatique (si l'usager l'a accepté) : images où le modèle hésite, une toutes les 20 s au plus
 function autoSample(s) {
@@ -641,64 +674,55 @@ function frame() {
   const cam = makeCamera(heading, pitch, roll, w, h);
   lastPitch = pitch;
   const v = viewpoint(s);
-  updateArrowMode(s, compass);
-  if (!mapFull && nativeOn) {
-    // ARCore dessine le tracé ; tant qu'il n'est pas localisé, la flèche indique la direction
-    if (!nativeLocalized() && !s.st.arrived) drawGroundArrow(heading, arrowBearing(s));
-  } else if (!mapFull) {
+  ribbonA += (ribbonTarget(s, compass) - ribbonA) * 0.08;   // fondu doux, jamais de saut
+  if (!mapFull && !nativeOn) {                             // (appli Android : ARCore dessine le tracé lui-même)
     if (noCamera) drawGrid(cam, v.here, heading);
-    if (arrowMode) { if (!s.st.arrived) drawGroundArrow(heading, arrowBearing(s)); }
-    else {
+    if (ribbonA > 0.02 && !s.st.arrived) {
+      ctx.save(); ctx.globalAlpha = ribbonA;
       if (v.join) drawJoin(cam, v.here, v.join);
       drawPath(cam, s, v.here, v.pos);
+      ctx.restore();
     }
     drawAnchors(cam, s, v.here);
     drawDestination(cam, s, v.here);
-    if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); }
+    if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); else drawCorridorMarks(); }
   }
   renderUi(s, heading, compass);
 }
-// Mode flèche : quand le GPS n'est pas assez précis pour poser le ruban au bon endroit (en ville, souvent
-// 10 à 30 m d'erreur), on n'affiche pas un tracé faux. Une grande flèche au sol, devant soi, indique la
-// direction à prendre : elle ne dépend que de la boussole, elle reste juste même si la position est approximative.
-// Passage en flèche au-delà de 12 m d'incertitude ; retour au ruban sous 8 m, stable pendant 3 s.
-let arrowMode = false, preciseSince = 0;
-function updateArrowMode(s, compass) {
-  const r = s.nav.real, acc = r && Date.now() - r.at < 15000 ? r.acc : null;
-  if (!compass) { arrowMode = false; return; }                 // ordinateur : pas de boussole, pas de flèche
-  if (acc === null || acc > 12) { arrowMode = true; preciseSince = 0; return; }
-  if (acc <= 8) {
-    preciseSince ||= performance.now();
-    if (performance.now() - preciseSince > 3000) arrowMode = false;
-  } else preciseSince = 0;
+// Un seul repère visuel : le ruban au sol. Il ne montre jamais un tracé faux : il pâlit quand la position
+// devient imprécise (8 à 25 m d'incertitude) et disparaît au-delà, ou pendant le recalage après une pause de
+// l'appli. La voix et la consigne écrite prennent alors le relais.
+let ribbonA = 0, recal = null;          // recal : {since (horloge), at (performance)} pendant le recalage
+function precision(s) {
+  const r = s.nav.real;
+  return r && Date.now() - r.at < 15000 ? r.acc : null;
 }
-// Direction de la flèche : vers le point où rejoindre l'itinéraire, ou le long de l'itinéraire, 15 m devant
-function arrowBearing(s) {
-  const n = s.nav, fresh = n.real && Date.now() - n.real.at < 15000;
-  let a = s.posAt(n.pos), b = s.posAt(Math.min(n.total, n.pos + 15));
-  if (fresh && (n.offRoute || n.away)) { a = n.real; b = s.posAt(n.gapAlong ?? n.pos); }
-  else if (fresh && haversineM(n.real.lat, n.real.lon, b.lat, b.lon) > 4) a = n.real;
-  const k = Math.cos(a.lat * Math.PI / 180);
-  return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
+function ribbonTarget(s, compass) {
+  const r = s.nav.real;
+  if (recal) {
+    // fin du recalage : une position GPS reçue APRÈS le retour, assez précise, et la boussole stabilisée (2 s)
+    if (r && r.at > recal.since && r.acc <= 20 && performance.now() - recal.at > 2000) { recal = null; lastUi = ""; }
+    else return 0;
+  }
+  if (!compass) return 1;                                   // ordinateur : pas de GPS de terrain, on montre tout
+  const acc = precision(s);
+  return acc === null || acc > 25 ? 0 : acc <= 8 ? 1 : 1 - 0.75 * (acc - 8) / 17;
 }
-function drawGroundArrow(heading, bearing) {
-  // Flèche dessinée à l'écran, couchée « au sol » par un aplatissement vertical : toujours lisible,
-  // même téléphone penché, et elle ne prétend pas à une position précise.
-  const t = theme(), dpr = devicePixelRatio, W = canvas.width, H = canvas.height;
-  const rel = ((bearing - heading + 540) % 360) - 180, size = Math.min(W, H) * 0.26;
-  const domeTop = (root.querySelector(".dome")?.getBoundingClientRect().top ?? H / dpr * 0.65) * dpr;
-  const topBottom = (root.querySelector(".top")?.getBoundingClientRect().bottom ?? 0) * dpr;
-  const cx = W / 2, cy = Math.max(topBottom + size, domeTop - size * 0.95);
-  ctx.save();
-  ctx.translate(cx, cy); ctx.scale(1, 0.58); ctx.rotate(rel * Math.PI / 180);
-  const L = size, path = [[-0.2, 0.95], [-0.2, 0.05], [-0.5, 0.05], [0, -0.95], [0.5, 0.05], [0.2, 0.05], [0.2, 0.95]];
-  ctx.beginPath(); path.forEach(([x, y], k) => k ? ctx.lineTo(x * L, y * L) : ctx.moveTo(x * L, y * L)); ctx.closePath();
-  ctx.shadowColor = t.glow; ctx.shadowBlur = 28 * dpr;
-  ctx.fillStyle = t.ribbon ? "rgba(0,174,204,.9)" : "rgba(91,224,234,.6)";
-  ctx.fill();
-  ctx.shadowBlur = 0; ctx.lineWidth = 4 * dpr; ctx.lineJoin = "round"; ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.stroke();
-  ctx.restore();
+// Retour dans l'appli après une pause (écran verrouillé, autre appli) : l'ancien calage est faux. On efface
+// le ruban, on annonce « Recalage en cours », on remet à zéro filtres et suivi, et on relance la caméra.
+function onVisibility() {
+  if (!root || root.hidden) return;
+  if (document.visibilityState === "hidden") { hiddenAt = performance.now(); return; }
+  if (performance.now() - hiddenAt < 1500) return;
+  recal = {since: Date.now(), at: performance.now()};
+  ribbonA = 0; view = null; lastUi = "";
+  Object.values(F).forEach(f => f.reset());
+  tracker.reset(); dets = [];
+  api.say?.("Recalage en cours, gardez le téléphone devant vous.", 1);   // niveau CONSIGNE (js/speech.js)
+  const track = stream?.getVideoTracks()[0];
+  if (!nativeOn && !noCamera && !mapFull && (!track || track.readyState === "ended" || video.paused)) startCamera();
 }
+let hiddenAt = 0;
 // Point de vue : sur l'itinéraire, la position projetée sur le tracé (le ruban part de sous les pieds).
 // À l'écart du tracé (à l'intérieur, de l'autre côté de la rue, hors itinéraire), la vraie position GPS :
 // le ruban reste à sa vraie place dans la rue et des pointillés montrent comment le rejoindre.
@@ -741,7 +765,7 @@ function renderUi(s, heading, compass) {
   const turnSoon = st.toManeuver <= 25 && !vague;
   const upcoming = (TITLE[next.maneuver] || "Continuez tout droit");
   const title = st.arrived ? "Vous êtes arrivé" : approach ? "Rejoignez l'itinéraire" : joining ? "Rejoignez l'itinéraire"
-    : vague ? "Suivez la flèche" : turnSoon || next.maneuver === "straight" ? upcoming : "Continuez tout droit";
+    : vague ? "Position approximative" : turnSoon || next.maneuver === "straight" ? upcoming : "Continuez tout droit";
   const manIcon = approach || joining ? "footprints" : st.arrived ? MAN_ICON.arrive
     : turnSoon ? MAN_ICON[next.maneuver] || "arrow-up" : vague ? "navigation" : "arrow-up";
   const away = st.arrived ? "" : approach ? dist(s.nav.approachDist) : joining ? dist(s.nav.gap) : (vague ? "≈ " : "") + dist(st.toManeuver);
@@ -765,10 +789,11 @@ function renderUi(s, heading, compass) {
   const html = `
     <div class="top">
       <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
-      <div class="bubble" role="status" aria-live="polite"><i class="bubble-ic">${icon(manIcon)}</i>
+      <div class="bubble"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
         ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
-        ${!nativeOn && arrowMode && !st.arrived ? `<em class="arrow-note">${icon("navigation")} Position approximative${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : suivez la flèche au sol</em>` : ""}
+        ${!nativeOn && recal && !st.arrived ? `<em class="arrow-note">${icon("locate-fixed")} Recalage en cours : gardez le téléphone devant vous</em>` : ""}
+        ${!nativeOn && !recal && compass && (acc === null || acc > 25) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé masqué, suivez la voix</em>` : ""}
         ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
         ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
@@ -781,15 +806,19 @@ function renderUi(s, heading, compass) {
         <span class="needle"></span><i>N</i></div>
     </div>
     <nav class="dock" aria-label="Commandes du guidage">
-      <button class="round" data-act="settings" aria-label="Réglages du guidage">${icon("sliders-horizontal")}</button>
+      <button class="round" data-act="settings" aria-label="Réglages du guidage">${icon("sliders-horizontal")}<span aria-hidden="true">Réglages</span></button>
       <button class="pill" data-act="map">${icon(mapFull ? "camera" : "map")}<span>${mapFull ? "Caméra" : "Plan"}</span></button>
       <button class="center" data-act="report" aria-label="Signaler un obstacle">${icon("triangle-alert")}</button>
       <button class="pill stop" data-act="ask-stop" aria-label="Arrêter le guidage">${icon("x")}<span>Arrêter</span></button>
-      <button class="round" data-act="voice" aria-label="${s.voice ? "Couper la voix" : "Activer la voix"}">${icon(s.voice ? "volume-2" : "volume-x")}</button>
+      <button class="round" data-act="voice" aria-label="${s.voice ? "Couper la voix" : "Activer la voix"}">${icon(s.voice ? "volume-2" : "volume-x")}<span aria-hidden="true">${s.voice ? "Son" : "Muet"}</span></button>
     </nav>
     ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : sheet === "stop" ? stopSheet() : reportSheet()}</section>` : ""}`;
   const ui = root.querySelector(".ar-ui");
   if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
+  // VoiceOver / TalkBack : la consigne n'est lue que lorsqu'elle CHANGE (avant, la bulle était relue à chaque
+  // mètre parcouru). Les dangers passent par le bandeau « alert » et par la voix de l'appli (js/speech.js).
+  const live = root.querySelector(".ar-live"), said = `${title}. ${subText}`;
+  if (live && live.dataset.title !== title) { live.dataset.title = title; live.textContent = said; }
   root.classList.toggle("sheet-open", !!sheet);
   // carte agrandie : elle s'arrête sous la consigne, pour que la poignée reste visible et attrapable
   const topH = `${Math.round(root.querySelector(".top").getBoundingClientRect().bottom)}px`;
@@ -929,6 +958,7 @@ function onAction(e) {
 }
 function setMapFull(on) {
   mapFull = on;
+  if (!on && !stream && !nativeOn && !noCamera) startCamera();   // sortie du mode audio seul
   root.classList.toggle("map-full", on);
   const grip = root.querySelector(".dome-grip");
   grip.setAttribute("aria-label", on ? "Réduire la carte" : "Agrandir la carte");
@@ -943,7 +973,8 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  view = null; mapFull = false; sheet = null; lastUi = ""; arrowMode = false; preciseSince = 0;
+  view = null; mapFull = false; sheet = null; lastUi = ""; ribbonA = 0; recal = null;
+  tracker.reset(); annState = {}; lastMovePos = null;
   Object.values(F).forEach(f => f.reset());
   sensors = {heading: null, pitch: null, roll: 0};
   root = document.getElementById("ar");
@@ -953,12 +984,12 @@ export async function openAR(options) {
     <div class="dome"><div class="dome-map"></div>
       <svg class="ring" preserveAspectRatio="none" aria-hidden="true"><path class="ring-arc"/><g class="ring-ticks"></g></svg>
       <button class="dome-grip" aria-label="Agrandir la carte" aria-expanded="false"><span></span></button></div>
-    <div class="ar-ui"></div>`;
+    <div class="ar-ui"></div><div class="ar-live sr-only" aria-live="polite"></div>`;
   video = root.querySelector("video");
   canvas = root.querySelector("canvas");
   ctx = canvas.getContext("2d");
   root.querySelector(".dome-map").append(api.map.getContainer());
-  api.map.invalidateSize();
+  try { api.map.invalidateSize(); } catch { /* dôme pas encore dimensionné : refait par layoutDome */ }
   bindGrip();
   domeObserver = new ResizeObserver(layoutDome);
   domeObserver.observe(root.querySelector(".dome"));
@@ -977,8 +1008,17 @@ export async function openAR(options) {
     return;
   }
   frame();                                             // l'interface d'abord, la caméra peut mettre du temps
+  document.addEventListener("visibilitychange", onVisibility);
+  // Mode audio seul (batterie) : pas de caméra ni de détection ; le plan en grand, la voix guide.
+  // Le bouton « Caméra » l'allume quand même à la demande.
+  if (api.state().audioOnly) { root.classList.add("audio-only"); setMapFull(true); return; }
+  await startCamera();
+}
+// 960 × 540 suffit à l'écran et au détecteur (qui analyse en 320 à 640 px) : moins de batterie qu'en 1280 × 720
+async function startCamera() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: "environment"}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+    stream?.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: "environment"}, width: {ideal: 960}, height: {ideal: 540}}, audio: false});
     video.srcObject = stream;
     await video.play().catch(() => {});
   } catch {
@@ -988,6 +1028,7 @@ export async function openAR(options) {
 }
 export function closeAR() {
   cancelAnimationFrame(raf);
+  document.removeEventListener("visibilitychange", onVisibility);
   stopSensors();
   domeObserver?.disconnect(); domeObserver = null; domeGeom = null;
   stream?.getTracks().forEach(t => t.stop());

@@ -7,8 +7,10 @@ import {clearSamples, exportZip, listSamples} from "./obstacles.js";
 import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
+import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
+import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {accessibleEntrance, arrivalFiche, arrivalSpeech, loadAcces} from "./arrival.js";
+import {arrivalFiche, arrivalSpeech, entranceFor, loadAcces} from "./arrival.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -53,7 +55,7 @@ const S = {
   // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
   originMode: "auto", searchFor: "dest", oquery: "",
   // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
-  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true),
+  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), audioOnly: store.get("va-audio-only", false),
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
   logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
@@ -102,14 +104,24 @@ function addReport(kind, blocking, at) {
 }
 
 // ---- Voix et vibrations ---------------------------------------------------------------
-function say(text, urgent = false) {
-  if (window.VisionARNative) { if (S.voice) window.VisionARNative.speak(text, urgent); return; }   // appli Android : voix du téléphone
-  if (S.voice && "speechSynthesis" in window) {
-    if (urgent) speechSynthesis.cancel();
+// Annonces par ordre d'urgence (js/speech.js) : un danger coupe une info, une consigne attend la fin d'un
+// danger, rien n'est répété ni rattrapé en retard. `level` : DANGER, CONSIGNE, INFO (true = CONSIGNE, false = INFO).
+const speech = makeSpeech({
+  speak(text, onEnd) {
+    let done = false;
+    const fin = () => { if (!done) { done = true; onEnd(); } };
+    setTimeout(fin, 1500 + text.length * 90);              // filet : sur iPhone, la fin de lecture n'est pas toujours signalée
+    if (window.VisionARNative) { window.VisionARNative.speak(text, true); return; }   // appli Android : voix du téléphone
+    if (!("speechSynthesis" in window)) return fin();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "fr-FR";
+    u.lang = "fr-FR"; u.onend = fin; u.onerror = fin;
     speechSynthesis.speak(u);
-  }
+  },
+  cancel() { if (!window.VisionARNative) window.speechSynthesis?.cancel(); },
+});
+function say(text, level = false) {
+  if (!S.voice) return;
+  speech.say(text, level === true ? CONSIGNE : level === false ? INFO : level);
 }
 // Vibrations de direction : le nombre d'impulsions dit où aller (même code sur Android et sur iPhone)
 //   2 = à gauche, 3 = à droite, 5 rapides = mauvais sens / demi-tour, 1 longue = arrivé
@@ -657,8 +669,8 @@ function alongRoute(n, p) {
   return best;
 }
 function hazardsOn(n) {
-  const out = [];
-  let along = 0, lastSlope = -1e9;
+  const out = [], vision = resolveProfile(profileJson()).prefers_sound_signals;
+  let along = 0, lastSlope = -1e9, road = null;
   for (const id of n.route.edge_ids || []) {
     const e = net.edges[id];
     if (!e) continue;
@@ -666,6 +678,17 @@ function hazardsOn(n) {
     for (let i = 1; i < e.shape.length; i++) len += haversineM(e.shape[i - 1][0], e.shape[i - 1][1], e.shape[i][0], e.shape[i][1]);
     const at = along + Math.min(1.5, len / 2);
     if (e.has_step) out.push({id: `e${id}-step`, along: at, label: "Marche", ic: "stairs"});
+    // marche sur la chaussée : une seule alerte par portion continue, avec sa longueur
+    if (e.beside_sidewalk) {
+      if (road && along - road.end < 3) road.len += len;
+      else { road = {id: `e${id}-road`, along: at, len, ic: "triangle-alert"}; out.push(road); }
+      road.end = along + len;
+      road.label = `Passage sur la chaussée, ${Math.max(5, Math.round(road.len / 5) * 5)} mètres`;
+    }
+    // traversée sans feu sonore : annoncée seulement si c'est CONFIRMÉ (à Gennevilliers, 9 traversées sur 10 n'ont
+    // pas l'information : les annoncer toutes saturerait l'usager ; le résumé avant le départ les compte)
+    if (vision && e.is_crossing && e.sound_signal === false)
+      out.push({id: `e${id}-nosound`, along: at, label: "Traversée sans feu sonore", ic: "triangle-alert"});
     if (e.is_crossing && e.kerb_lowered === false) out.push({id: `e${id}-kerb`, along: at, label: "Bordure haute", ic: "triangle-alert"});
     if (e.width_m !== null && e.width_m < 0.9)
       out.push({id: `e${id}-narrow`, along: at, label: `Passage étroit, ${String(Math.round(e.width_m * 100) / 100).replace(".", ",")} mètre`, ic: "narrow"});
@@ -696,7 +719,7 @@ function checkHazards() {
   hazardAlerted.add(h.id);
   const m = Math.max(1, Math.round(h.along - n.pos)), where = h.side ? `sur votre ${h.side}` : "devant vous";
   n.hazard = {...h, dist: m, where, at: Date.now()};       // bandeau à l'écran (malentendance : le repère principal)
-  say(`Attention, ${h.label.charAt(0).toLowerCase()}${h.label.slice(1)}, à ${m} mètre${m > 1 ? "s" : ""}, ${where}.`, true);
+  say(`Attention, ${h.label.charAt(0).toLowerCase()}${h.label.slice(1)}, à ${m} mètre${m > 1 ? "s" : ""}, ${where}.`, DANGER);
   buzz("obstacle");
 }
 // Économie de batterie : loin du prochain virage et de tout obstacle, la vue caméra s'allège (moins d'images
@@ -719,7 +742,8 @@ function beginRoute(along) {
   const n = S.nav, first = n.route.steps[0];
   n.phase = "route"; n.away = false; n.approachDist = 0;
   if (!n.quietStart) {
-    say(`Vous êtes au point de départ, le trajet commence. ${first.text}. ${short(n.route.length_m)}, environ ${Math.ceil(n.route.length_m / speed() / 60)} minutes.`, true);
+    const risks = risksText(routeRisks(n.route));
+    say(`Vous êtes au point de départ, le trajet commence. ${first.text}. ${short(n.route.length_m)}, environ ${Math.ceil(n.route.length_m / speed() / 60)} minutes.${risks.length ? ` Attention : ${risks.join(", ")}.` : ""}`, true);
     buzz("tick");
   }
   moveTo(along);
@@ -757,21 +781,28 @@ function announce() {
     if (!n.said.has("arrive")) {
       n.said.add("arrive"); n.arrived = true;
       const end = n.route.geometry.at(-1), d = S.dest ? haversineM(end.lat, end.lon, S.dest.lat, S.dest.lon) : 0;
-      say(d > 15 ? `Vous êtes arrivé au bout de l'itinéraire. Votre destination est à ${Math.round(d)} mètres.` : "Vous êtes arrivé.", true);
+      say(d > 15 ? `Vous êtes arrivé au bout de l'itinéraire. Votre destination est à ${Math.round(d)} mètres.`
+        : S.dest?.viaEntrance ? "Vous êtes arrivé à l'entrée accessible." : "Vous êtes arrivé.", true);
       buzz("arrive");
-      const fiche = arrivalSpeech(S.arrival);              // comment entrer, ce qu'on trouve à l'intérieur
-      if (fiche) setTimeout(() => say(fiche), 2500);
+      const fiche = arrivalSpeech(S.arrival);              // comment entrer (et ce qu'on trouve derrière la porte)
+      if (fiche) setTimeout(() => say(fiche, INFO), 2500);
+      // Le guidage s'arrête à l'entrée (pas de navigation intérieure) : GPS coupé tout de suite, écran
+      // de guidage fermé après la lecture de la fiche
+      if (!FEATURES.indoorNavigationEnabled) finishAtEntrance(fiche);
     }
     return;
   }
   if (n.phase === "approach") return;
-  const i = st.idx + 1, alerts = st.next.alerts.length ? `. Attention : ${st.next.alerts.join(", ")}` : "";
+  // « Données à confirmer » n'est pas un danger : pas dit à voix haute (il reste sur la fiche de l'itinéraire)
+  const spokenAlerts = st.next.alerts.filter(a => a !== "Données à confirmer");
+  const i = st.idx + 1, alerts = spokenAlerts.length ? `. Attention : ${spokenAlerts.join(", ")}` : "";
   const side = turnSide(st.next.maneuver);
+  const arriving = st.next.maneuver === "arrive";            // l'arrivée elle-même est annoncée une seule fois, plus haut
   if (st.toManeuver <= 60 && st.toManeuver > 20 && !n.said.has(`${i}-far`)) {
     n.said.add(`${i}-far`);
-    say(`${st.spoken}${alerts}`);
+    say(arriving ? `Dans ${short(st.toManeuver)}, vous arrivez${S.dest?.viaEntrance ? " à l'entrée accessible" : ""}.` : `${st.spoken}${alerts}`);
     if (side) buzz(side);
-  } else if (st.toManeuver <= 15 && !n.said.has(`${i}-now`)) {
+  } else if (st.toManeuver <= 15 && !arriving && !n.said.has(`${i}-now`)) {
     n.said.add(`${i}-now`); n.said.add(`${i}-far`);
     const vague = n.real && n.real.acc > 20;                  // GPS imprécis : pas de virage « au mètre près »
     say(vague ? `Bientôt, ${st.next.text.charAt(0).toLowerCase()}${st.next.text.slice(1)}` : st.next.text, true);
@@ -1037,6 +1068,7 @@ function screenSettings() {
       <input type="range" min="20" max="130" step="10" value="${S.placesRange}" id="setPlacesRange" aria-label="Distance des lieux affichés dans la caméra, en mètres">
       <div class="scale"><span>20 m</span><span>130 m</span></div></div>
     ${sw("setEco", "battery", "Économie de batterie pendant le guidage", S.eco)}
+    ${sw("setAudioOnly", "volume-2", "Mode audio seul : caméra éteinte, guidage à la voix et sur le plan (batterie)", S.audioOnly)}
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
@@ -1143,7 +1175,7 @@ function screenRoute() {
       ${icon("star")} ${currentFavIndex() >= 0 ? "Enregistré" : "Enregistrer"}</button></div>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
-  ${S.dest && S.arrival ? arrivalCard(S.arrival) : ""}
+  ${S.dest && S.arrival ? arrivalCard(S.arrival) : ""}${indoorButton()}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
 }
 // Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
@@ -1151,6 +1183,20 @@ function screenRoute() {
 const MY_POSITION = {label: "Ma position", sub: "Partir d'où je suis (GPS)", icon: "locate-fixed", type: "gps"};
 // Fiches d'accès des établissements de la zone (« À l'arrivée », js/arrival.js), chargées une fois
 loadAcces(ZONE_ID);
+// Navigation intérieure (js/indoor.js) : désactivée par défaut (js/features.js). Rien n'est chargé tant que
+// le drapeau est à false ; à true, bouton « Plan intérieur » près des bâtiments qui ont un plan.
+let indoorBuildings = [], indoor = null;
+if (FEATURES.indoorNavigationEnabled) {
+  const css = document.createElement("link");
+  css.rel = "stylesheet"; css.href = "css/indoor.css";
+  document.head.append(css);
+  import("./indoor.js").then(async m => { indoor = m; indoorBuildings = (await m.loadIndoor()).filter(b => b.zone === ZONE_ID); render(); });
+}
+const buildingNear = p => FEATURES.indoorNavigationEnabled && p && indoorBuildings.find(b => haversineM(b.lat, b.lon, p.lat, p.lon) < 80);
+function openBuilding(id) {
+  const b = indoorBuildings.find(x => x.id === id);
+  if (b && indoor) indoor.openIndoor(b, {avoidStairs: !resolveProfile(profileJson()).steps_allowed, say: t => say(t, true)});
+}
 // ---- Trajets favoris (gardés sur ce téléphone, par ville) ---------------------------------------
 // Départ « Ma position » enregistré comme tel : le trajet repart de là où l'on est au moment de le relancer.
 const FAV_KEY = `va-favorites-${ZONE_ID}`, FAV_MAX = 12;
@@ -1225,6 +1271,11 @@ function renderPlaces() {
   bindPlaces(box);
   layoutSheet();
 }
+function indoorButton() {
+  const b = buildingNear(S.dest);
+  return b ? `<button class="btn soft indoor-btn" data-indoor="${b.id}">${icon("building-2")}
+    <span class="grow">Plan intérieur<small>${esc(b.name)}</small></span>${icon("chevron-right")}</button>` : "";
+}
 function arrivalCard(f) {
   if (!f.lines.length) return `<p class="fine arrive-none">${icon("door-open")} Pas encore d'information sur l'accès à ce lieu.</p>`;
   return `<section class="arrive-card" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
@@ -1232,13 +1283,31 @@ function arrivalCard(f) {
     <ul>${f.lines.map(l => `<li class="${l.tone}">${icon(l.ic)}<span>${esc(l.text)}</span></li>`).join("")}</ul>
     <p class="fine">Sources : ${esc(f.sources.join(", "))}.</p></section>`;
 }
+// Ce qu'il faut savoir avant de partir : mètres sur la chaussée, traversées sans feu sonore
+function routeRisks(r) {
+  let road = 0, noSignal = 0;
+  for (const id of r.edge_ids || []) {
+    const e = net?.edges[id];
+    if (!e) continue;
+    if (e.beside_sidewalk) road += e.length_m;
+    if (e.is_crossing && e.sound_signal !== true) noSignal++;
+  }
+  return {road: Math.round(road), noSignal, vision: resolveProfile(profileJson()).prefers_sound_signals};
+}
+function risksText(k) {
+  const t = [];
+  if (k.road >= 5) t.push(`${short(k.road)} sur la chaussée`);
+  if (k.vision && k.noSignal) t.push(`${k.noSignal} traversée${k.noSignal > 1 ? "s" : ""} sans feu sonore connu`);
+  return t;
+}
 function routeCard(r, i) {
   const min = Math.ceil(r.duration_s / 60);
   const incomplete = r.warnings.includes("données incomplètes");
   const badge = !r.accessible ? `<span class="badge danger">${icon("ban")} Non praticable</span>`
     : i === 0 ? `<span class="badge ok">${icon("accessibility")} Recommandé</span>` : "";
   const notes = r.accessible
-    ? r.warnings.filter(w => w !== "marche" && w !== "données incomplètes").map(w => `<span class="tag">${esc(w)}</span>`)
+    ? risksText(routeRisks(r)).map(w => `<span class="tag warn">${icon("triangle-alert")} ${esc(w)}</span>`)
+      .concat(r.warnings.filter(w => !["marche", "données incomplètes", "sur la chaussée", "traversée sans feu sonore"].includes(w)).map(w => `<span class="tag">${esc(w)}</span>`))
       .concat(incomplete ? [`<span class="tag warn">${icon("info")} données à confirmer</span>`] : [])
     : r.blocking_issues.map(w => `<span class="tag danger">${icon("triangle-alert")} ${esc(w)}</span>`);
   const stk = i === 0 && r.accessible ? (!r.steps_count ? "zero-marche" : r.max_slope_pct <= 5 ? "pente-douce" : "") : "";
@@ -1260,20 +1329,27 @@ const navApi = {
     mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
     detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus,
-    placesRange: S.placesRange, eco: ecoNow()},
+    placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly},
   reroute: () => manualReroute(),
   setOption: (key, value) => { S[key] = value; store.set(OPTION_KEYS[key], value); },
-  obstacleAlert: text => { say(text, true); buzz("obstacle"); },
+  obstacleAlert: text => { say(text, DANGER); buzz("obstacle"); },
+  say: (text, level = INFO) => say(text, level),
   nativeFix: (lat, lon, acc) => onGps({coords: {latitude: lat, longitude: lon, accuracy: acc}}, true),
   setHaptics: on => { S.haptics = on; store.set("va-haptics", on); if (on) buzz("left"); },
-  toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) window.speechSynthesis?.cancel(); },
+  toggleVoice: () => { S.voice = !S.voice; store.set("va-voice", S.voice); if (!S.voice) speech.clear(); },
   openHud: () => { S.hud = true; renderHud(); },
   setTheme,
   report: (kind, blocking) => doReport(kind, blocking),
   stop: () => stopGuidance(),
 };
-function stopGuidance() {
-  for (const step of [() => stopNav(), () => { S.nav = null; }, () => window.speechSynthesis?.cancel(),
+function finishAtEntrance(fiche) {
+  stopNav();
+  try { wakeLock?.release?.(); } catch { /* déjà libéré */ }
+  const nav = S.nav;
+  setTimeout(() => { if (S.nav === nav && S.screen === "nav") stopGuidance(true); }, fiche ? 4000 + fiche.length * 90 : 6000);
+}
+function stopGuidance(keepVoice = false) {
+  for (const step of [() => stopNav(), () => { S.nav = null; }, () => { if (!keepVoice) speech.clear(); },
                       () => wakeLock?.release?.(), () => closeAR(), () => layers.progress.clearLayers(), () => go("route")]) {
     try { step(); } catch (e) { console.error("Arrêt du guidage :", e); }
   }
@@ -1501,6 +1577,7 @@ function stepBack() {
   // le geste de Safari et le nôtre peuvent arriver ensemble : un seul retour à la fois
   if (Date.now() - lastStep < 450) return;
   lastStep = Date.now();
+  if (indoor?.indoorOpen()) return indoor.closeIndoor();  // plan intérieur ouvert (drapeau activé) : le retour le ferme
   if (S.screen === "signup") { resetForm(); return go("login"); }
   if (S.screen === "login") { resetForm(); return go("welcome"); }
   if (S.screen === "welcome") return;
@@ -1535,8 +1612,10 @@ function closeRoutes() {
 function chooseDest(place) {
   sheetCollapsed = false;                                 // les itinéraires doivent se voir
   // « Jusqu'à la bonne porte » : on vise l'entrée accessible du lieu quand elle est connue (js/arrival.js)
-  const ent = net ? accessibleEntrance(net, place) : null, viaEntrance = ent && ent.d > 8 && !place.gps;
-  S.arrival = net ? arrivalFiche(net, place, viaEntrance ? ent : null) : null;
+  const {entrance: ent, note} = net && !place.gps ? entranceFor(net, place) : {entrance: null, note: ""};
+  const viaEntrance = ent && ent.d > 8;
+  // incohérence entrée / adresse : notée seulement en mode test (sinon chaque bâtiment voisin en produirait une)
+  S.arrival = net ? arrivalFiche(net, place, viaEntrance ? ent : null, S.detectDebug ? note : "") : null;
   S.dest = viaEntrance ? {...place, lat: ent.lat, lon: ent.lon, viaEntrance: true} : place;
   S.query = place.label; S.places = [];
   computeRoute();                                         // tout de suite avec le départ actuel…
@@ -1651,6 +1730,7 @@ function bind() {
   on("favToggle", "onclick", toggleFavorite);
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
+  all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
   on("start", "onclick", startGuidance);
   // Paramètres
   on("settingsBack", "onclick", () => go("route"));
@@ -1660,6 +1740,7 @@ function bind() {
   on("setAlertDist", "oninput", e => { S.alertDist = +e.target.value; store.set("va-alert-dist", S.alertDist); $("alertDistLbl").textContent = `${S.alertDist} m`; });
   on("setPlacesRange", "oninput", e => { S.placesRange = +e.target.value; store.set("va-places-range", S.placesRange); $("placesRangeLbl").textContent = `${S.placesRange} m`; });
   on("setEco", "onchange", e => { S.eco = e.target.checked; store.set("va-eco", S.eco); });
+  on("setAudioOnly", "onchange", e => { S.audioOnly = e.target.checked; store.set("va-audio-only", S.audioOnly); });
   on("setZone", "onclick", () => go("zones"));
   on("zonesBack", "onclick", () => go("settings"));
   all("[data-zone]", b => b.onclick = () => {

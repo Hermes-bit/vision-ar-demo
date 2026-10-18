@@ -1,6 +1,11 @@
 // Détection d'obstacles par la caméra (expérimental) et collecte d'images pour entraîner un modèle dédié.
 //
-// Modèle actuel : COCO-SSD (TensorFlow.js, entraîné sur 80 objets du quotidien), chargé seulement si
+// Modèle dédié (prioritaire) : YOLO entraîné sur 10 classes d'obstacles de trottoir (potelet, poteau, barrière,
+// mobilier, deux-roues, voiture sur le trottoir, travaux, dénivelé, obstacle en hauteur, piéton immobile),
+// exporté pour le web dans models/obstacles/ (model.json + labels.json : voir ml/ et
+// docs/entrainement-obstacles.md). S'il n'est pas là, on se rabat sur le modèle généraliste ci-dessous.
+//
+// Modèle de secours : COCO-SSD (TensorFlow.js, entraîné sur 80 objets du quotidien), chargé seulement si
 // l'usager active la détection. Il reconnaît une partie des obstacles du trottoir : vélos et deux-roues,
 // voitures et camions, bancs, bornes à incendie, horodateurs, panneaux, bacs à plantes, chaises et tables
 // de terrasse, valises. Il NE connaît PAS les potelets, poubelles, barrières de travaux, trous, marches :
@@ -9,22 +14,27 @@
 // Distance et côté : le bas de la boîte détectée touche le sol ; avec la hauteur du téléphone, son
 // inclinaison et la focale de la caméra, on en déduit la distance et le décalage gauche / droite.
 
-export const MODEL_VERSION = "coco-ssd-lite-mobilenet-v2@2.2.3";
+import {OBSTACLE_LABELS} from "./corridor.js";
+
+export let MODEL_VERSION = "coco-ssd-lite-mobilenet-v2@2.2.3";
+const YOLO_DIR = "models/obstacles/";
 const TFJS = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js";
 const COCO = "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js";
 
 // Classes COCO utiles sur un trottoir -> nom en français, et si elles déclenchent une alerte
 export const CLASSES = {
-  bicycle: ["Vélo", true], motorcycle: ["Deux-roues", true], car: ["Voiture", true], truck: ["Camion", true],
+  // véhicules : jamais d'alerte (on ne sait pas s'ils sont garés sur la chaussée ou sur le trottoir)
+  bicycle: ["Vélo", true], motorcycle: ["Deux-roues", true], car: ["Voiture", false], truck: ["Camion", false],
   bench: ["Banc", true], "fire hydrant": ["Borne", true], "parking meter": ["Horodateur", true], "stop sign": ["Panneau", true],
   "potted plant": ["Bac à plantes", true], chair: ["Chaise de terrasse", true], "dining table": ["Table de terrasse", true],
   suitcase: ["Valise", true], person: ["Personne", false], dog: ["Chien", false], bus: ["Bus", false], "traffic light": ["Feu", false],
 };
 // Catégories à annoter pour le modèle dédié (le modèle actuel n'en connaît qu'une partie)
-export const TARGET_CATEGORIES = ["potelet", "borne", "poteau", "poubelle", "trottinette", "velo", "deux_roues", "vehicule_sur_trottoir",
-  "terrasse", "travaux", "barriere", "trou", "marche", "vegetation", "mobilier_urbain", "panneau", "banc", "autre"];
+// (les 10 classes du modèle dédié, dans le même ordre que ml/obstacles.yaml)
+export const TARGET_CATEGORIES = ["potelet", "poteau", "barriere", "mobilier", "deux_roues", "voiture_trottoir", "travaux",
+  "denivele", "obstacle_haut", "pieton_immobile"];
 
-let model = null, loading = null;
+let model = null, loading = null, yolo = null;   // yolo : {graph, names, imgsz}
 function loadScript(src) {
   return new Promise((ok, ko) => {
     if (document.querySelector(`script[src="${src}"]`)) return ok();
@@ -34,11 +44,20 @@ function loadScript(src) {
     document.head.append(s);
   });
 }
-/** Charge TensorFlow.js et le modèle (≈ 6 Mo, une seule fois). */
+/** Charge TensorFlow.js et le modèle : le modèle dédié s'il est publié, sinon COCO-SSD (≈ 6 Mo, une seule fois). */
 export function loadModel() {
   if (model) return Promise.resolve(model);
   loading ||= (async () => {
     await loadScript(TFJS);
+    const meta = await fetch(YOLO_DIR + "labels.json").then(r => r.ok ? r.json() : null).catch(() => null);
+    if (meta?.names?.length) {
+      try {
+        yolo = {graph: await window.tf.loadGraphModel(YOLO_DIR + "model.json"), names: meta.names, imgsz: meta.imgsz || 320};
+        MODEL_VERSION = meta.version || "yolo-obstacles";
+        model = yolo.graph;
+        return model;
+      } catch (e) { console.warn("Modèle dédié illisible, retour au modèle généraliste", e); yolo = null; }
+    }
     await loadScript(COCO);
     model = await window.cocoSsd.load({base: "lite_mobilenet_v2"});
     return model;
@@ -50,8 +69,34 @@ export const modelReady = () => !!model;
 /** Détections sur l'image vidéo : [{cls, label, alert, score, box: [x, y, w, h] en pixels vidéo}]. */
 export async function detect(video, minScore = 0.2) {
   if (!model || !video.videoWidth) return [];
+  if (yolo) return detectYolo(video, minScore);
   const raw = await model.detect(video, 20, minScore);
-  return raw.map(d => ({cls: d.class, label: CLASSES[d.class]?.[0] || d.class, alert: !!CLASSES[d.class]?.[1], score: d.score, box: d.bbox}));
+  return raw.map(d => ({cls: d.class, label: OBSTACLE_LABELS[d.class] || CLASSES[d.class]?.[0] || d.class, alert: !!CLASSES[d.class]?.[1], score: d.score, box: d.bbox}));
+}
+// Modèle dédié (export Ultralytics « tfjs », sans NMS intégré) : image mise au carré (bandes grises comme à
+// l'entraînement), sortie [1, 4 + classes, N] -> boîtes, puis suppression des doublons (NMS, IoU 0,45).
+async function detectYolo(video, minScore) {
+  const tf = window.tf, S = yolo.imgsz, vw = video.videoWidth, vh = video.videoHeight, k = S / Math.max(vw, vh);
+  const nw = Math.round(vw * k), nh = Math.round(vh * k), px = Math.floor((S - nw) / 2), py = Math.floor((S - nh) / 2);
+  const [boxes, scores, classes] = tf.tidy(() => {
+    const img = tf.image.resizeBilinear(tf.browser.fromPixels(video), [nh, nw]).div(255);
+    const input = img.pad([[py, S - nh - py], [px, S - nw - px], [0, 0]], 114 / 255).expandDims(0);
+    let out = yolo.graph.execute(input);
+    if (Array.isArray(out)) out = out[0];
+    const t = out.squeeze([0]).transpose();               // [N, 4 + classes]
+    const xywh = t.slice([0, 0], [-1, 4]), cls = t.slice([0, 4], [-1, -1]);
+    const [cx, cy, w, h] = tf.split(xywh, 4, 1);
+    const yx = tf.concat([cy.sub(h.div(2)), cx.sub(w.div(2)), cy.add(h.div(2)), cx.add(w.div(2))], 1);
+    return [yx, cls.max(1), cls.argMax(1)];
+  });
+  const keep = await tf.image.nonMaxSuppressionAsync(boxes, scores, 20, 0.45, minScore);
+  const [b, sc, c, idx] = await Promise.all([boxes.array(), scores.array(), classes.array(), keep.array()]);
+  tf.dispose([boxes, scores, classes, keep]);
+  return idx.map(i => {
+    const [y1, x1, y2, x2] = b[i], cls = yolo.names[c[i]] || String(c[i]);
+    const x = (x1 - px) / k, y = (y1 - py) / k;
+    return {cls, label: OBSTACLE_LABELS[cls] || cls, alert: cls in OBSTACLE_LABELS, score: sc[i], box: [x, y, (x2 - x1) / k, (y2 - y1) / k]};
+  });
 }
 
 /**
@@ -67,7 +112,8 @@ export function groundPosition(det, view) {
   if (below < 0.03) return null;                                          // au-dessus de l'horizon : pas au sol
   const dist = height / Math.tan(below);
   const lateral = dist * (sx - W / 2) / focal;
-  return {dist, lateral, screen: [ox + x * scale, oy + y * scale, w * scale, h * scale]};
+  const halfWidth = dist * (w * scale / 2) / focal;                        // demi-largeur de l'objet, au sol (m)
+  return {dist, lateral, halfWidth, screen: [ox + x * scale, oy + y * scale, w * scale, h * scale]};
 }
 export const sideText = lateral => lateral < -0.5 ? "sur votre gauche" : lateral > 0.5 ? "sur votre droite" : "devant vous";
 
@@ -148,9 +194,10 @@ function zip(files) {                                         // fichiers stock�
 export async function exportZip() {
   const samples = await listSamples();
   const cats = TARGET_CATEGORIES.map((name, i) => ({id: i + 1, name}));
-  const cocoToTarget = {bicycle: "velo", motorcycle: "deux_roues", car: "vehicule_sur_trottoir", truck: "vehicule_sur_trottoir",
-    bench: "banc", "fire hydrant": "borne", "parking meter": "mobilier_urbain", "stop sign": "panneau", "potted plant": "vegetation",
-    chair: "terrasse", "dining table": "terrasse", suitcase: "autre"};
+  // pré-annotations : classes COCO -> classes du modèle dédié (les voitures sont à vérifier : sur le trottoir ou non)
+  const cocoToTarget = {bicycle: "deux_roues", motorcycle: "deux_roues", car: "voiture_trottoir", truck: "voiture_trottoir",
+    bench: "mobilier", "fire hydrant": "potelet", "parking meter": "mobilier", "stop sign": "poteau", "potted plant": "mobilier",
+    chair: "mobilier", "dining table": "mobilier", person: "pieton_immobile"};
   const images = [], annotations = [], files = [];
   let aid = 1;
   samples.forEach((s, i) => {
@@ -158,7 +205,7 @@ export async function exportZip() {
     images.push({id: i + 1, file_name: file, width: s.width, height: s.height, date_captured: s.created,
       vision_ar: {kind: s.kind, note: s.note, model: s.model, lat: s.lat, lon: s.lon, accuracy_m: s.accuracy, heading: s.heading, pitch: s.pitch}});
     for (const d of s.detections) {
-      const target = cocoToTarget[d.cls];
+      const target = TARGET_CATEGORIES.includes(d.cls) ? d.cls : cocoToTarget[d.cls];
       if (!target) continue;
       annotations.push({id: aid++, image_id: i + 1, category_id: TARGET_CATEGORIES.indexOf(target) + 1, bbox: d.box,
         area: d.box[2] * d.box[3], iscrowd: 0, score: d.score, source: s.model});

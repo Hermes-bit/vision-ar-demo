@@ -104,9 +104,9 @@ export function loadNetwork(data) {
 // ---- Coût d'effort (cost.py) -----------------------------------------------------
 const UPHILL_FACTOR = 0.12, DOWNHILL_FACTOR = 0.04, CROSS_SLOPE_FACTOR = 0.10;
 const ROUGH_SURFACE_FACTOR = 0.5, UNKNOWN_DATA_FACTOR = 0.25;
-const STEP_PENALTY_M = 40.0, NO_SOUND_SIGNAL_PENALTY_M = 30.0, OBSTACLE_PENALTY_M = 80.0;
+const STEP_PENALTY_M = 40.0, NO_SOUND_SIGNAL_PENALTY_M = 150.0, OBSTACLE_PENALTY_M = 80.0;
 const CROSSING_EFFORT_M = 20.0;   // chaque traversée de rue « vaut » 20 m de plus
-const ROADWAY_FACTOR = 2.0;   // marcher sur la chaussée quand un trottoir longe la rue : +200 %
+const ROADWAY_FACTOR = 5.0;   // marcher sur la chaussée quand un trottoir longe la rue : +500 % (retour terrain)
 const ROUGH_SURFACES = new Set(["sett", "cobblestone", "gravel", "unpaved", "grass", "sand", "dirt"]);
 
 export function arcCost(edge, profile, forward = true, obstacleBlocking = false, obstacleNearby = false) {

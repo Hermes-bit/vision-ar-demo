@@ -487,13 +487,21 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 .puck span { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px; border-radius: 50%; background: #2F80ED;
   border: 4px solid #fff; box-shadow: 0 0 0 6px rgba(47, 128, 237, .25), 0 3px 8px rgba(15, 37, 55, .4); }
 
+/* Texte lu par les lecteurs d'écran seulement */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
 /* Barre de commandes en verre */
-#ar .dock { position: absolute; left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right)); bottom: calc(10px + var(--safe-bottom));
-  display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-#ar .dock .round { width: 52px; height: 52px; flex: none; border-radius: 50%; display: grid; place-items: center; }
-#ar .dock .pill { height: 52px; flex: 1; min-width: 0; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  font-weight: 700; font-size: 15px; padding: 0 10px; }
-#ar .dock .pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Retour terrain : libellés tronqués (« Arr… ») et bande vide dessous. Désormais 4 boutons de même largeur,
+   icône au-dessus du libellé (rien n'est jamais coupé, même sur un petit écran), posés plus bas : la barre
+   descend dans la zone de l'indicateur d'accueil sans la recouvrir entièrement. */
+#ar .dock { position: absolute; left: calc(8px + var(--safe-left)); right: calc(8px + var(--safe-right));
+  bottom: calc(6px + var(--safe-bottom) * .5); display: flex; align-items: center; gap: 6px; }
+#ar .dock .round, #ar .dock .pill { flex: 1 1 0; min-width: 0; width: auto; height: 60px; border-radius: 20px; padding: 0 2px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-weight: 700; font-size: 12.5px; line-height: 1.1; }
+#ar .dock .round span, #ar .dock .pill span { white-space: nowrap; }
+/* les crédits de la carte (licence) restent lisibles au-dessus de la barre */
+#ar .leaflet-bottom { margin-bottom: calc(70px + var(--safe-bottom) * .5); }
 #ar .dock .pill.stop { background: #C4321F; color: #fff; border-color: rgba(255, 255, 255, .85); }
 #ar .dock .center { width: 66px; height: 66px; flex: none; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .9); background: var(--accent-grad);
   color: #04222B; display: grid; place-items: center; box-shadow: 0 0 0 6px rgba(61, 220, 151, .2), 0 10px 26px rgba(0, 174, 204, .55); }
@@ -519,7 +527,7 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 
 @media (max-width: 380px) {
   #ar .chip { padding: 5px 8px 5px 5px; gap: 6px; } #ar .chip-ic { width: 32px; height: 32px; } #ar .chip b { font-size: 14px; }
-  #ar .dock .pill span { display: none; } #ar .bubble-dist { font-size: 22px; } #ar .bubble b { font-size: 17px; }
+  #ar .dock .round, #ar .dock .pill { font-size: 11.5px; } #ar .dock .center { width: 56px; height: 56px; } #ar .dock { gap: 4px; } #ar .bubble-dist { font-size: 22px; } #ar .bubble b { font-size: 17px; }
 }
 @media (orientation: landscape) and (max-height: 600px) {
   #ar .top { right: auto; width: min(560px, 52%); }

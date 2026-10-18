@@ -1,0 +1,47 @@
+/* Navigation intérieure : désactivée (FEATURES.indoorNavigationEnabled = false, js/features.js).
+   Chargée seulement si le drapeau est activé. */
+/* ---- Plan intérieur (TEST, js/indoor.js) --------------------------------------------------------- */
+#indoor { position: fixed; inset: 0; bottom: calc(-1 * var(--vp-gap)); z-index: 1250; display: flex; flex-direction: column;
+  background: var(--bg-grad), var(--bg); color: var(--ink); }
+.in-head { display: flex; align-items: center; gap: 12px; padding: calc(10px + var(--safe-top)) calc(var(--gutter) + var(--safe-right)) 8px calc(var(--gutter) + var(--safe-left)); }
+.in-head b { display: block; font-size: 18px; }
+.in-head small { display: block; color: var(--muted); font-size: 13px; }
+.in-floors { display: flex; gap: 8px; padding: 0 calc(var(--gutter) + var(--safe-right)) 8px calc(var(--gutter) + var(--safe-left)); overflow-x: auto; }
+.in-floors button { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 2px solid transparent;
+  background: var(--surface-2); color: var(--ink); font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.in-floors button .i { width: 18px; height: 18px; }
+.in-floors button[aria-selected="true"] { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.in-map { flex: 1; min-height: 0; margin: 0 calc(var(--gutter) + var(--safe-right)) 0 calc(var(--gutter) + var(--safe-left)); border-radius: 18px;
+  overflow: hidden; background: #EEF2F5; outline: 1px solid var(--glass-border); }
+.in-map .leaflet-container, .in-map.leaflet-container { background: #EEF2F5; }
+.in-label { transform: translate(-50%, -50%); white-space: nowrap; font-size: 12px; font-weight: 700; color: #1B2B38; background: rgba(255, 255, 255, .88);
+  border-radius: 8px; padding: 2px 7px; box-shadow: 0 1px 3px rgba(15, 37, 55, .2); }
+.in-label.in-elevator { color: #007489; } .in-label.in-toilets { color: #1C7A4D; } .in-label.in-entrance { color: #fff; background: #007489; }
+.in-label.in-stairs { color: #7A4B00; }
+.in-pin.start { width: 22px; height: 22px; border-radius: 50%; background: #fff; border: 6px solid #007489; box-shadow: 0 2px 6px rgba(15, 37, 55, .35); }
+.in-pin.end { width: 30px; height: 30px; border-radius: 50%; background: #B42318; color: #fff; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(15, 37, 55, .35); }
+.in-pin.end .i { width: 16px; height: 16px; }
+.in-sheet { max-height: 42%; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 12px calc(var(--gutter) + var(--safe-right)) calc(14px + var(--safe-bottom) + var(--vp-gap)) calc(var(--gutter) + var(--safe-left)); }
+.in-pick { display: flex; align-items: flex-end; gap: 8px; }
+.in-pick label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.in-pick small { color: var(--muted); font-size: 13px; }
+.in-pick select { width: 100%; min-height: 48px; border-radius: 12px; border: 2px solid var(--line); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 16px; padding: 0 10px; }
+.in-pick .icon-btn { flex: none; }
+.in-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.in-steps button { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 12px; border: 0; border-radius: 12px;
+  background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; outline: 1px solid var(--glass-border); }
+.in-steps button .i { width: 22px; height: 22px; flex: none; color: var(--primary); }
+.in-steps button span { flex: 1; }
+.in-steps em { font-style: normal; font-size: 12px; font-weight: 700; color: var(--muted); }
+.indoor-btn { display: flex; align-items: center; gap: 10px; text-align: left; }
+.indoor-btn small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+.in-chip { transform: translate(-50%, -50%); width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  box-shadow: 0 1px 4px rgba(15, 37, 55, .3); }
+.in-chip .i { width: 18px; height: 18px; }
+.in-chip.in-elevator { background: #007489; } .in-chip.in-stairs { background: #7A4B00; } .in-chip.in-toilets { background: #1C7A4D; }
+.in-label.in-entrance { transform: translate(-50%, 60%); }
+/* le plan prend la place disponible ; la liste des étapes défile en dessous */
+.in-sheet { max-height: 38%; }
+
