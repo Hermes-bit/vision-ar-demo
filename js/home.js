@@ -148,7 +148,7 @@ async function startSensors() {
   // iPhone : l'autorisation doit être demandée dans le geste de l'usager
   try { await window.DeviceOrientationEvent?.requestPermission?.(); } catch { /* refusé ou inutile */ }
   try { await window.DeviceMotionEvent?.requestPermission?.(); } catch { /* idem */ }
-  sensors = {heading: null, steps: 0, lastStep: 0, smooth: 9.81, peak: false};
+  sensors = {heading: null, steps: 0, lastStep: 0, smooth: 9.81, base: 9.81, peak: false};
   const onOrient = e => {
     const h = typeof e.webkitCompassHeading === "number" ? e.webkitCompassHeading : e.absolute && e.alpha !== null ? (360 - e.alpha) % 360 : null;
     if (h !== null) sensors.heading = sensors.heading === null ? h : (sensors.heading + norm180(h - sensors.heading) * 0.25 + 360) % 360;
@@ -158,9 +158,11 @@ async function startSensors() {
     if (!a || a.x === null) return;
     const m = Math.hypot(a.x, a.y, a.z), now = performance.now();
     sensors.smooth = sensors.smooth * 0.8 + m * 0.2;
-    // un pas = un pic d'accélération au-dessus du poids, au moins 300 ms après le précédent
-    if (!sensors.peak && sensors.smooth > 11 && now - sensors.lastStep > 300) { sensors.peak = true; sensors.lastStep = now; sensors.steps++; guide?.onStep(); }
-    else if (sensors.peak && sensors.smooth < 10) sensors.peak = false;
+    sensors.base = sensors.base * 0.98 + m * 0.02;       // valeur de repos de CE téléphone (elle varie de 9,6 à 10,1)
+    // un pas = un pic d'accélération nettement au-dessus du repos, au moins 300 ms après le précédent ;
+    // le détecteur se réarme quand l'accélération redescend près du repos
+    if (!sensors.peak && sensors.smooth > sensors.base + 1.2 && now - sensors.lastStep > 300) { sensors.peak = true; sensors.lastStep = now; sensors.steps++; guide?.onStep(); }
+    else if (sensors.peak && sensors.smooth < sensors.base + 0.3) sensors.peak = false;
   };
   window.addEventListener("deviceorientationabsolute", onOrient);
   window.addEventListener("deviceorientation", onOrient);
@@ -196,7 +198,7 @@ function shell(html) {
     <b class="grow">Mon logement</b></header><div class="hm-body">${html}</div>`;
   root.querySelector("[data-hm=close]").onclick = closeHome;
 }
-function screenStart() {
+function screenAi() {
   const plan = store.get(PLAN_STORE, null), key = store.get(KEY_STORE, "");
   if (!plan) {
     shell(`<p class="hm-lead">Prenez en photo le plan de votre logement. Il ne sera pas affiché : il est lu une seule fois par
@@ -205,7 +207,9 @@ function screenStart() {
         <input type="password" id="hmKey" value="${esc(key)}" autocomplete="off" placeholder="sk-ant-…"></label>
       <p class="fine">${icon("info")} Pour ce test, la clé reste sur ce téléphone et la photo part directement chez Anthropic.</p>
       <label class="hm-big" for="hmPhoto">${icon("camera")}<span>Prendre ou choisir la photo du plan</span>
-        <input type="file" accept="image/*" id="hmPhoto" hidden></label>`);
+        <input type="file" accept="image/*" id="hmPhoto" hidden></label>
+      <button class="btn soft" data-hm="routes">${icon("footprints")} Trajets enregistrés en marchant (gratuit)</button>`);
+    root.querySelector("[data-hm=routes]").onclick = screenStart;
     const keyInput = root.querySelector("#hmKey");
     keyInput.onchange = () => store.set(KEY_STORE, keyInput.value.trim());
     root.querySelector("#hmPhoto").onchange = e => { const f = e.target.files?.[0]; if (f) analyse(f, keyInput.value.trim()); };
@@ -225,7 +229,7 @@ function screenStart() {
   root.querySelector("#hmFrom").onchange = e => store.set("va-home-here", e.target.value);
   root.querySelectorAll("[data-room]").forEach(b => b.onclick = () => go(root.querySelector("#hmFrom").value, b.dataset.room));
   root.querySelector("[data-hm=recal]").onclick = () => calibrate(plan, null);
-  root.querySelector("[data-hm=reset]").onclick = () => { store.del(PLAN_STORE); store.del("va-home-here"); screenStart(); };
+  root.querySelector("[data-hm=reset]").onclick = () => { store.del(PLAN_STORE); store.del("va-home-here"); screenAi(); };
   say(`Vous êtes à ${places.find(p => p.id === from)?.name || "l'entrée"}. Choisissez une pièce.`, false);
 }
 async function analyse(file, key) {
@@ -240,7 +244,7 @@ async function analyse(file, key) {
     store.set(PLAN_STORE, plan);
     store.set("va-home-here", plan.entrance_id);
     say(`J'ai trouvé ${plan.rooms.length} pièces : ${plan.rooms.map(r => r.name).join(", ")}.`);
-    screenStart();
+    screenAi();
   } catch (e) {
     // Erreurs de l'API traduites en clair (le message brut, en anglais et en JSON, ne disait rien à l'usager)
     const raw = String(e?.message || "");
@@ -253,7 +257,7 @@ async function analyse(file, key) {
       : /fetch|network|Failed to load/i.test(raw) ? "Pas de connexion internet : la lecture du plan demande le réseau."
       : raw && !raw.startsWith("4") && !raw.startsWith("{") ? raw : "Lecture du plan impossible. Réessayez avec une photo plus nette.";
     shell(`<p class="hm-lead" role="alert">${esc(msg)}</p><button class="hm-big" data-hm="retry">${icon("rotate-ccw")}<span>Réessayer</span></button>`);
-    root.querySelector("[data-hm=retry]").onclick = screenStart;
+    root.querySelector("[data-hm=retry]").onclick = screenAi;
     say(msg);
   }
 }
@@ -270,7 +274,7 @@ function calibrate(plan, then) {
         plan.calibration = null;
       } else plan.calibration = sensors.heading - plan.entrance_inward_angle_deg;
       store.set(PLAN_STORE, plan);
-      if (then) then(); else { say("Boussole calée."); screenStart(); }
+      if (then) then(); else { say("Boussole calée."); screenAi(); }
     }, 1000);
   };
 }
@@ -285,23 +289,19 @@ async function go(fromId, toId) {
   startGuide(plan, path, toId);
 }
 
-// ---- Guidage pas à pas -------------------------------------------------------------------------------
-function startGuide(plan, path, toId) {
+// ---- Moteur de guidage commun (plan lu par l'IA ou trajet enregistré) -------------------------------------
+// legs[i] = {heading: cap à suivre (degrés, ou null), steps: nombre de pas (ou null), meters, to: nom du point visé}
+function runGuide(legs, finalName, onArrive) {
   const stepM = opts.stepLength?.() ?? 0.65, wheel = opts.wheelchair?.() ?? false;
-  const worldHeading = a => plan.calibration === null ? null : (a + plan.calibration + 360) % 360;
-  let seg = 0, startSteps = sensors.steps, timer = 0, lastBuzz = 0, lastSaid = 0;
-  const segLen = i => Math.hypot(path[i + 1].x - path[i].x, path[i + 1].y - path[i].y);
-  const target = i => path[i + 1];
-  const done = () => Math.max(0, (sensors.steps - startSteps) * stepM);
-  const unit = m => wheel ? `${Math.max(1, Math.round(m))} mètre${Math.round(m) > 1 ? "s" : ""}` : `${Math.max(1, Math.round(m / stepM))} pas`;
-
+  let i = 0, startSteps = sensors.steps, timer = 0, lastBuzz = 0, lastSaid = 0, lastBeep = 0;
+  const target = k => legs[k].steps ?? Math.max(1, Math.round(legs[k].meters / stepM));     // en pas
+  const done = () => sensors.steps - startSteps;
+  const unit = n => wheel ? `${Math.max(1, Math.round(n * stepM))} mètre${Math.round(n * stepM) > 1 ? "s" : ""}` : `${Math.max(1, n)} pas`;
   function instruction() {
-    const a = planAngle(path[seg], target(seg)), h = worldHeading(a);
-    let turn;
-    if (h !== null && sensors.heading !== null) turn = turnWords(norm180(h - sensors.heading));
-    else turn = seg === 0 ? "partez" : turnWords(norm180(a - planAngle(path[seg - 1], path[seg])));
-    const t = target(seg), name = t.label || "le point suivant";
-    return `${turn.charAt(0).toUpperCase()}${turn.slice(1)}, puis avancez de ${unit(segLen(seg))} vers ${name}.`;
+    const h = legs[i].heading, prev = i ? legs[i - 1].heading : null;
+    const turn = h !== null && sensors.heading !== null ? turnWords(norm180(h - sensors.heading))
+      : h !== null && prev !== null ? turnWords(norm180(h - prev)) : i === 0 ? "partez" : "continuez";
+    return `${turn.charAt(0).toUpperCase()}${turn.slice(1)}, puis avancez de ${unit(target(i))}${legs[i].to ? ` jusqu'à ${legs[i].to}` : ""}.`;
   }
   function render(text) {
     shell(`<div class="hm-guide"><p class="hm-now" aria-live="assertive">${esc(text)}</p>
@@ -309,50 +309,192 @@ function startGuide(plan, path, toId) {
         <button class="hm-tap" data-hm="next"><span>J'y suis</span></button>
         <button class="btn soft" data-hm="stop">${icon("x")} Arrêter le guidage</button></div>`);
     root.querySelector("[data-hm=next]").onclick = next;
-    root.querySelector("[data-hm=stop]").onclick = () => { stopGuide(); say("Guidage arrêté."); screenStart(); };
+    root.querySelector("[data-hm=stop]").onclick = () => { stopGuide(); say("Guidage arrêté."); onArrive(null); };
   }
   function announce() { const t = instruction(); render(t); say(t); lastSaid = Date.now(); }
   function next() {
-    seg++;
+    i++;
     startSteps = sensors.steps;
-    if (seg >= path.length - 1) {
+    if (i >= legs.length) {
       stopGuide();
-      store.set("va-home-here", toId);
       opts.buzz?.("arrive");
       beep(0, true); setTimeout(() => beep(0, true), 180);
-      const name = path.at(-1).label;
-      say(`Vous êtes arrivé : ${name}.`);
-      shell(`<button class="hm-tap" data-hm="back"><span>Vous êtes arrivé : ${esc(name)}.<br>Touchez pour choisir une autre pièce.</span></button>`);
-      root.querySelector("[data-hm=back]").onclick = screenStart;
+      say(`Vous êtes arrivé : ${finalName}.`);
+      shell(`<button class="hm-tap" data-hm="back"><span>Vous êtes arrivé : ${esc(finalName)}.<br>Touchez pour choisir une autre destination.</span></button>`);
+      root.querySelector("[data-hm=back]").onclick = () => onArrive(finalName);
       return;
     }
     opts.buzz?.("tick");
     announce();
   }
-  // boucle : bips de direction, vibrations de correction, distance restante
+  // boucle : distance restante, bips de direction, vibrations et rappels de correction
   function tick() {
-    const left = segLen(seg) - done();
+    const left = target(i) - done();
     const el = root?.querySelector("#hmLeft");
     if (el) el.textContent = `Encore ${unit(Math.max(0, left))}`;
-    if (!wheel && left <= 0.3) return next();          // pas comptés : le point est atteint
-    const h = worldHeading(planAngle(path[seg], target(seg)));
+    if (!wheel && left <= 0) return next();             // pas comptés : le point est atteint
+    const h = legs[i].heading;
     if (h === null || sensors.heading === null) return;
     const dev = norm180(h - sensors.heading), now = Date.now();
     const gap = Math.abs(dev) < 25 ? 300 : Math.abs(dev) < 60 ? 700 : 1300;
-    if (now - (tick.lastBeep || 0) > gap) { beep(dev / 90, Math.abs(dev) < 25); tick.lastBeep = now; }
+    if (now - lastBeep > gap) { beep(dev / 90, Math.abs(dev) < 25); lastBeep = now; }
     if (Math.abs(dev) > 35 && now - lastBuzz > 2500) { opts.buzz?.(Math.abs(dev) > 150 ? "uturn" : dev > 0 ? "right" : "left"); lastBuzz = now; }
     if (Math.abs(dev) > 60 && now - lastSaid > 6000) { say(`${turnWords(dev).charAt(0).toUpperCase()}${turnWords(dev).slice(1)}.`, false); lastSaid = now; }
   }
-  guide = {onStep() {
-    const left = segLen(seg) - done();
-    if (!wheel && left > 0.3 && Math.round(left / stepM) === 2) say("Encore 2 pas.", false);
-  }};
+  guide = {onStep() { if (!wheel && target(i) - done() === 2) say("Encore 2 pas.", false); }};
   timer = setInterval(tick, 100);
   guide.stop = () => clearInterval(timer);
-  say(`Trajet vers ${path.at(-1).label} : ${path.length - 1} étape${path.length > 2 ? "s" : ""}.`);
+  say(`Trajet vers ${finalName} : ${legs.length} étape${legs.length > 1 ? "s" : ""}.`);
   setTimeout(announce, 1800);
 }
 function stopGuide() { guide?.stop?.(); guide = null; }
+
+// Plan lu par l'IA -> étapes du moteur commun (cap réel = angle sur le plan + calage de la boussole)
+function startGuide(plan, path, toId) {
+  const legs = [];
+  for (let k = 0; k + 1 < path.length; k++) {
+    const a = planAngle(path[k], path[k + 1]);
+    legs.push({heading: plan.calibration === null ? null : (a + plan.calibration + 360) % 360, steps: null,
+      meters: Math.hypot(path[k + 1].x - path[k].x, path[k + 1].y - path[k].y), to: path[k + 1].label || null});
+  }
+  runGuide(legs, path.at(-1).label, name => { if (name) store.set("va-home-here", toId); screenAi(); });
+}
+
+// ---- Trajets enregistrés en marchant (gratuit, sans photo, sans réseau) ------------------------------------
+// On fait le trajet une fois : chaque pas est noté avec le cap de la boussole ; les pas de même direction
+// forment une étape. Le retour est enregistré en même temps (étapes inversées, cap + 180°).
+const ROUTES_STORE = "va-home-routes", HERE_STORE = "va-home-here-name";
+const SUGGESTED = ["Entrée", "Salon", "Cuisine", "Chambre", "Salle de bain", "Toilettes", "Balcon", "Bureau"];
+const routes = () => store.get(ROUTES_STORE, []);
+const placesOf = list => [...new Set(list.flatMap(r => [r.from, r.to]))];
+function segmentsOf(samples) {
+  const segs = [];
+  for (const h of samples) {
+    const last = segs.at(-1);
+    if (last && (h === null || last.heading === null || Math.abs(norm180(h - last.heading)) <= 30)) {
+      if (h !== null && last.heading !== null) last.heading = (last.heading + norm180(h - last.heading) / (last.steps + 1) + 360) % 360;
+      last.steps++;
+    } else segs.push({heading: h, steps: 1});
+  }
+  // un pas isolé dans une autre direction = un écart de la main, pas un virage : on le rattache à ses voisins
+  return segs.filter((g, k) => g.steps > 1 || segs.length === 1 || k === 0 || k === segs.length - 1).reduce((acc, g) => {
+    const last = acc.at(-1);
+    if (last && (g.heading === null || last.heading === null || Math.abs(norm180(g.heading - last.heading)) <= 30)) last.steps += g.steps;
+    else acc.push({...g});
+    return acc;
+  }, []);
+}
+// Enchaînement de trajets enregistrés (A -> B puis B -> C) : recherche en largeur
+function chainOf(from, to) {
+  const list = routes(), prev = new Map([[from, null]]), queue = [from];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === to) break;
+    for (const r of list.filter(x => x.from === cur && !prev.has(x.to))) { prev.set(r.to, r); queue.push(r.to); }
+  }
+  if (!prev.has(to) || from === to) return null;
+  const chain = [];
+  for (let k = to; prev.get(k); k = prev.get(k).from) chain.unshift(prev.get(k));
+  return chain;
+}
+function screenStart() {
+  const list = routes(), places = placesOf(list);
+  const here = places.includes(store.get(HERE_STORE, "")) ? store.get(HERE_STORE, "") : places[0] || "";
+  const reach = places.filter(p => p !== here && chainOf(here, p));
+  shell(`${list.length ? `<label class="hm-field"><span>Je suis à</span><select id="hmHere">${places.map(p =>
+        `<option ${p === here ? "selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
+      <p class="hm-lead">Où voulez-vous aller ?</p>
+      <div class="hm-rooms">${reach.map(p => `<button class="hm-big" data-to="${esc(p)}">${icon("navigation")}<span>${esc(p)}</span></button>`).join("")
+        || `<p class="fine">${icon("info")} Aucun trajet enregistré ne part d'ici.</p>`}</div>`
+    : `<p class="hm-lead">Enregistrez vos trajets en les faisant une fois, accompagné si besoin. L'appli retient vos pas et vos
+        changements de direction, puis vous guide pour les refaire, à la voix, par vibrations et par sons.</p>`}
+    <button class="hm-big" data-hm="record">${icon("footprints")}<span>Enregistrer un nouveau trajet</span></button>
+    <div class="hm-row">${list.length ? `<button class="btn soft" data-hm="manage">${icon("route")} Mes trajets</button>` : ""}
+      <button class="btn soft" data-hm="ai">${icon("camera")} Photo du plan (IA)</button></div>
+    <p class="fine">${icon("info")} Gratuit, sans photo et sans internet. Le retour de chaque trajet est enregistré automatiquement.</p>`);
+  root.querySelector("#hmHere")?.addEventListener("change", e => { store.set(HERE_STORE, e.target.value); screenStart(); });
+  root.querySelectorAll("[data-to]").forEach(b => b.onclick = () => guideTo(here, b.dataset.to));
+  root.querySelector("[data-hm=record]").onclick = screenRecordSetup;
+  root.querySelector("[data-hm=manage]")?.addEventListener("click", screenManage);
+  root.querySelector("[data-hm=ai]").onclick = screenAi;
+  if (list.length) say(`Vous êtes à ${here}. ${reach.length ? "Choisissez votre destination." : "Aucun trajet enregistré ne part d'ici."}`, false);
+}
+function screenRecordSetup() {
+  const known = placesOf(routes()), names = [...new Set([...known, ...SUGGESTED])];
+  shell(`<p class="hm-lead">Nommez le départ et l'arrivée. Vous pouvez dicter avec le micro du clavier.</p>
+    <datalist id="hmNames">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+    <label class="hm-field"><span>Je pars de</span><input id="hmFrom" list="hmNames" value="${esc(store.get(HERE_STORE, known[0] || "Entrée"))}" autocomplete="off"></label>
+    <label class="hm-field"><span>Je vais à</span><input id="hmTo" list="hmNames" autocomplete="off"></label>
+    <button class="hm-big" data-hm="go">${icon("footprints")}<span>Démarrer l'enregistrement</span></button>
+    <button class="btn soft" data-hm="back">${icon("arrow-left")} Retour</button>`);
+  root.querySelector("[data-hm=back]").onclick = screenStart;
+  root.querySelector("[data-hm=go]").onclick = async () => {
+    const from = root.querySelector("#hmFrom").value.trim(), to = root.querySelector("#hmTo").value.trim();
+    if (!from || !to || from.toLowerCase() === to.toLowerCase()) { say("Indiquez un départ et une arrivée différents."); return; }
+    if (!sensors) await startSensors();                 // autorisations demandées dans le geste de l'usager
+    if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
+    record(from, to);
+  };
+}
+function record(from, to) {
+  const samples = [];
+  shell(`<div class="hm-guide"><p class="hm-now" aria-live="polite">Enregistrement vers ${esc(to)}. Marchez normalement, téléphone
+      tenu devant vous. Touchez l'écran en arrivant.</p><p class="hm-left" id="hmLeft">0 pas</p>
+    <button class="hm-tap" data-hm="stop"><span>Je suis arrivé</span></button>
+    <button class="btn soft" data-hm="cancel">${icon("x")} Annuler</button></div>`);
+  say(`Enregistrement vers ${to}. Marchez normalement, téléphone tenu devant vous. Touchez l'écran en arrivant.`);
+  guide = {onStep() {
+    samples.push(sensors.heading);
+    const el = root?.querySelector("#hmLeft");
+    if (el) el.textContent = `${samples.length} pas`;
+    beep(0, false);                                       // petit son à chaque pas : l'enregistrement fonctionne
+  }};
+  root.querySelector("[data-hm=cancel]").onclick = () => { guide = null; say("Enregistrement annulé."); screenStart(); };
+  root.querySelector("[data-hm=stop]").onclick = () => {
+    guide = null;
+    if (samples.length < 2) {
+      say("Je n'ai pas compté de pas. Tenez le téléphone en main en marchant, puis recommencez.");
+      opts.toast?.("Aucun pas compté : tenez le téléphone en main en marchant. En fauteuil, ce test ne compte pas encore les déplacements.");
+      return screenRecordSetup();
+    }
+    const segs = segmentsOf(samples);
+    const back = segs.slice().reverse().map(g => ({heading: g.heading === null ? null : (g.heading + 180) % 360, steps: g.steps}));
+    const list = routes().filter(r => !(r.from === from && r.to === to) && !(r.from === to && r.to === from));
+    list.push({id: Date.now(), from, to, segments: segs}, {id: Date.now() + 1, from: to, to: from, segments: back});
+    store.set(ROUTES_STORE, list);
+    store.set(HERE_STORE, to);
+    const turns = segs.length - 1;
+    say(`Trajet enregistré : ${samples.length} pas, ${turns ? `${turns} virage${turns > 1 ? "s" : ""}` : "en ligne droite"}. Le retour vers ${from} est aussi enregistré.`);
+    opts.buzz?.("arrive");
+    screenStart();
+  };
+}
+function guideTo(from, to) {
+  const chain = chainOf(from, to);
+  if (!chain) return;
+  (async () => {
+    if (!sensors) await startSensors();
+    if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
+    audio?.resume?.();
+    const legs = chain.flatMap(r => r.segments.map((g, k) => ({heading: g.heading, steps: g.steps, meters: null,
+      to: k === r.segments.length - 1 ? r.to : null})));
+    runGuide(legs, to, name => { if (name) store.set(HERE_STORE, name); screenStart(); });
+  })();
+}
+function screenManage() {
+  const list = routes();
+  shell(`<p class="hm-lead">Mes trajets</p>
+    <div class="hm-rooms">${list.map(r => `<div class="hm-route"><span class="grow">${esc(r.from)} → ${esc(r.to)}
+      <small>${r.segments.reduce((n, g) => n + g.steps, 0)} pas, ${r.segments.length} étape${r.segments.length > 1 ? "s" : ""}</small></span>
+      <button class="icon-btn" data-del="${r.id}" aria-label="Supprimer le trajet de ${esc(r.from)} à ${esc(r.to)}">${icon("trash-2")}</button></div>`).join("")}</div>
+    <button class="btn soft" data-hm="back">${icon("arrow-left")} Retour</button>`);
+  root.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
+    store.set(ROUTES_STORE, routes().filter(r => r.id !== +b.dataset.del));
+    say("Trajet supprimé.", false);
+    routes().length ? screenManage() : screenStart();
+  });
+  root.querySelector("[data-hm=back]").onclick = screenStart;
+}
 
 // ---- Ouverture / fermeture ------------------------------------------------------------------------
 export function openHome(options = {}) {
