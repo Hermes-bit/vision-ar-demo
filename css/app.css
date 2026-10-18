@@ -885,3 +885,17 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
   html.bc-printing .bc-mark > svg { width: 180mm; height: 180mm; }
   html.bc-printing .bc-mark figcaption { font-size: 16pt; }
 }
+
+/* ---- « À l'arrivée » : comment entrer dans le bâtiment (js/arrival.js) ---------------------------- */
+.arrive-card { -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); outline: 1px solid var(--glass-border); outline-offset: -1px;
+  background: var(--surface); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.arrive-head { display: flex; align-items: center; gap: 10px; }
+.arrive-head h3 { flex: 1; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+.arrive-card ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.arrive-card li { display: flex; align-items: flex-start; gap: 10px; font-size: 15px; line-height: 1.35; }
+.arrive-card li .i { width: 20px; height: 20px; flex: none; margin-top: 1px; }
+.arrive-card li.good .i { color: var(--ok); }
+.arrive-card li.bad .i { color: var(--danger); }
+.arrive-card li.bad span { font-weight: 700; }
+.arrive-card li.info .i { color: var(--muted); }
+.arrive-card .fine { margin: 0; }

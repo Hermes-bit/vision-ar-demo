@@ -8,6 +8,7 @@ import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
+import {accessibleEntrance, arrivalFiche, arrivalSpeech, loadAcces} from "./arrival.js";
 import {closeIndoor, indoorOpen, loadIndoor, openIndoor} from "./indoor.js";
 import {beaconsOpen, closeBeacons, openBeacons} from "./beacons.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
@@ -760,6 +761,8 @@ function announce() {
       const end = n.route.geometry.at(-1), d = S.dest ? haversineM(end.lat, end.lon, S.dest.lat, S.dest.lon) : 0;
       say(d > 15 ? `Vous êtes arrivé au bout de l'itinéraire. Votre destination est à ${Math.round(d)} mètres.` : "Vous êtes arrivé.", true);
       buzz("arrive");
+      const fiche = arrivalSpeech(S.arrival);              // comment entrer, ce qu'on trouve à l'intérieur
+      if (fiche) setTimeout(() => say(fiche), 2500);
     }
     return;
   }
@@ -1151,6 +1154,7 @@ function screenRoute() {
     <span class="grow">Plan intérieur<small>${esc(buildingNear(S.dest).name)} · test</small></span>${icon("chevron-right")}</button>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
+  ${S.dest && S.arrival ? arrivalCard(S.arrival) : ""}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
 }
 // Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
@@ -1160,6 +1164,7 @@ const MY_POSITION = {label: "Ma position", sub: "Partir d'où je suis (GPS)", ic
 // Bâtiments de la ville dont on a le plan des étages : bouton « Plan intérieur » quand la destination en
 // est proche, et liste dans les Paramètres. Profil sans marches : le trajet passe par l'ascenseur.
 let indoorBuildings = [];
+loadAcces(ZONE_ID);
 loadIndoor().then(list => { indoorBuildings = list.filter(b => b.zone === ZONE_ID); if (S.screen === "settings") render(); });
 const buildingNear = p => p && indoorBuildings.find(b => haversineM(b.lat, b.lon, p.lat, p.lon) < 80);
 function openBuilding(id) {
@@ -1239,6 +1244,13 @@ function renderPlaces() {
   box.innerHTML = placesHtml();
   bindPlaces(box);
   layoutSheet();
+}
+function arrivalCard(f) {
+  if (!f.lines.length) return `<p class="fine arrive-none">${icon("door-open")} Pas encore d'information sur l'accès à ce lieu.</p>`;
+  return `<section class="arrive-card" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
+      <button class="btn soft small" id="arrSpeak">${icon("volume-2")} Écouter</button></div>
+    <ul>${f.lines.map(l => `<li class="${l.tone}">${icon(l.ic)}<span>${esc(l.text)}</span></li>`).join("")}</ul>
+    <p class="fine">Sources : ${esc(f.sources.join(", "))}.</p></section>`;
 }
 function routeCard(r, i) {
   const min = Math.ceil(r.duration_s / 60);
@@ -1538,13 +1550,17 @@ function forward() {
   if (S.screen === "route") toast(S.routes.length ? "Cet itinéraire n'est pas praticable : choisissez-en un autre." : "Choisissez d'abord une destination.");
 }
 function closeRoutes() {
-  Object.assign(S, {dest: null, routes: [], query: "", places: [], message: null});
+  Object.assign(S, {dest: null, routes: [], query: "", places: [], message: null, arrival: null});
   map.setView([S.origin.lat, S.origin.lon], 16);
   render();
 }
 function chooseDest(place) {
   sheetCollapsed = false;                                 // les itinéraires doivent se voir
-  S.dest = place; S.query = place.label; S.places = [];
+  // « Jusqu'à la bonne porte » : on vise l'entrée accessible du lieu quand elle est connue (js/arrival.js)
+  const ent = net ? accessibleEntrance(net, place) : null, viaEntrance = ent && ent.d > 8 && !place.gps;
+  S.arrival = net ? arrivalFiche(net, place, viaEntrance ? ent : null) : null;
+  S.dest = viaEntrance ? {...place, lat: ent.lat, lon: ent.lon, viaEntrance: true} : place;
+  S.query = place.label; S.places = [];
   computeRoute();                                         // tout de suite avec le départ actuel…
   if (S.originMode === "auto") locateOrigin(true);       // …puis depuis « Ma position » dès qu'elle est connue
 }
@@ -1655,6 +1671,7 @@ function bind() {
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
+  on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
   all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
   on("openBeacons", "onclick", () => openBeacons({say, buzz}));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
