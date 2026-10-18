@@ -54,29 +54,29 @@
 </script>
 </head>
 <body>
-<div id="loader" role="status" aria-live="polite">
-  <img class="ld-logo" src="img/geomessen.png" alt="Geomessen" width="180" height="60">
-  <svg class="ld-scene" viewBox="0 0 300 260" aria-hidden="true">
-    <defs><linearGradient id="ldSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#00AECC"/><stop offset="1" stop-color="#BDEFF7"/></linearGradient>
-      <clipPath id="ldClip"><rect width="300" height="260" rx="28"/></clipPath></defs>
-    <g clip-path="url(#ldClip)">
-      <rect width="300" height="75" fill="url(#ldSky)"/>
-      <rect y="72" width="300" height="190" fill="#9FD9A8"/>
-      <polygon points="140,72 160,72 270,262 30,262" fill="#5E6B78"/>
-      <polygon points="140,72 143,72 70,262 30,262" fill="#C9D3DC"/><polygon points="157,72 160,72 270,262 230,262" fill="#C9D3DC"/>
-      <g fill="#fff"><rect class="ld-dash" style="animation-delay:-0s" x="-2" y="-9" width="4" height="18" rx="2"/><rect class="ld-dash" style="animation-delay:-0.5s" x="-2" y="-9" width="4" height="18" rx="2"/><rect class="ld-dash" style="animation-delay:-1s" x="-2" y="-9" width="4" height="18" rx="2"/><rect class="ld-dash" style="animation-delay:-1.5s" x="-2" y="-9" width="4" height="18" rx="2"/></g>
-      <g class="ld-tree ld-l" style="animation-delay:-0s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-l" style="animation-delay:-0.75s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-l" style="animation-delay:-1.5s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-l" style="animation-delay:-2.25s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-r" style="animation-delay:-0s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-r" style="animation-delay:-0.75s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-r" style="animation-delay:-1.5s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g><g class="ld-tree ld-r" style="animation-delay:-2.25s"><rect x="-1.5" y="-10" width="3" height="10" rx="1" fill="#8A5A3B"/><circle cy="-16" r="9" fill="#2E9E6B"/><circle cx="-4" cy="-19" r="5" fill="#3DDC97" opacity=".7"/></g>
-      <g class="ld-chair" transform="translate(150 218)">
-        <ellipse class="ld-tire" cx="-22" cy="0" rx="6" ry="26"/><ellipse class="ld-tire" cx="22" cy="0" rx="6" ry="26"/><ellipse class="ld-wheel" cx="-22" cy="0" rx="6" ry="26"/><ellipse class="ld-wheel" cx="22" cy="0" rx="6" ry="26"/>
-        <rect x="-18" y="-6" width="36" height="8" rx="3" fill="#0F2537"/>
-        <rect x="-15" y="-40" width="30" height="36" rx="8" fill="#007489"/>
-        <rect x="-13" y="-36" width="26" height="22" rx="5" fill="#0F2537" opacity=".35"/>
-        <path class="ld-arm" d="M-14 -34 L-24 -12" /><path class="ld-arm" d="M14 -34 L24 -12"/>
-        <circle cx="0" cy="-50" r="10" fill="#0F2537"/>
+<div id="loader" role="status" aria-live="polite" aria-label="Vision AR se charge">
+  <div class="ld-glow" aria-hidden="true"></div>
+  <div class="ld-stage" aria-hidden="true">
+    <!-- trajet en pointillés qui se dessine autour du logo jusqu'au repère d'arrivée -->
+    <svg class="ld-route" viewBox="0 0 320 320">
+      <path class="ld-path-bg" d="M44 262 C 24 170, 96 150, 112 92 C 126 40, 214 34, 248 70 C 282 106, 262 150, 276 168"/>
+      <path class="ld-path" d="M44 262 C 24 170, 96 150, 112 92 C 126 40, 214 34, 248 70 C 282 106, 262 150, 276 168"/>
+      <circle class="ld-start" cx="44" cy="262" r="7"/>
+      <g class="ld-pin" transform="translate(276 168)">
+        <circle class="ld-pin-halo" r="14"/>
+        <path d="M0 -26 C -10 -26 -16 -19 -16 -11 C -16 -1 0 12 0 12 C 0 12 16 -1 16 -11 C 16 -19 10 -26 0 -26 Z"/>
+        <circle cy="-12" r="5" class="ld-pin-dot"/>
       </g>
-    </g>
-  </svg>
-  <p class="ld-text">Chargement<span class="ld-dots" aria-hidden="true"></span></p>
+    </svg>
+    <!-- logo de l'appli, avec une onde qui rayonne comme un signal GPS -->
+    <span class="ld-wave"></span><span class="ld-wave ld-wave2"></span>
+    <img class="ld-app" src="img/vision-ar-logo.png" alt="" width="128" height="128">
+  </div>
+  <h1 class="ld-title">Vision AR</h1>
+  <p class="ld-tagline">Le trajet le plus accessible, pas le plus court</p>
+  <div class="ld-bar" aria-hidden="true"><span></span></div>
+  <p class="ld-text">Préparation de votre plan</p>
+  <div class="ld-brand"><span>par</span><img class="ld-logo" src="img/geomessen.png" alt="Geomessen Burkina Faso" width="150" height="50"></div>
 </div>
 <div id="map" aria-label="Plan"></div>
 <section id="panel" aria-live="polite"></section>

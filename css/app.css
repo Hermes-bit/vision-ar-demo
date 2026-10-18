@@ -658,39 +658,67 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
 #ar .haptic-legend li { padding: 8px 12px; border-radius: 12px; background: var(--surface-2); }
 #ar .haptic-legend b { color: var(--primary); margin-right: 4px; }
 
-/* ---- Écran de chargement : route qui défile, arbres de part et d'autre, personne en fauteuil ------------- */
-#loader { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
-  padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom)); background: linear-gradient(180deg, #EEF7FA 0%, #D9ECF2 100%);
-  transition: opacity .4s ease, visibility .4s; }
+/* ---- Écran de chargement : logo Vision AR, onde « GPS », trajet qui se dessine jusqu'au repère d'arrivée ---- */
+#loader { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; overflow: hidden; text-align: center;
+  padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
+  background: radial-gradient(120% 70% at 50% 0%, #E2F4F9 0%, #F6FBFD 55%, #FFFFFF 100%); color: #0F2537;
+  transition: opacity .45s ease, visibility .45s; font-family: "Atkinson Hyperlegible", system-ui, sans-serif; }
 #loader.done { opacity: 0; visibility: hidden; pointer-events: none; }
-[data-theme="neon"] #loader { background: radial-gradient(120% 60% at 50% 0%, #0E3442 0%, #061019 60%); }
-.ld-logo { width: min(180px, 50vw); height: auto; }
-[data-theme="neon"] .ld-logo { content: url("../img/geomessen-blanc.png"); }
-.ld-scene { width: min(300px, 80vw); height: auto; border-radius: 28px; box-shadow: 0 18px 40px rgba(0, 116, 137, .28); }
-.ld-text { margin: 0; font: 700 22px "Atkinson Hyperlegible", system-ui, sans-serif; color: #007489; letter-spacing: .02em; }
+[data-theme="neon"] #loader { background: radial-gradient(120% 70% at 50% 0%, #0D3A49 0%, #071A24 55%, #040D14 100%); color: #EAF7FA; }
+.ld-glow { position: absolute; width: 520px; height: 520px; left: 50%; top: 42%; translate: -50% -50%; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(0, 174, 204, .22) 0%, rgba(0, 174, 204, 0) 62%); }
+[data-theme="neon"] .ld-glow { background: radial-gradient(circle, rgba(91, 224, 234, .20) 0%, rgba(91, 224, 234, 0) 62%); }
+.ld-stage { position: relative; width: min(300px, 76vw); aspect-ratio: 1; display: grid; place-items: center; margin-bottom: 6px; }
+.ld-route { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.ld-path-bg, .ld-path { fill: none; stroke-linecap: round; }
+.ld-path-bg { stroke: rgba(0, 116, 137, .12); stroke-width: 10; }
+[data-theme="neon"] .ld-path-bg { stroke: rgba(91, 224, 234, .10); }
+/* le trajet se dessine, puis repart : pointillés lumineux */
+.ld-path { stroke: #00AECC; stroke-width: 5; stroke-dasharray: 2 12; filter: drop-shadow(0 0 6px rgba(0, 174, 204, .55));
+  stroke-dashoffset: 0; animation: ld-march 1.1s linear infinite; }
+@keyframes ld-march { to { stroke-dashoffset: -28; } }
+.ld-start { fill: #FFFFFF; stroke: #007489; stroke-width: 5; }
+[data-theme="neon"] .ld-start { fill: #071A24; stroke: #5BE0EA; }
+.ld-pin path { fill: #F2B705; stroke: #FFFFFF; stroke-width: 3; }
+.ld-pin-dot { fill: #0F2537; }
+.ld-pin { animation: ld-pin 1.6s ease-in-out infinite; transform-box: fill-box; }
+@keyframes ld-pin { 0%, 100% { translate: 0 0; } 50% { translate: 0 -6px; } }
+.ld-pin-halo { fill: rgba(242, 183, 5, .35); transform-box: fill-box; transform-origin: center; animation: ld-halo 1.6s ease-out infinite; }
+@keyframes ld-halo { from { transform: scale(.4); opacity: .9; } to { transform: scale(1.8); opacity: 0; } }
+/* logo + onde */
+.ld-app { position: relative; width: 42%; height: auto; border-radius: 28%; z-index: 2;
+  box-shadow: 0 18px 40px rgba(0, 116, 137, .35), 0 0 0 6px rgba(255, 255, 255, .7); animation: ld-breathe 2.4s ease-in-out infinite; }
+[data-theme="neon"] .ld-app { box-shadow: 0 18px 44px rgba(0, 0, 0, .55), 0 0 0 6px rgba(91, 224, 234, .18); }
+@keyframes ld-breathe { 0%, 100% { scale: 1; } 50% { scale: 1.04; } }
+.ld-wave { position: absolute; width: 42%; aspect-ratio: 1; border-radius: 50%; border: 3px solid rgba(0, 174, 204, .55); z-index: 1;
+  animation: ld-wave 2.4s cubic-bezier(.2, .7, .3, 1) infinite; }
+.ld-wave2 { animation-delay: 1.2s; }
+@keyframes ld-wave { from { transform: scale(1); opacity: .9; } to { transform: scale(2.2); opacity: 0; } }
+/* textes */
+.ld-title { margin: 0; font-size: clamp(30px, 9vw, 40px); font-weight: 700; letter-spacing: .01em;
+  background: linear-gradient(90deg, #007489, #00AECC); -webkit-background-clip: text; background-clip: text; color: transparent; }
+[data-theme="neon"] .ld-title { background: linear-gradient(90deg, #5BE0EA, #FFFFFF); -webkit-background-clip: text; background-clip: text; }
+.ld-tagline { margin: 0; font-size: 16px; line-height: 1.35; color: #3D5568; max-width: 300px; text-wrap: balance; }
+[data-theme="neon"] .ld-tagline { color: #A9C7D3; }
+/* barre de progression continue (chargement de durée inconnue) */
+.ld-bar { width: min(220px, 60vw); height: 6px; border-radius: 3px; overflow: hidden; margin-top: 14px; background: rgba(0, 116, 137, .14); }
+[data-theme="neon"] .ld-bar { background: rgba(91, 224, 234, .14); }
+.ld-bar span { display: block; width: 40%; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #00AECC, #F2B705);
+  animation: ld-bar 1.3s ease-in-out infinite; }
+@keyframes ld-bar { from { translate: -110% 0; } to { translate: 260% 0; } }
+.ld-text { margin: 4px 0 0; font-size: 14px; font-weight: 700; color: #007489; letter-spacing: .02em; }
 [data-theme="neon"] .ld-text { color: #5BE0EA; }
-.ld-dots { display: inline-block; width: 1.4em; text-align: left; }
-.ld-dots::after { content: ""; animation: ld-dots 1.2s steps(4, end) infinite; }
-@keyframes ld-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75%, 100% { content: "..."; } }
-/* Perspective : chaque élément part de l'horizon (petit) et vient vers nous (grand), en accélérant */
-.ld-tree, .ld-dash { transform-box: view-box; animation: 3s cubic-bezier(.6, 0, .95, .5) infinite; }
-.ld-dash { animation-duration: 2s; animation-name: ld-dash; }
-.ld-tree.ld-l { animation-name: ld-tree-l; } .ld-tree.ld-r { animation-name: ld-tree-r; }
-@keyframes ld-dash { from { transform: translate(150px, 74px) scale(.08); } to { transform: translate(150px, 280px) scale(1.5); } }
-@keyframes ld-tree-l { from { transform: translate(134px, 74px) scale(.12); } to { transform: translate(-30px, 300px) scale(2.2); } }
-@keyframes ld-tree-r { from { transform: translate(166px, 74px) scale(.12); } to { transform: translate(330px, 300px) scale(2.2); } }
-.ld-tire { fill: none; stroke: #0F2537; stroke-width: 6; }
-.ld-wheel { fill: none; stroke: #5BE0EA; stroke-width: 2; stroke-dasharray: 3 9; animation: ld-roll .5s linear infinite; }
-@keyframes ld-roll { to { stroke-dashoffset: -12; } }
-.ld-arm { stroke: #007489; stroke-width: 6; stroke-linecap: round; fill: none; }
-.ld-chair { animation: ld-bob .5s ease-in-out infinite alternate; }
-@keyframes ld-bob { from { translate: 0 0; } to { translate: 0 -2px; } }
+.ld-brand { position: absolute; left: 0; right: 0; bottom: calc(22px + var(--safe-bottom)); display: flex; align-items: center; justify-content: center;
+  gap: 8px; font-size: 13px; color: #5B7182; }
+[data-theme="neon"] .ld-brand { color: #8FAAB7; }
+.ld-logo { width: 116px; height: auto; }
+[data-theme="neon"] .ld-logo { content: url("../img/geomessen-blanc.png"); }
+@media (max-height: 640px) { .ld-stage { width: min(220px, 60vw); } .ld-brand { position: static; margin-top: 14px; } }
 @media (prefers-reduced-motion: reduce) {
-  .ld-tree, .ld-dash, .ld-wheel, .ld-chair, .ld-dots::after { animation: none; }
-  .ld-dots::after { content: "..."; }
-  .ld-dash:nth-child(1) { transform: translate(150px, 110px) scale(.4); } .ld-dash:nth-child(2) { transform: translate(150px, 170px) scale(.8); }
-  .ld-dash:nth-child(3) { transform: translate(150px, 245px) scale(1.2); } .ld-dash:nth-child(4) { display: none; }
-  .ld-tree { transform: translate(110px, 120px) scale(.6); } .ld-tree.ld-r { transform: translate(190px, 120px) scale(.6); }
+  .ld-path, .ld-pin, .ld-pin-halo, .ld-app, .ld-wave, .ld-bar span { animation: none; }
+  .ld-wave { opacity: .35; transform: scale(1.4); } .ld-wave2 { display: none; }
+  .ld-bar span { width: 100%; translate: 0 0; opacity: .6; }
 }
 
 /* ---- Stickers (js/stickers.js) : décoratifs, posés de travers comme de vrais autocollants -------------- */
