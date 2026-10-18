@@ -452,8 +452,72 @@ function computeRoute() {
     }
   }
   render();
-  if (S.routes.length) requestAnimationFrame(fitRoute);
+  if (S.routes.length) { requestAnimationFrame(fitRoute); prepareOffline(S.routes[S.selected]); }
 }
+// ---- Trajet disponible hors connexion ----------------------------------------------------------
+// Le calcul, le guidage, le GPS et la voix marchent déjà sans réseau ; il manquait la carte. Dès qu'un
+// itinéraire est choisi, on télécharge (via le service worker, qui les garde) le fond de carte le long du
+// trajet et à ses abords : tuiles, style, polices, pictogrammes et bibliothèque du fond vectoriel.
+const OFFLINE_MARGIN_M = 250;                          // largeur gardée de part et d'autre du trajet
+const offlineReady = new Set();
+const tileOf = (lat, lon, z) => {
+  const n = 2 ** z, r = lat * Math.PI / 180;
+  return [Math.floor((lon + 180) / 360 * n), Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n)];
+};
+function tilesAlong(geometry, zooms) {
+  const out = new Set(), dLat = OFFLINE_MARGIN_M / 111320;
+  for (const z of zooms) for (const p of geometry) {
+    const dLon = dLat / Math.cos(p.lat * Math.PI / 180);
+    const [x0, y0] = tileOf(p.lat + dLat, p.lon - dLon, z), [x1, y1] = tileOf(p.lat - dLat, p.lon + dLon, z);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) out.add(`${z}/${x}/${y}`);
+  }
+  return [...out];
+}
+async function fetchAll(urls) {
+  let failed = 0;
+  const queue = [...new Set(urls)];
+  const worker = async () => { while (queue.length) { try { const r = await fetch(queue.shift()); if (!r.ok) failed++; } catch { failed++; } } };
+  await Promise.all(Array.from({length: 6}, worker));   // 6 téléchargements à la fois
+  return failed;
+}
+async function prepareOffline(route, announce = false) {
+  if (!route || !navigator.onLine || !("serviceWorker" in navigator)) return;
+  const g = route.geometry, key = `${S.basemap}|${g[0].lat},${g[0].lon}|${g.at(-1).lat},${g.at(-1).lon}`;
+  if (offlineReady.has(key)) { if (announce) toast("Ce trajet est disponible hors connexion."); return; }
+  try {
+    const urls = [];
+    // Fond vectoriel (« Style Plans », par défaut, ou « Épuré ») : c'est aussi le fond de secours hors connexion
+    const style = BASEMAPS[S.basemap]?.style || BASEMAPS.liberty.style;
+    urls.push(...MAPLIBRE, "https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl.css");
+    const st = await fetch(style).then(r => r.json());
+    if (st.sprite) for (const suffix of ["", "@2x"]) urls.push(`${st.sprite}${suffix}.json`, `${st.sprite}${suffix}.png`);
+    const fonts = new Set();
+    for (const l of st.layers || []) { const f = l.layout?.["text-font"]; if (Array.isArray(f) && f.every(x => typeof x === "string")) fonts.add(f.join(",")); }
+    if (st.glyphs) for (const f of fonts) for (const range of ["0-255", "256-511", "8192-8447"])
+      urls.push(st.glyphs.replace("{fontstack}", encodeURIComponent(f)).replace("{range}", range));
+    for (const src of Object.values(st.sources || {})) {
+      if (src.type !== "vector") continue;
+      const tj = src.url ? await fetch(src.url).then(r => r.json()) : src;
+      const template = tj.tiles?.[0], maxz = Math.min(tj.maxzoom ?? 14, 14);
+      if (template) for (const t of tilesAlong(g, [maxz - 2, maxz - 1, maxz])) {
+        const [z, x, y] = t.split("/");
+        urls.push(template.replace("{z}", z).replace("{x}", x).replace("{y}", y));
+      }
+    }
+    // Plan OpenStreetMap choisi : ses tuiles aux niveaux 15 et 16 seulement (la charte d'OSM interdit de
+    // télécharger à l'avance les niveaux 17 et plus)
+    if (S.basemap === "osm") for (const t of tilesAlong(g, [15, 16])) urls.push(`https://tile.openstreetmap.org/${t}.png`);
+    const failed = await fetchAll(urls);
+    if (failed < urls.length * 0.1) offlineReady.add(key);
+    if (announce) toast(failed < urls.length * 0.1 ? "Ce trajet est disponible hors connexion." : "Une partie de la carte n'a pas pu être gardée : le guidage marchera, la carte peut être incomplète.");
+  } catch { /* hors connexion entre-temps : on réessaiera au prochain itinéraire */ }
+}
+// Perte et retour du réseau : on le dit clairement, et on rassure sur ce qui continue de marcher
+addEventListener("offline", () => {
+  toast("Hors connexion : le guidage continue sur ce téléphone. Seule la recherche d'adresse attend le réseau.", 6000);
+  if (S.screen === "nav") say("Plus de réseau. Le guidage continue.", false);
+});
+addEventListener("online", () => toast("Connexion retrouvée."));
 // L'itinéraire est cadré dans la partie du plan que le panneau ne couvre pas (après son affichage)
 function fitRoute() {
   const r = S.routes[S.selected] || S.routes[0];
@@ -1494,6 +1558,7 @@ function cancelOrigin() { S.searchFor = "dest"; S.oquery = ""; S.places = []; re
 function startGuidance() {
   hazardAlerted.clear();                                  // nouveau trajet : tous les obstacles seront annoncés
   startNav(S.routes[S.selected]);
+  prepareOffline(S.routes[S.selected], true);           // carte du trajet gardée : le guidage tient sans réseau
   say("Guidage lancé. Recherche de votre position.", true);
   stickerPop("je-te-guide");
   startGps();
