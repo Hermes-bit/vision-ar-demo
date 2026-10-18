@@ -827,3 +827,34 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .in-label.in-entrance { transform: translate(-50%, 60%); }
 /* le plan prend la place disponible ; la liste des étapes défile en dessous */
 .in-sheet { max-height: 38%; }
+
+/* ---- Mon logement (TEST, js/home.js) : grands boutons, gros texte, utilisable sans regarder ---------------- */
+#home { position: fixed; inset: 0; bottom: calc(-1 * var(--vp-gap)); z-index: 1250; display: flex; flex-direction: column;
+  background: var(--bg-grad), var(--bg); color: var(--ink); overflow-y: auto; }
+.hm-head { display: flex; align-items: center; gap: 12px; padding: calc(10px + var(--safe-top)) calc(var(--gutter) + var(--safe-right)) 8px calc(var(--gutter) + var(--safe-left)); }
+.hm-head b { font-size: 20px; }
+.hm-body { flex: 1; display: flex; flex-direction: column; gap: 14px;
+  padding: 8px calc(var(--gutter) + var(--safe-right)) calc(20px + var(--safe-bottom) + var(--vp-gap)) calc(var(--gutter) + var(--safe-left)); }
+.hm-lead { font-size: 19px; line-height: 1.4; margin: 0; }
+.hm-field { display: flex; flex-direction: column; gap: 6px; font-weight: 700; }
+.hm-field input, .hm-field select { min-height: 56px; border-radius: 14px; border: 2px solid var(--line); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 18px; font-weight: 400; padding: 0 14px; }
+.hm-big { display: flex; align-items: center; gap: 14px; min-height: 72px; padding: 12px 18px; border-radius: 18px; border: 0; cursor: pointer;
+  background: var(--primary); color: var(--on-primary); font: inherit; font-size: 20px; font-weight: 700; text-align: left; }
+.hm-big .i { width: 28px; height: 28px; flex: none; }
+.hm-rooms { display: flex; flex-direction: column; gap: 10px; }
+.hm-rooms .hm-big { background: var(--surface); color: var(--ink); outline: 2px solid var(--glass-border); }
+.hm-rooms .hm-big .i { color: var(--primary); }
+.hm-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.hm-row .btn { flex: 1; }
+.hm-wait { flex: 1; display: grid; place-items: center; text-align: center; font-size: 20px; }
+.hm-wait small { font-size: 15px; color: var(--muted); }
+.hm-spin { width: 56px; height: 56px; border-radius: 50%; border: 6px solid var(--primary-soft); border-top-color: var(--primary); animation: hm-spin 1s linear infinite; }
+@keyframes hm-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .hm-spin { animation: none; } }
+/* zone tactile géante : « J'y suis », calage, arrivée */
+.hm-tap { flex: 1; min-height: 40vh; width: 100%; border: 0; border-radius: 24px; cursor: pointer; padding: 24px;
+  background: var(--primary); color: var(--on-primary); font: inherit; font-size: 26px; font-weight: 700; line-height: 1.35; }
+.hm-guide { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.hm-now { font-size: 26px; font-weight: 700; line-height: 1.35; margin: 0; }
+.hm-left { font-size: 20px; color: var(--muted); margin: 0; min-height: 1.4em; }

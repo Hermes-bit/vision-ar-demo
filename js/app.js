@@ -8,7 +8,8 @@ import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {closeIndoor, indoorOpen, loadIndoor, openIndoor, openPhotoPlan} from "./indoor.js";
+import {closeIndoor, indoorOpen, loadIndoor, openIndoor} from "./indoor.js";
+import {closeHome, homeOpen, openHome} from "./home.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -985,10 +986,9 @@ function screenSettings() {
   <section class="card"><h3>${icon("building-2")} Plans intérieurs (test)</h3>
     ${indoorBuildings.map(b => `<button class="set-row" data-indoor="${b.id}">${icon("building-2")}<span class="grow">${esc(b.name)}
       <small>${b.floors.length} étages · plan de démonstration</small></span>${icon("chevron-right")}</button>`).join("")}
-    <label class="set-row" for="planPhoto">${icon("image")}<span class="grow">Ouvrir une photo de plan<small>Plan d'étage pris en photo ou image du téléphone</small></span>
-      ${icon("chevron-right")}<input type="file" accept="image/*" id="planPhoto" hidden></label>
-    <p class="fine">${icon("info")} Essai du guidage à l'intérieur d'un bâtiment, sur des plans fictifs. Avec un vrai plan, il faudra placer
-      les pièces, les couloirs et l'ascenseur.</p>
+    <button class="set-row" id="openHome">${icon("house")}<span class="grow">Mon logement<small>Photo du plan lue par l'IA, guidage sans regarder l'écran</small></span>
+      ${icon("chevron-right")}</button>
+    <p class="fine">${icon("info")} Essais du guidage à l'intérieur : bâtiments sur plans fictifs, et votre logement à partir de la photo de son plan.</p>
   </section>
   <section class="card"><h3>${icon("map")} Fond de carte</h3>
     ${Object.entries(BASEMAPS).filter(([k]) => basemapAvailable(k)).map(([k, b]) => `<button class="set-row" data-basemap="${k}" aria-pressed="${S.basemap === k}">${icon(k === "ortho" ? "camera" : "map")}
@@ -1446,6 +1446,7 @@ function stepBack() {
   if (Date.now() - lastStep < 450) return;
   lastStep = Date.now();
   if (indoorOpen()) return closeIndoor();                 // plan intérieur ouvert : le retour le ferme
+  if (homeOpen()) return closeHome();
   if (S.screen === "signup") { resetForm(); return go("login"); }
   if (S.screen === "login") { resetForm(); return go("welcome"); }
   if (S.screen === "welcome") return;
@@ -1590,7 +1591,9 @@ function bind() {
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
   all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
-  on("planPhoto", "onchange", e => { const f = e.target.files?.[0]; if (f) openPhotoPlan(f); e.target.value = ""; });
+  on("openHome", "onclick", () => openHome({say, buzz, toast,
+    wheelchair: () => ["manual_wheelchair", "electric_wheelchair"].includes(primary()),
+    stepLength: () => primary() === "cane_or_walker" ? 0.5 : 0.65}));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
   on("start", "onclick", startGuidance);
   // Paramètres

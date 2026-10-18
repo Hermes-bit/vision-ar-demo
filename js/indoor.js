@@ -9,7 +9,7 @@ import {icon} from "./icons.js";
 
 const ELEVATOR_M = 15, STAIRS_M = 10;           // « coût » d'un changement d'étage, en mètres équivalents
 const PLACE_KINDS = new Set(["room", "toilets", "entrance", "elevator"]);
-let root = null, map = null, layer = null, overlays = null, state = null, photoUrl = null;
+let root = null, map = null, layer = null, overlays = null, state = null;
 let buildingsCache = null;
 
 const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -156,25 +156,6 @@ export function openIndoor(b, {avoidStairs = false, say} = {}) {
     showFloor(+(t.dataset.floor ?? t.dataset.f));
   });
   setTimeout(() => { map.invalidateSize(); route(false); }, 0);
-}
-
-// Photo d'un plan prise avec le téléphone : affichée seule, agrandissable (pas encore de trajet dessus)
-export function openPhotoPlan(file) {
-  const url = URL.createObjectURL(file), img = new Image();
-  img.onload = () => {
-    shell("Mon plan (photo)", "Aperçu : pas encore de trajet sur ce plan");
-    if (photoUrl) URL.revokeObjectURL(photoUrl);
-    photoUrl = url;
-    const w = img.naturalWidth, h = img.naturalHeight, bounds = [[0, 0], [h, w]];
-    L.imageOverlay(url, bounds).addTo(map);
-    map.setMinZoom(-6);
-    root.querySelector(".in-floors").remove();
-    root.querySelector(".in-sheet").innerHTML = `<p class="fine">${icon("info")} Agrandissez et déplacez le plan du doigt. Pour y guider,
-      il faudra placer les pièces, les couloirs et l'ascenseur sur ce plan : c'est l'étape suivante du test.</p>`;
-    setTimeout(() => { map.invalidateSize(); map.fitBounds(bounds); }, 0);
-  };
-  img.onerror = () => URL.revokeObjectURL(url);
-  img.src = url;
 }
 
 export function closeIndoor() {
