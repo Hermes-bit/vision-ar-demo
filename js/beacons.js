@@ -226,24 +226,51 @@ function screenManage() {
   });
   root.querySelector("[data-bc=back]").onclick = screenHome;
 }
-// Planche à imprimer : une balise par page A4 (carré noir de 13,5 cm), avec son numéro
+// Balises à imprimer, affichées DANS l'appli (une nouvelle page était bloquée par l'appli installée sur iPhone) :
+// chaque balise en grand, avec « Imprimer » (impression de cet écran seulement, à taille réelle) et
+// « Enregistrer l'image » (Photos, Fichiers, AirDrop, e-mail…, pour imprimer ailleurs)
 async function printSheet() {
   try { await loadLib(); } catch { return say("Impossible de préparer les balises : vérifiez la connexion, puis réessayez."); }
   const dict = new window.AR.Dictionary(DICTIONARY), used = Object.keys(names()).map(Number);
   const ids = [];
   for (let id = 0; ids.length < 6 && id < dict.codeList.length; id++) if (!used.includes(id)) ids.push(id);
-  const w = window.open("", "_blank");
-  if (!w) return say("Autorisez l'ouverture d'une nouvelle page pour imprimer.");
-  w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Balises Vision AR</title>
-    <style>@page{size:A4;margin:12mm}body{font-family:system-ui,sans-serif;margin:0}
-    .b{height:265mm;display:flex;flex-direction:column;align-items:center;justify-content:center;page-break-inside:avoid}
-    .b svg{width:${MARKER_M * 1000 * 8 / 6}mm;height:${MARKER_M * 1000 * 8 / 6}mm}
-    .b p{margin:6mm 0 0;font-size:16pt}.b{page-break-after:always}
-    .n{position:fixed;top:0;left:0;right:0;padding:8px;background:#ffd;font-size:13px}@media print{.n{display:none}}</style></head><body>
-    <div class="n">Imprimez à 100 % (taille réelle), sans « ajuster à la page ». Collez chaque balise à hauteur des yeux, près de la porte.</div>
-    ${ids.map(id => `<div class="b">${dict.generateSVG(id)}<p>Balise Vision AR n° ${id}</p></div>`).join("")}</body></html>`);
-  w.document.close();
-  setTimeout(() => w.print(), 400);
+  shell(`<p class="hm-lead">Voici vos balises. Imprimez-les à taille réelle (100 %), une par feuille, puis collez-en une sur chaque porte.</p>
+    <div class="hm-row"><button class="hm-big" data-bc="doprint">${icon("printer")}<span>Imprimer</span></button></div>
+    <div class="bc-sheet">${ids.map(id => `<figure class="bc-mark">${dict.generateSVG(id)}
+      <figcaption>Balise Vision AR n° ${id}</figcaption>
+      <button class="btn soft bc-save" data-save="${id}">${icon("share-2")} Enregistrer l'image</button></figure>`).join("")}</div>
+    <button class="btn soft" data-bc="back">${icon("arrow-left")} Retour</button>`);
+  root.querySelector("[data-bc=back]").onclick = screenHome;
+  root.querySelector("[data-bc=doprint]").onclick = () => {
+    document.documentElement.classList.add("bc-printing");
+    window.print();
+    setTimeout(() => document.documentElement.classList.remove("bc-printing"), 1000);
+  };
+  root.querySelectorAll("[data-save]").forEach(b => b.onclick = () => saveMarker(dict, +b.dataset.save));
+  say(`${ids.length} balises prêtes à imprimer. Touchez Imprimer, ou enregistrez une image pour l'imprimer ailleurs.`, false);
+}
+// Image PNG de la balise (2 000 px, nette à l'impression), partagée ou téléchargée
+async function saveMarker(dict, id) {
+  const svg = dict.generateSVG(id), img = new Image();
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  await img.decode();
+  const c = document.createElement("canvas");
+  c.width = 2000; c.height = 2240;
+  const x = c.getContext("2d");
+  x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+  x.imageSmoothingEnabled = false;
+  x.drawImage(img, 0, 0, 2000, 2000);
+  x.fillStyle = "#000"; x.font = "bold 80px sans-serif"; x.textAlign = "center";
+  x.fillText(`Balise Vision AR n° ${id}`, 1000, 2160);
+  const blob = await new Promise(ok => c.toBlob(ok, "image/png"));
+  const file = new File([blob], `balise-vision-ar-${id}.png`, {type: "image/png"});
+  if (navigator.canShare?.({files: [file]})) {
+    try { await navigator.share({files: [file], title: `Balise Vision AR n° ${id}`}); return; } catch { /* partage annulé */ return; }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = file.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 function cameraError(e) {
   const msg = e?.name === "NotAllowedError" ? "L'accès à la caméra est refusé : autorisez-le dans les réglages du téléphone."

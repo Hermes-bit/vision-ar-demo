@@ -868,3 +868,20 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .bc-explore .i { color: var(--primary); }
 .bc-quiet { background: var(--surface-2); color: var(--ink); }
 .bc-sugg { flex-direction: row; flex-wrap: wrap; }
+/* Balises à imprimer : affichées dans l'appli ; à l'impression, seules les balises sortent, une par page, à taille réelle */
+.bc-sheet { display: grid; grid-template-columns: 1fr; gap: 18px; }
+.bc-mark { margin: 0; padding: 16px; border-radius: 18px; background: #fff; color: #000; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.bc-mark > svg { width: min(100%, 300px); height: auto; shape-rendering: crispEdges; }
+.bc-mark figcaption { font-weight: 700; font-size: 17px; }
+.bc-mark .btn.bc-save { color: #0F2537; background: #E8F4F8; outline: 1px solid #9FB3C2; }
+.bc-save .i { width: 20px; height: 20px; }
+@media print {
+  html.bc-printing body > *:not(#home) { display: none !important; }
+  html.bc-printing #home { position: static; background: #fff; overflow: visible; }
+  html.bc-printing .hm-head, html.bc-printing .hm-body > :not(.bc-sheet), html.bc-printing .bc-save { display: none !important; }
+  html.bc-printing .bc-sheet { display: block; }
+  /* carré noir de 13,5 cm (MARKER_M dans js/beacons.js) : le dessin fait 8 unités dont 6 de noir -> 180 mm */
+  html.bc-printing .bc-mark { page-break-after: always; break-after: page; padding: 0; height: 260mm; justify-content: center; }
+  html.bc-printing .bc-mark > svg { width: 180mm; height: 180mm; }
+  html.bc-printing .bc-mark figcaption { font-size: 16pt; }
+}
