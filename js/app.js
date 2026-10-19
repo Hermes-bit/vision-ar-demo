@@ -8,6 +8,7 @@ import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
+import {chooseStop, rubber, snapDuration, velocity} from "./sheet.js";
 import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {arrivalFiche, arrivalSpeech, entranceFor, loadAcces} from "./arrival.js";
@@ -55,7 +56,7 @@ const S = {
   // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
   originMode: "auto", searchFor: "dest", oquery: "",
   // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
-  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), audioOnly: store.get("va-audio-only", false),
+  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), sheet: "mid", audioOnly: store.get("va-audio-only", false),
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
   logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
@@ -1049,7 +1050,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "69";
+const APP_VERSION = "70";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1162,8 +1163,8 @@ function screenRoute() {
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
     ${S.dest ? "" : sticker("on-y-va", "stk-sheet")}
-    <button class="handle" id="sheetHandle" aria-expanded="${!sheetCollapsed}"
-      aria-label="${sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
+    <button class="handle" id="sheetHandle" aria-expanded="${S.sheet !== "collapsed"}"
+      aria-label="${S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
     <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
       <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
   </div>
@@ -1426,7 +1427,7 @@ function renderHud() {
 // #map et #panel sont créés une fois (index.html) : render() ne remplace que le CONTENU de #panel. Pour que
 // ce remplacement ne rejoue pas les animations : un élément animé à l'entrée porte une clé stable (data-key) et
 // ne reçoit la classe « enter » que si cette clé n'était pas à l'écran au render précédent. Le défilement de
-// #panel est conservé tant qu'on reste sur le même écran ; la position du panneau (--sheet-y, sur #panel) aussi.
+// #panel est conservé tant qu'on reste sur le même écran ; la position du panneau (S.sheet, transform sur #panel) aussi.
 let shownKeys = new Set(), lastScreen = null;
 function markEntering(root, before) {
   const now = new Set();
@@ -1484,64 +1485,150 @@ function render() {
   setTimeout(() => map.invalidateSize(), 0);
 }
 
-// ---- Panneau du bas : se réduit d'un geste pour laisser voir le plan ------------------------------
-// Deux positions : ouvert (hauteur de son contenu) ou réduit (titre seul). On le fait glisser par
-// sa poignée ou son titre ; toucher la poignée bascule de l'un à l'autre.
-let sheetCollapsed = false;
+// ---- Panneau du bas : 3 points d'arrêt (réduit, moyen, plein) -------------------------------------------
+// Le panneau suit le doigt en temps réel (transform: translateY, posé dans requestAnimationFrame ; jamais
+// height ni top). Au relâcher, il se cale sur un arrêt choisi selon la position ET la vitesse des 80 dernières
+// ms (js/sheet.js), avec element.animate et la courbe --ease-sheet. Au-delà des limites : résistance élastique.
+// La liste ne défile que panneau plein ; tout en haut de la liste, tirer vers le bas fait descendre le panneau.
+// Un voile assombrit la carte (opacité 0 à 0,25) quand le panneau monte. Un nouveau geste reprend depuis la
+// position réelle, même en pleine animation. L'arrêt courant est S.sheet et suit le cycle render normal.
 const sideLayout = () => matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
-function sheetRange() {
-  const p = $("panel"), head = p.querySelector(".sheet-head");
-  if (!head) return 0;
-  const peek = head.offsetTop + head.offsetHeight + parseFloat(getComputedStyle(p).paddingBottom) + 4;
-  return Math.max(0, p.offsetHeight - peek);             // de combien on peut le descendre
+const sheetActive = () => S.screen === "route" && !sideLayout();
+let sheetY = null, sheetAnim = null, sheetRaf = 0, drag = null, pull = null;
+function sheetStops() {
+  const p = $("panel"), H = p.offsetHeight, head = p.querySelector(".sheet-head");
+  const peek = head ? head.offsetTop + head.offsetHeight + 14 : 90;       // réduit : poignée et titre seulement
+  return {full: 0, mid: Math.max(0, H - Math.round(innerHeight * 0.5)), collapsed: Math.max(0, H - peek)};
 }
-function layoutSheet(offset = null) {
-  const p = $("panel"), root = document.documentElement.style;
-  if (S.screen !== "route" || sideLayout()) { p.style.removeProperty("--sheet-y"); root.setProperty("--sheet-h", "0px"); return; }
-  const max = sheetRange(), y = offset ?? (sheetCollapsed ? max : 0);
-  p.style.setProperty("--sheet-y", `${Math.max(0, Math.min(max, y))}px`);
-  p.classList.toggle("collapsed", offset === null && sheetCollapsed);   // abaissé : seul le titre reste visible
-  root.setProperty("--sheet-h", `${Math.round(p.offsetHeight - Math.max(0, Math.min(max, y)))}px`);
+function sheetScrim() {
+  let el = $("sheetScrim");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "sheetScrim"; el.className = "sheet-scrim"; el.setAttribute("aria-hidden", "true");
+    document.body.append(el);
+  }
+  return el;
+}
+function paintSheet(y) {
+  const p = $("panel"), ys = sheetStops();
+  p.style.transform = `translateY(${y}px)`;
+  document.documentElement.style.setProperty("--sheet-h", `${Math.max(0, Math.round(p.offsetHeight - y))}px`);
+  sheetScrim().style.opacity = ys.collapsed > 0 ? (0.25 * Math.max(0, Math.min(1, 1 - y / ys.collapsed))).toFixed(3) : "0";
+}
+function setSheetY(y) {                                    // pendant le geste : une pose par image au plus
+  sheetY = y;
+  if (!sheetRaf) sheetRaf = requestAnimationFrame(() => { sheetRaf = 0; paintSheet(sheetY); });
+}
+function stopSheetAnim() {                                 // interruption : on reprend là où le panneau EST à l'écran
+  if (!sheetAnim) return;
+  const y = new DOMMatrixReadOnly(getComputedStyle($("panel")).transform).m42;
+  sheetAnim.cancel(); sheetAnim = null;
+  sheetY = y; paintSheet(y);
+}
+function sheetState() {                                    // ce qui dépend de l'arrêt : défilement, contenu, poignée
+  const p = $("panel"), full = S.sheet === "full";
+  p.classList.toggle("collapsed", S.sheet === "collapsed");
+  p.style.overflowY = full ? "auto" : "hidden";
+  p.style.touchAction = full ? "pan-y" : "none";
+  if (!full) p.scrollTop = 0;
   const h = $("sheetHandle");
   if (h) {
-    h.setAttribute("aria-expanded", String(!sheetCollapsed));
-    h.setAttribute("aria-label", sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan");
+    h.setAttribute("aria-expanded", String(S.sheet !== "collapsed"));
+    h.setAttribute("aria-label", S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan");
   }
 }
-function setSheet(collapsed) {
-  sheetCollapsed = collapsed;
-  document.body.classList.remove("dragging");
-  layoutSheet();
-  if (S.routes.length) setTimeout(fitRoute, 320);          // recadrer une fois le panneau en place
+function snapTo(stop, v = 0) {
+  stopSheetAnim();
+  S.sheet = stop;
+  sheetState();
+  const to = sheetStops()[stop], from = sheetY ?? to;
+  sheetY = to; paintSheet(to);                             // position finale posée ; l'animation la recouvre en jouant
+  const done = () => { if (S.routes.length && stop !== "full") fitRoute(); };
+  if (Math.abs(to - from) < 1 || matchMedia("(prefers-reduced-motion: reduce)").matches) return done();
+  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
+  sheetAnim = $("panel").animate([{transform: `translateY(${from}px)`}, {transform: `translateY(${to}px)`}],
+    {duration: snapDuration(to - from, v), easing});
+  sheetAnim.onfinish = () => { sheetAnim = null; done(); };
 }
-let drag = null;
-$("panel").addEventListener("pointerdown", e => {
-  const head = e.target.closest(".sheet-head");
-  if (!head || S.screen !== "route" || sideLayout() || (e.target.closest("button") && !e.target.closest("#sheetHandle"))) return;
-  drag = {y: e.clientY, start: sheetCollapsed ? sheetRange() : 0, moved: 0, t: performance.now(), id: e.pointerId,
-          onHandle: !!e.target.closest("#sheetHandle")};
-  head.setPointerCapture?.(e.pointerId);
-});
-$("panel").addEventListener("pointermove", e => {
-  if (!drag || e.pointerId !== drag.id) return;
-  drag.moved = e.clientY - drag.y;
-  if (Math.abs(drag.moved) < 4) return;
-  document.body.classList.add("dragging");
-  layoutSheet(drag.start + drag.moved);
-});
-const endDrag = e => {
-  if (!drag || e.pointerId !== drag.id) return;
-  const {moved, start, t, onHandle} = drag, max = sheetRange();
-  drag = null;
-  if (Math.abs(moved) < 6) {                              // simple toucher : la poignée bascule, le titre rouvre
-    setSheet(onHandle ? !sheetCollapsed : false);
+function setSheet(collapsed) { snapTo(collapsed ? "collapsed" : "mid"); }   // (appels existants)
+function layoutSheet() {
+  const p = $("panel");
+  if (!sheetActive()) {
+    stopSheetAnim();
+    p.style.transform = p.style.overflowY = p.style.touchAction = "";
+    p.classList.remove("collapsed");
+    document.documentElement.style.setProperty("--sheet-h", "0px");
+    if ($("sheetScrim")) $("sheetScrim").style.opacity = "0";
+    sheetY = null;
     return;
   }
-  const speed = moved / Math.max(1, performance.now() - t);       // px/ms : un geste vif suffit
-  setSheet(speed > 0.25 ? true : speed < -0.25 ? false : start + moved > max / 2);
-};
-$("panel").addEventListener("pointerup", endDrag);
-$("panel").addEventListener("pointercancel", endDrag);
+  if (drag || sheetAnim) return;                           // on ne coupe jamais un geste ou un calage en cours
+  sheetState();
+  sheetY = sheetStops()[S.sheet];
+  paintSheet(sheetY);
+}
+function dragStart(y, id, onHandle, onHead) {
+  stopSheetAnim();
+  const start = sheetY ?? sheetStops()[S.sheet];
+  drag = {y0: y, start, id, onHandle, onHead, from: S.sheet, live: false, samples: [{t: performance.now(), y: start}]};
+}
+function dragMove(y, target) {
+  const moved = y - drag.y0;
+  if (!drag.live) {
+    if (Math.abs(moved) < 5) return;
+    drag.live = true;
+    document.body.classList.add("dragging");
+    $("panel").classList.remove("collapsed");              // le contenu apparaît dès qu'on tire
+    if (drag.id !== "touch") target?.setPointerCapture?.(drag.id);
+  }
+  const ys = sheetStops(), next = rubber(drag.start + moved, ys.full, ys.collapsed);
+  drag.samples.push({t: performance.now(), y: next});
+  if (drag.samples.length > 12) drag.samples.shift();
+  setSheetY(next);
+}
+function dragEnd() {
+  const d = drag;
+  drag = null;
+  document.body.classList.remove("dragging");
+  if (!d.live) {                                           // simple toucher : la poignée bascule, le titre rouvre
+    if (d.onHandle) snapTo(S.sheet === "collapsed" ? "mid" : "collapsed");
+    else if (d.onHead && S.sheet === "collapsed") snapTo("mid");
+    return;
+  }
+  const v = velocity(d.samples);
+  snapTo(chooseStop(sheetY, v, sheetStops(), d.from), v);
+}
+// Souris, stylet, doigt : tout le panneau se tire tant qu'il n'est pas plein ; plein, seulement par son titre
+$("panel").addEventListener("pointerdown", e => {
+  if (!sheetActive() || drag || e.button > 0) return;
+  if (e.target.closest("input, textarea, select")) return;
+  const onHead = !!e.target.closest(".sheet-head");
+  if (S.sheet === "full" && !onHead) return;               // plein : la liste défile normalement
+  dragStart(e.clientY, e.pointerId, !!e.target.closest("#sheetHandle"), onHead);
+});
+$("panel").addEventListener("pointermove", e => { if (drag && e.pointerId === drag.id) dragMove(e.clientY, e.target); });
+const endPointer = e => { if (drag && e.pointerId === drag.id) dragEnd(); };
+$("panel").addEventListener("pointerup", endPointer);
+$("panel").addEventListener("pointercancel", endPointer);
+// Panneau plein, liste tout en haut : tirer vers le bas fait descendre le panneau (au lieu de « rebondir »)
+$("panel").addEventListener("touchstart", e => {
+  pull = sheetActive() && S.sheet === "full" && !e.target.closest(".sheet-head") ? {y: e.touches[0].clientY} : null;
+}, {passive: true});
+$("panel").addEventListener("touchmove", e => {
+  if (!pull) return;
+  const y = e.touches[0].clientY, p = $("panel");
+  if (!drag) {
+    if (p.scrollTop > 0 || y <= pull.y) { if (y < pull.y) pull = null; return; }   // vers le haut : la liste défile
+    e.preventDefault();                                    // vers le bas, en haut de la liste : c'est le panneau
+    if (y - pull.y < 5) return;
+    dragStart(pull.y, "touch", false, false);
+  }
+  e.preventDefault();
+  dragMove(y);
+}, {passive: false});
+const endTouch = () => { pull = null; if (drag?.id === "touch") dragEnd(); };
+$("panel").addEventListener("touchend", endTouch);
+$("panel").addEventListener("touchcancel", endTouch);
 addEventListener("resize", () => layoutSheet());
 // ---- Authentification (js/auth.js) ----------------------------------------------------------------
 const AUTH_SCREENS = {welcome: screenWelcome, login: screenLogin, signup: screenSignup};
@@ -1650,7 +1737,7 @@ function closeRoutes() {
   render();
 }
 function chooseDest(place) {
-  sheetCollapsed = false;                                 // les itinéraires doivent se voir
+  if (S.sheet === "collapsed") S.sheet = "mid";           // les itinéraires doivent se voir
   // « Jusqu'à la bonne porte » : on vise l'entrée accessible du lieu quand elle est connue (js/arrival.js)
   const {entrance: ent, note} = net && !place.gps ? entranceFor(net, place) : {entrance: null, note: ""};
   const viaEntrance = ent && ent.d > 8;
@@ -1765,8 +1852,8 @@ function bind() {
   // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
   on("qClear", "onmousedown", e => e.preventDefault());
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
-  on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
-  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
+  on("q", "onfocus", () => { if (sheetActive() && S.sheet !== "full") snapTo("full"); });   // clavier : place aux suggestions
+  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); snapTo(S.sheet === "collapsed" ? "mid" : "collapsed"); } });
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));

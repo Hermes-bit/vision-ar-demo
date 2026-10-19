@@ -12,6 +12,7 @@
 
 :root {
   --radius: 18px;
+  --ease-sheet: cubic-bezier(.22, 1, .36, 1);           /* calage du panneau du bas */
   --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px); --safe-right: env(safe-area-inset-right, 0px);
   --gutter: 18px;
@@ -93,9 +94,13 @@ body.full #map { display: none; }
 /* Recherche et choix d'itinéraire : le plan occupe tout l'écran, SOUS le panneau en verre ;
    le panneau prend la hauteur de son contenu et se réduit d'un glissement (voir layoutSheet) */
 body.sheet #map { height: 100vh; height: 100dvh; }
-body.sheet #panel { top: auto; min-height: 50vh; min-height: 50dvh; max-height: calc(100vh - 96px - var(--safe-top)); max-height: calc(100dvh - 96px - var(--safe-top));
-  transform: translateY(var(--sheet-y, 0px)); transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
-body.sheet.dragging #panel { transition: none; }
+/* 3 points d'arrêt : le panneau a toujours la hauteur « plein » ; JS le décale (transform), jamais height ni top */
+body.sheet #panel { top: auto; height: calc(100vh - 96px - var(--safe-top)); height: calc(100dvh - 96px - var(--safe-top));
+  overflow-y: hidden; will-change: transform; }
+/* Voile sur la carte : 0 (panneau réduit) à 0,25 (plein), suit le panneau */
+.sheet-scrim { position: fixed; inset: 0; z-index: 499; background: #0F2537; opacity: 0; pointer-events: none; transition: opacity .3s var(--ease-sheet); }
+body:not(.sheet) .sheet-scrim { display: none; }
+body.dragging .sheet-scrim { transition: none; }
 /* Panneau abaissé : la poignée et le titre seulement ; le reste s'efface au lieu d'être coupé */
 body.sheet #panel > :not(.sheet-head) { transition: opacity .2s ease; }
 body.sheet #panel.collapsed > :not(.sheet-head) { opacity: 0; visibility: hidden; }
@@ -103,8 +108,8 @@ body.sheet #panel.collapsed > :not(.sheet-head) { opacity: 0; visibility: hidden
 body.sheet { background: var(--bg); }
 body.sheet::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: calc(12px + var(--safe-bottom)); z-index: 501;
   pointer-events: none; background: linear-gradient(to bottom, transparent, var(--bg)); }
-body.sheet .leaflet-bottom { bottom: calc(var(--sheet-h, 0px) + 6px); transition: bottom .3s; }
-@media (prefers-reduced-motion: reduce) { body.sheet #panel { transition: none; } }
+body.sheet .leaflet-bottom { bottom: calc(var(--sheet-h, 0px) + 6px); }
+@media (prefers-reduced-motion: reduce) { .sheet-scrim { transition: none; } }
 body.full #panel { top: 0; border-radius: 0; box-shadow: none; background: var(--bg-grad), var(--bg); padding-top: calc(var(--gutter) + var(--safe-top));
   padding-left: max(calc(var(--gutter) + var(--safe-left)), calc((100% - 620px) / 2));
   padding-right: max(calc(var(--gutter) + var(--safe-right)), calc((100% - 620px) / 2)); }
