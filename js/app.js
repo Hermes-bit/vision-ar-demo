@@ -1049,7 +1049,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "67";
+const APP_VERSION = "68";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1424,7 +1424,14 @@ function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
   document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : "sheet";
+  // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
+  // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
+  const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
   $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
+  for (const img of $("panel").querySelectorAll("img.stk")) {
+    const old = keepStk.get(img.className + img.getAttribute("src"));
+    if (old) { img.replaceWith(old); keepStk.delete(img.className + img.getAttribute("src")); }
+  }
   if (authScreen) bindAuth($("panel"), authCtx); else bind();
   renderHud();
   syncLayers();
