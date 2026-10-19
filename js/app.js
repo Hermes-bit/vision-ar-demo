@@ -546,9 +546,15 @@ addEventListener("online", () => toast("Connexion retrouvée."));
 function fitRoute() {
   const r = S.routes[S.selected] || S.routes[0];
   if (!r || S.screen !== "route") return;
-  const panelTop = $("panel").getBoundingClientRect().top;
+  // La carte vient souvent de changer de taille (retour du Profil ou des Paramètres) : on la remet à jour AVANT de
+  // cadrer. Sinon Leaflet cadrait avec son ancienne taille (338 px) et une marge plus grande que la carte : zoom
+  // impossible, carte cassée (vide) et écran à moitié redessiné (boutons Fermer / Paramètres absents).
+  map.invalidateSize({pan: false});
+  const size = map.getSize(), panelTop = $("panel").getBoundingClientRect().top;
+  if (size.y < 160 || size.x < 160) return;
   const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
-  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, under + 24]});
+  const bottom = Math.max(24, Math.min(under + 24, size.y - 84 - 120));     // il reste toujours 120 px de carte pour le trajet
+  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, bottom], maxZoom: 18});
 }
 // Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
 // le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
@@ -1069,7 +1075,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "75";
+const APP_VERSION = "77";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1529,13 +1535,19 @@ const sideLayout = () => matchMedia("(orientation: landscape) and (max-height: 6
 // Depuis « plein », on peut le redescendre jusqu'à « normal », pas plus bas.
 const SHEET_DRAG = true;
 const sheetActive = () => SHEET_DRAG && S.screen === "route" && !sideLayout();
-let sheetY = null, sheetAnim = null, sheetRaf = 0, drag = null, pull = null;
-function sheetStops() {
-  const p = $("panel"), H = p.offsetHeight, last = p.lastElementChild;
-  // hauteur naturelle du contenu (comme avant : le panneau prenait la hauteur de ce qu'il contient)
-  const natural = last ? last.offsetTop + last.offsetHeight + parseFloat(getComputedStyle(p).paddingBottom) : H;
-  const normal = Math.min(H, Math.max(Math.round(innerHeight * 0.5), natural));
-  return {full: 0, mid: Math.max(0, H - normal)};
+// Au repos, le panneau a la hauteur de son arrêt (sa liste défile dedans : « Démarrer le guidage » reste
+// accessible) et aucun décalage. Pendant un geste ou un calage, il prend la hauteur « plein » et se déplace par
+// transform (fluide), puis reprend la hauteur de son arrêt une fois posé. « Normal » laisse toujours voir le haut
+// de la carte : avant, une longue liste d'itinéraires recouvrait toute la carte (et le plan, cadré dans la petite
+// bande restante, zoomait jusqu'à ne plus rien montrer).
+let sheetY = null, sheetAnim = null, sheetRaf = 0, drag = null, pull = null, sheetMoving = false;
+function sheetHeights() {
+  const p = $("panel"), full = parseFloat(getComputedStyle(p).maxHeight) || innerHeight - 96;
+  return {full, mid: Math.min(full, Math.round(innerHeight * 0.56))};
+}
+function sheetStops() {                                    // décalages (translateY) en mode « déplacement »
+  const h = sheetHeights();
+  return {full: 0, mid: Math.max(0, h.full - h.mid)};
 }
 function sheetScrim() {
   let el = $("sheetScrim");
@@ -1547,14 +1559,40 @@ function sheetScrim() {
   return el;
 }
 function paintSheet(y) {
-  const p = $("panel"), ys = sheetStops();
-  p.style.transform = `translateY(${y}px)`;
-  document.documentElement.style.setProperty("--sheet-h", `${Math.max(0, Math.round(p.offsetHeight - y))}px`);
-  sheetScrim().style.opacity = ys.mid > 0 ? (0.25 * Math.max(0, Math.min(1, 1 - y / ys.mid))).toFixed(3) : "0";
+  const p = $("panel"), ys = sheetStops(), h = sheetHeights();
+  p.style.transform = y ? `translateY(${y}px)` : "";
+  const visible = sheetMoving ? h.full - y : p.offsetHeight;
+  document.documentElement.style.setProperty("--sheet-h", `${Math.max(0, Math.round(visible))}px`);
+  const fromMid = sheetMoving ? y : (S.sheet === "full" ? 0 : ys.mid);
+  sheetScrim().style.opacity = ys.mid > 0 ? (0.25 * Math.max(0, Math.min(1, 1 - fromMid / ys.mid))).toFixed(3) : "0";
 }
 function setSheetY(y) {                                    // pendant le geste : une pose par image au plus
   sheetY = y;
   if (!sheetRaf) sheetRaf = requestAnimationFrame(() => { sheetRaf = 0; paintSheet(sheetY); });
+}
+// Passe en mode « déplacement » sans que rien ne bouge à l'écran : hauteur « plein », décalage équivalent
+function startMoving() {
+  if (sheetMoving) return;
+  const p = $("panel"), h = sheetHeights(), visible = p.offsetHeight;
+  sheetMoving = true;
+  p.style.height = `${h.full}px`;
+  p.style.overflowY = "hidden";
+  sheetY = Math.max(0, h.full - visible);
+  paintSheet(sheetY);
+}
+// Posé sur un arrêt : hauteur de l'arrêt, plus de décalage, la liste défile
+function settle() {
+  const p = $("panel"), h = sheetHeights();
+  sheetMoving = false; sheetY = 0;
+  p.style.height = `${S.sheet === "full" ? h.full : h.mid}px`;
+  p.style.overflowY = "auto";
+  p.style.touchAction = "pan-y";
+  paintSheet(0);
+  const hd = $("sheetHandle");
+  if (hd) {
+    hd.setAttribute("aria-expanded", String(S.sheet === "full"));
+    hd.setAttribute("aria-label", S.sheet === "full" ? "Remettre le panneau à sa place" : "Agrandir le panneau");
+  }
 }
 function stopSheetAnim() {                                 // interruption : on reprend là où le panneau EST à l'écran
   if (!sheetAnim) return;
@@ -1562,38 +1600,28 @@ function stopSheetAnim() {                                 // interruption : on 
   sheetAnim.cancel(); sheetAnim = null;
   sheetY = y; paintSheet(y);
 }
-function sheetState() {                                    // ce qui dépend de l'arrêt : défilement, contenu, poignée
-  const p = $("panel"), full = S.sheet === "full" || sheetStops()[S.sheet] === 0;   // contenu haut : « normal » = plein
-  p.classList.remove("collapsed");
-  p.style.overflowY = full ? "auto" : "hidden";
-  p.style.touchAction = full ? "pan-y" : "none";
-  if (!full) p.scrollTop = 0;
-  const h = $("sheetHandle");
-  if (h) {
-    h.setAttribute("aria-expanded", String(S.sheet === "full"));
-    h.setAttribute("aria-label", S.sheet === "full" ? "Remettre le panneau à sa place" : "Agrandir le panneau");
-  }
-}
 function snapTo(stop, v = 0, duration = null) {
   stopSheetAnim();
+  startMoving();
   S.sheet = stop;
-  sheetState();
   const to = sheetStops()[stop], from = sheetY ?? to;
   sheetY = to; paintSheet(to);                             // position finale posée ; l'animation la recouvre en jouant
-  const done = () => { if (S.routes.length && stop !== "full") fitRoute(); };
+  const done = () => { settle(); if (S.routes.length && stop !== "full") fitRoute(); };
   if (Math.abs(to - from) < 1 || matchMedia("(prefers-reduced-motion: reduce)").matches) return done();
   const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
   sheetAnim = $("panel").animate([{transform: `translateY(${from}px)`}, {transform: `translateY(${to}px)`}],
     {duration: duration ?? snapDuration(to - from, v), easing});
   sheetAnim.onfinish = () => { sheetAnim = null; done(); };
 }
-const atTop = () => S.sheet === "full" || sheetStops()[S.sheet] === 0;   // panneau en haut de l'écran
+const atTop = () => S.sheet === "full";                    // panneau en haut de l'écran
+const listScrolls = () => $("panel").scrollHeight > $("panel").clientHeight + 2;
 function setSheet() { snapTo("mid"); }                   // (appels existants : le panneau ne se plie plus)
 function layoutSheet() {
   const p = $("panel");
   if (!sheetActive()) {
     stopSheetAnim();
-    p.style.transform = p.style.overflowY = p.style.touchAction = "";
+    sheetMoving = false;
+    p.style.transform = p.style.overflowY = p.style.touchAction = p.style.height = "";
     p.classList.remove("collapsed");
     // panneau fixe : les commandes de la carte restent au-dessus de lui
     document.documentElement.style.setProperty("--sheet-h", S.screen === "route" && !sideLayout() ? `${p.offsetHeight}px` : "0px");
@@ -1603,28 +1631,23 @@ function layoutSheet() {
   }
   if (drag || sheetAnim) return;                           // on ne coupe jamais un geste ou un calage en cours
   if (!(S.sheet in sheetStops())) S.sheet = "mid";
-  const to = sheetStops()[S.sheet];
-  // le contenu a changé de hauteur (suggestions, itinéraires) : le panneau glisse à sa nouvelle place
-  if (sheetY !== null && Math.abs(to - sheetY) > 2 && !matchMedia("(prefers-reduced-motion: reduce)").matches) return snapTo(S.sheet);
-  sheetState();
-  sheetY = to;
-  paintSheet(sheetY);
+  settle();
 }
 function dragStart(y, id, onHandle, onHead) {
   stopSheetAnim();
-  const start = sheetY ?? sheetStops()[S.sheet];
-  drag = {y0: y, start, id, onHandle, onHead, from: S.sheet, live: false, samples: [{t: performance.now(), y: start}]};
+  drag = {y0: y, id, onHandle, onHead, from: S.sheet, live: false, samples: []};
 }
 function dragMove(y, target) {
   const moved = y - drag.y0;
   if (!drag.live) {
     if (Math.abs(moved) < 5) return;
     drag.live = true;
+    startMoving();
+    drag.start = sheetY;
+    drag.samples.push({t: performance.now(), y: sheetY});
     document.body.classList.add("dragging");
-    $("panel").classList.remove("collapsed");              // le contenu apparaît dès qu'on tire
     if (drag.id !== "touch") target?.setPointerCapture?.(drag.id);
   }
-  // jamais au-dessus de « plein » (on voyait une bande noire sous le panneau) ; élastique seulement vers le bas
   // entre « plein » et « normal », jamais au-delà (ni bande noire en haut, ni pliage vers le bas)
   const ys = sheetStops(), next = Math.max(ys.full, Math.min(ys.mid, drag.start + moved));
   drag.samples.push({t: performance.now(), y: next});
@@ -1635,28 +1658,28 @@ function dragEnd() {
   const d = drag;
   drag = null;
   document.body.classList.remove("dragging");
-  if (!d.live) {                                           // simple toucher : la poignée bascule, le titre rouvre
+  if (!d.live) {                                           // simple toucher : la poignée bascule
     if (d.onHandle) snapTo(S.sheet === "full" ? "mid" : "full");
     return;
   }
   const v = velocity(d.samples);
   snapTo(chooseStop(sheetY, v, sheetStops(), d.from), v);
 }
-// Souris, stylet, doigt : tout le panneau se tire tant qu'il n'est pas plein ; plein, seulement par son titre
+// Le panneau se tire par son titre ; ailleurs aussi tant que sa liste ne défile pas (sinon, c'est la liste)
 $("panel").addEventListener("pointerdown", e => {
   if (!sheetActive() || drag || e.button > 0) return;
   if (e.target.closest("input, textarea, select")) return;
   const onHead = !!e.target.closest(".sheet-head");
-  if (atTop() && !onHead) return;                         // tout en haut : la liste défile normalement
+  if (!onHead && (atTop() || listScrolls())) return;
   dragStart(e.clientY, e.pointerId, !!e.target.closest("#sheetHandle"), onHead);
 });
 $("panel").addEventListener("pointermove", e => { if (drag && e.pointerId === drag.id) dragMove(e.clientY, e.target); });
 const endPointer = e => { if (drag && e.pointerId === drag.id) dragEnd(); };
 $("panel").addEventListener("pointerup", endPointer);
 $("panel").addEventListener("pointercancel", endPointer);
-// Panneau plein, liste tout en haut : tirer vers le bas fait descendre le panneau (au lieu de « rebondir »)
+// Panneau plein, liste tout en haut : tirer vers le bas le ramène à sa place (au lieu de faire « rebondir » la liste)
 $("panel").addEventListener("touchstart", e => {
-  pull = sheetActive() && atTop() && S.sheet === "full" && !e.target.closest(".sheet-head") ? {y: e.touches[0].clientY} : null;
+  pull = sheetActive() && atTop() && !e.target.closest(".sheet-head") ? {y: e.touches[0].clientY} : null;
 }, {passive: true});
 $("panel").addEventListener("touchmove", e => {
   if (!pull) return;
@@ -2004,9 +2027,10 @@ function appIntro() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
   const panel = $("panel");
-  if (getComputedStyle($("map")).display !== "none")
+  if (getComputedStyle($("map")).visibility !== "hidden")
     $("map").animate([{opacity: 0.2, transform: "scale(1.08)"}, {opacity: 1, transform: "scale(1)"}], {duration: 1100, easing});
   if (sheetActive()) {
+    startMoving();
     sheetY = panel.offsetHeight;                           // part de sous l'écran…
     paintSheet(sheetY);
     snapTo(S.sheet, 0, 750);                               // …et monte jusqu'à son point d'arrêt
