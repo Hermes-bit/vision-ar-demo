@@ -50,7 +50,7 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", false), detectDebug: store.get("va-detect-debug", false),
+  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, query: "", places: [],
   // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
   originMode: "auto", searchFor: "dest", oquery: "",
@@ -968,7 +968,14 @@ function onGps(pos, precise = false) {
       if (++n.back >= 3) { n.back = 0; n.pos = best.along; wrongWay(); }
     } else n.back = 0;
     // GPS imprécis : on n'accroche pas de force au tracé, on avance prudemment (N°4)
-    return moveTo(Math.max(n.pos, acc > 25 ? Math.min(best.along, n.pos + 15) : best.along));
+    const to = Math.max(n.pos, acc > 25 ? Math.min(best.along, n.pos + 15) : best.along), now = Date.now();
+    // vitesse de marche estimée sur les dernières mesures (sert à avancer entre deux mesures, voir plus bas)
+    if (n.lastFix && now - n.lastFix.at < 8000) {
+      const v = Math.max(0, Math.min(2.5, (to - n.lastFix.along) / ((now - n.lastFix.at) / 1000)));
+      n.walkSpeed = n.walkSpeed == null ? v : 0.7 * n.walkSpeed + 0.3 * v;
+    }
+    n.lastFix = {along: to, at: now};
+    return moveTo(to);
   }
   n.offRoute = true; n.back = 0;
   n.gpsInfo = `Vous vous éloignez de l'itinéraire (${Math.round(best?.d ?? 0)} m) : nouveau calcul en cours…`;
@@ -1008,15 +1015,25 @@ function steer() {
 }
 setInterval(steer, 1000);
 let realMarker = null;
+// Terrain du 19/10 : deux points (bleu sur le trajet, orange GPS brut) éloignés de plusieurs mètres troublaient la
+// lecture. Un seul point (le bleu) ; la précision du GPS est un cercle léger centré sur lui (dessiné par renderNavLive).
 function drawRealPosition() {
   const r = S.nav?.real;
   if (!r) { realMarker?.remove(); realMarker = null; return; }
-  if (!realMarker) realMarker = L.layerGroup().addTo(map);
-  realMarker.clearLayers();
-  L.circle([r.lat, r.lon], {radius: r.acc, color: "#C2410C", weight: 1, fillColor: "#F59E0B", fillOpacity: .15, interactive: false}).addTo(realMarker);
-  L.circleMarker([r.lat, r.lon], {radius: 8, color: "#fff", weight: 3, fillColor: "#C2410C", fillOpacity: 1})
-    .bindTooltip("Ma position GPS").addTo(realMarker);
+  if (!realMarker) realMarker = L.circle([r.lat, r.lon], {radius: r.acc, color: "#2F80ED", weight: 1, opacity: .35,
+    fillColor: "#2F80ED", fillOpacity: .08, interactive: false}).addTo(map);
+  realMarker.setRadius(Math.min(60, r.acc));
 }
+// Entre deux mesures GPS (souvent 1 à 3 s sur iPhone), la progression avance au rythme de la marche mesuré :
+// le décompte de distance ne reste plus figé. Au plus 6 m d'avance sur la dernière mesure ; la suivante corrige.
+setInterval(() => {
+  const n = S.nav;
+  if (!n || n.phase !== "route" || n.offRoute || n.away || n.arrived || !n.lastFix || document.hidden) return;
+  const dt = (Date.now() - n.lastFix.at) / 1000, v = n.walkSpeed ?? 0;
+  if (dt > 4 || v < 0.4 || v > 2.2) return;
+  const target = Math.min(n.total, n.lastFix.along + Math.min(6, v * dt));
+  if (target > n.pos + 0.3) moveTo(target);
+}, 1000);
 let wakeLock = null;
 async function requestWakeLock() {
   try { wakeLock = await navigator.wakeLock?.request("screen"); } catch { /* non supporté */ }
@@ -1059,7 +1076,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "84";
+const APP_VERSION = "85";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1590,6 +1607,7 @@ function renderNavLive() {
   const n = S.nav;
   if (!n) return;
   const shown = (n.phase === "approach" || n.away || n.offRoute) && n.real ? n.real : n.here;   // N°15 : pas accroché pendant l'approche
+  realMarker?.setLatLng?.([shown.lat, shown.lon]);         // cercle de précision autour du seul point affiché
   n.marker?.setLatLng([shown.lat, shown.lon]);
   if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); refreshTransit(); announceStops(); }
 }

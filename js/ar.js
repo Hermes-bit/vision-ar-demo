@@ -16,7 +16,7 @@
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {BACKEND, captureSample, detect, loadModel, modelReady} from "./obstacles.js";
+import {BACKEND, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
@@ -97,7 +97,7 @@ function syncNative(s) {
 }
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const round5 = m => m < 10 ? Math.max(1, Math.round(m)) : Math.round(m / 5) * 5;
+const round5 = m => m < 100 ? Math.max(1, Math.round(m)) : Math.round(m / 5) * 5;   // au mètre près sous 100 m
 const dist = m => m < 1000 ? `${round5(m)} m` : `${(m / 1000).toFixed(1).replace(".", ",")} km`;
 const theme = () => THEMES[api.state()?.theme] || THEMES.verre;
 
@@ -585,7 +585,7 @@ function runDetection(s) {
   if (!modelReady()) {
     if (detState !== "loading" && detState !== "error") {
       detState = "loading"; lastUi = "";
-      loadModel().then(() => { detState = "ready"; lastUi = ""; }).catch(() => { detState = "error"; lastUi = ""; });
+      loadModel().then(() => { detState = "ready"; lastUi = ""; }).catch(e => { console.warn("Détecteur d'obstacles :", e?.message || e); detState = "error"; lastUi = ""; });
     }
     return;
   }
@@ -595,7 +595,10 @@ function runDetection(s) {
     dets = found; detsAt = performance.now();
     for (const d of dets) d.ground = corridor2D(d.box, video.videoWidth, video.videoHeight);
     // seuls les objets sûrs (≥ 50 %) dont le bas est dans le trapèze du couloir alimentent le suivi
-    tracker.update(dets.filter(d => d.alert && d.score >= CORRIDOR.minScore && d.ground), detsAt);
+    // de nuit (image sombre), le détecteur est moins sûr de lui : seuil 0,4 au lieu de 0,5 (terrain du 19/10 :
+    // potelet devant soi non signalé). Le suivi sur plusieurs images évite les fausses alertes isolées.
+    const minScore = lastLuma < 70 ? 0.4 : CORRIDOR.minScore;
+    tracker.update(dets.filter(d => d.alert && d.score >= minScore && d.ground), detsAt);
     obstacleAlerts(s);
     autoSample(s);
   }).catch(() => {}).finally(() => { detBusy = false; });
@@ -745,7 +748,7 @@ function frame() {
     }
     // pointillés vers l'itinéraire : seulement si la position est connue à 8 m près (sinon ils mentiraient)
     const accNow = precision(s);
-    if (v.join && !s.st.arrived && !recal && compassOk() && (!compass || (accNow !== null && accNow <= 8))) drawJoin(cam, v.here, v.join);
+    if (v.join && !s.st.arrived && !recal && compassOk() && (!compass || (accNow !== null && accNow <= 15))) drawJoin(cam, v.here, v.join);
     drawAnchors(cam, s, observer(s, compass ? null : v.here));
     drawDestination(cam, s, v.here);
     if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); else drawCorridorMarks(); }
@@ -773,7 +776,9 @@ function ribbonTarget(s, compass) {
   const n = s.nav;
   if (n.phase !== "route" || n.offRoute || n.away || !compassOk()) return 0;
   const acc = precision(s);
-  return acc === null || acc > 12 ? 0 : acc <= 6 ? 1 : 1 - 0.6 * (acc - 6) / 6;
+  // terrain de nuit (19/10) : GPS à 14 m en permanence, le ruban ne s'affichait jamais. Plein jusqu'à 8 m,
+  // de plus en plus pâle jusqu'à 25 m, masqué au-delà.
+  return acc === null || acc > 25 ? 0 : acc <= 8 ? 1 : 1 - 0.6 * (acc - 8) / 17;
 }
 // Retour dans l'appli après une pause (écran verrouillé, autre appli) : l'ancien calage est faux. On efface
 // le ruban, on annonce « Recalage en cours », on remet à zéro filtres et suivi, et on relance la caméra.
@@ -864,13 +869,14 @@ function renderUi(s, heading, compass) {
         ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
         ${!nativeOn && recal && !st.arrived ? `<em class="arrow-note">${icon("locate-fixed")} Recalage en cours : gardez le téléphone devant vous</em>` : ""}
         ${!nativeOn && !recal && compass && !compassOk() && !st.arrived ? `<em class="arrow-note">${icon("compass")} Boussole à calibrer : décrivez un 8 avec le téléphone</em>` : ""}
-        ${!nativeOn && !recal && compass && compassOk() && (acc === null || acc > 12) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé et repères masqués, suivez la voix</em>` : ""}
+        ${!nativeOn && !recal && compass && compassOk() && (acc === null || acc > 25) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé et repères masqués, suivez la voix</em>` : ""}
         ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
         ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
         ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}${st.arrived ? sticker("bien-arrive", "stk-arrive") : ""}</div>
       ${banner}
     </div>
+    <div class="dome-credit" aria-hidden="true">© OpenStreetMap · OpenFreeMap · OpenMapTiles</div>
     <div class="dome-ui">
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
       <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
@@ -1028,8 +1034,19 @@ function onAction(e) {
   else if (act === "stop") { sheet = null; api.stop(); return; }
   lastUi = "";
 }
+// Mini-carte du guidage : tenue en marchant, le pouce la zoomait ou la déplaçait sans le vouloir (terrain du
+// 19/10 : zooms soudains, trajet hors du dôme). Petite : verrouillée, zoom 17, recentrée sur vous. En grand
+// (bouton « Plan ») : manipulable.
+const MAP_HANDLERS = ["dragging", "touchZoom", "doubleClickZoom", "scrollWheelZoom", "boxZoom", "keyboard", "tap"];
+function lockMap(on) {
+  const m = api?.map;
+  if (!m) return;
+  for (const h of MAP_HANDLERS) on ? m[h]?.disable() : m[h]?.enable();
+  if (on && m.getZoom() !== 17) m.setZoom(17, {animate: false});
+}
 function setMapFull(on) {
   mapFull = on;
+  lockMap(!on);
   if (!on && !stream && !nativeOn && !noCamera) startCamera();   // sortie du mode audio seul
   root.classList.toggle("map-full", on);
   const grip = root.querySelector(".dome-grip");
@@ -1061,6 +1078,7 @@ export async function openAR(options) {
   canvas = root.querySelector("canvas");
   ctx = canvas.getContext("2d");
   root.querySelector(".dome-map").append(api.map.getContainer());
+  lockMap(true);
   try { api.map.invalidateSize(); } catch { /* dôme pas encore dimensionné : refait par layoutDome */ }
   bindGrip();
   domeObserver = new ResizeObserver(layoutDome);
@@ -1100,6 +1118,7 @@ async function startCamera() {
 }
 export function closeAR() {
   cancelAnimationFrame(raf);
+  lockMap(false);                                        // la carte redevient manipulable hors du guidage
   document.removeEventListener("visibilitychange", onVisibility);
   stopSensors();
   domeObserver?.disconnect(); domeObserver = null; domeGeom = null;

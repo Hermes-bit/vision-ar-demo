@@ -461,6 +461,16 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 /* fond opaque : jamais de « trou » vers la caméra pendant le chargement des tuiles */
 #ar .dome-map { background: #E4E9ED; }
 #ar .dome-map > #map { background: #E4E9ED; }
+/* Mini-carte orientée dans le sens de la marche (comme un GPS de voiture) : la carte tourne avec la boussole,
+   agrandie pour que les coins restent couverts ; icônes et point de position restent droits. En grand : nord en haut. */
+#ar:not(.map-full) .dome-map > #map { inset: -30% !important; width: 160% !important; height: 160% !important;
+  rotate: calc(-1 * var(--heading, 0deg)); }
+#ar:not(.map-full) .dome-map .leaflet-marker-icon > * { rotate: var(--heading, 0deg); }
+#ar:not(.map-full) .dome-map .puck .cone { transform: none; }
+#ar:not(.map-full) .dome-map .leaflet-control-container { display: none; }
+#ar .dome-credit { position: absolute; z-index: 3; left: 0; right: 0; text-align: center; font-size: 10px; color: rgba(15, 37, 55, .7);
+  bottom: calc(74px + var(--safe-bottom) * .5 + var(--vp-gap)); pointer-events: none; text-shadow: 0 0 3px #fff; }
+#ar.map-full .dome-credit, #ar.native-ar .dome-credit { display: none; }
 #ar .ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 /* Poignée posée au sommet de l'anneau : tirer vers le haut / le bas (cible tactile de 44 px) */
 #ar .dome-grip { position: absolute; left: 50%; top: 0; width: 88px; height: 44px; margin-left: -44px; border: 0; background: transparent;
