@@ -16,6 +16,20 @@
 <meta name="apple-mobile-web-app-title" content="Vision AR">
 <link rel="stylesheet" href="vendor/leaflet/leaflet.min.css">
 <link rel="stylesheet" href="css/app.css">
+<script>
+// Version stable (/vision-ar/) : son propre stockage sur le téléphone (compte, profil, favoris, réglages),
+// séparé de la version de test (/vision-ar-demo/) qui partage la même adresse hermes-bit.github.io.
+(() => {
+  if (location.pathname.split("/")[1] !== "vision-ar") return;
+  try {
+    const P = "stable:", s = Storage.prototype, get = s.getItem, set = s.setItem, del = s.removeItem;
+    const key = (st, k) => st === window.localStorage ? P + k : k;
+    s.getItem = function (k) { return get.call(this, key(this, k)); };
+    s.setItem = function (k, v) { return set.call(this, key(this, k), v); };
+    s.removeItem = function (k) { return del.call(this, key(this, k)); };
+  } catch { /* navigation privée : stockage indisponible de toute façon */ }
+})();
+</script>
 <script>try { document.documentElement.dataset.theme = JSON.parse(localStorage.getItem("va-theme")) || "verre"; } catch { /* thème par défaut */ }</script>
 <script>
 // iOS 26, appli lancée depuis l'écran d'accueil : la hauteur annoncée est trop courte (environ la barre d'état),

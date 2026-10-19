@@ -1049,7 +1049,9 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "22";
+const APP_VERSION = "67";
+// Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
+const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1140,7 +1142,7 @@ function screenSettings() {
       (licence SIL OFL).</p>`)}
   </section>
   ${sticker("merci", "stk-footer")}
-  <p class="fine set-version">Vision AR version ${APP_VERSION} · Geomessen Burkina Faso</p>`;
+  <p class="fine set-version">Vision AR version ${APP_VERSION}${APP_CHANNEL === "test" ? " (test)" : ""} · Geomessen Burkina Faso</p>`;
 }
 function screenZones() {
   const byCountry = {};

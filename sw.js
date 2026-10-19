@@ -1,12 +1,17 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
-const VERSION = "vision-ar-v66";
+// Deux sites partagent l'adresse hermes-bit.github.io (donc le même stockage sur un téléphone) : la version de
+// TEST (/vision-ar-demo/) et la version STABLE (/vision-ar/, scripts/publier_stable.py). Chacun a ses propres
+// caches et n'efface que les siens.
+const SITE = new URL(self.location.href).pathname.split("/")[1] || "";
+const PREFIX = SITE === "vision-ar" ? "va-stable-" : "vision-ar-";
+const VERSION = PREFIX + "v67";
 // Cartes et bibliothèques gardées pour le hors-ligne : un cache à part, qui SURVIT aux mises à jour de l'appli
 // (avant, chaque nouvelle version effaçait les cartes déjà téléchargées)
-const MAP_CACHE = "vision-ar-cartes", MAX_MAP = 4000;
+const MAP_CACHE = PREFIX + "cartes", MAX_MAP = 4000;
 // Détecteur d'obstacles (models/*.onnx, 11 Mo) : cache à part, gardé d'une version à l'autre ; mis à jour
 // seulement si le fichier publié change (requête conditionnelle : quelques octets si rien n'a bougé)
-const MODEL_CACHE = "vision-ar-modeles";
+const MODEL_CACHE = PREFIX + "modeles";
 // Fichiers qui ne changent jamais (versions figées, tuiles datées) : le cache d'abord, le réseau sinon
 const STATIC_HOSTS = ["cdn.jsdelivr.net", "storage.googleapis.com", "tfhub.dev", "www.kaggle.com"];
 const APP = [
@@ -24,7 +29,7 @@ self.addEventListener("install", e => {
 
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys()
-    .then(keys => Promise.all(keys.filter(k => k.startsWith("vision-ar-") && k !== VERSION && k !== MAP_CACHE && k !== MODEL_CACHE).map(k => caches.delete(k))))
+    .then(keys => Promise.all(keys.filter(k => k.startsWith(PREFIX + "v") && k !== VERSION).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 
