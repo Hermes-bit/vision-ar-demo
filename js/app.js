@@ -8,7 +8,7 @@ import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
-import {chooseStop, rubber, snapDuration, velocity} from "./sheet.js";
+import {chooseStop, snapDuration, velocity} from "./sheet.js";
 import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {arrivalFiche, arrivalSpeech, entranceFor, loadAcces} from "./arrival.js";
@@ -1050,7 +1050,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "73";
+const APP_VERSION = "74";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1163,8 +1163,8 @@ function screenRoute() {
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
     ${S.dest ? "" : sticker("on-y-va", "stk-sheet")}
-    ${SHEET_DRAG ? `<button class="handle" id="sheetHandle" aria-expanded="${S.sheet !== "collapsed"}"
-      aria-label="${S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>` : ""}
+    ${SHEET_DRAG ? `<button class="handle" id="sheetHandle" aria-expanded="${S.sheet === "full"}"
+      aria-label="${S.sheet === "full" ? "Remettre le panneau à sa place" : "Agrandir le panneau"}"></button>` : ""}
     <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
       <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
   </div>
@@ -1505,15 +1505,18 @@ function render() {
 // Un voile assombrit la carte (opacité 0 à 0,25) quand le panneau monte. Un nouveau geste reprend depuis la
 // position réelle, même en pleine animation. L'arrêt courant est S.sheet et suit le cycle render normal.
 const sideLayout = () => matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
-// Demande de l'usager : le panneau ne se plie plus (ni geste, ni poignée). Il reste à sa place et son contenu
-// défile normalement. Le code des 3 points d'arrêt est gardé : SHEET_DRAG = true le réactive.
-const SHEET_DRAG = false;
+// Demande de l'usager : le panneau ne se plie JAMAIS vers le bas. Deux arrêts seulement : « normal » (sa place
+// habituelle : la hauteur de son contenu, au moins la moitié de l'écran) et « plein » (on le tire vers le haut).
+// Depuis « plein », on peut le redescendre jusqu'à « normal », pas plus bas.
+const SHEET_DRAG = true;
 const sheetActive = () => SHEET_DRAG && S.screen === "route" && !sideLayout();
 let sheetY = null, sheetAnim = null, sheetRaf = 0, drag = null, pull = null;
 function sheetStops() {
-  const p = $("panel"), H = p.offsetHeight, head = p.querySelector(".sheet-head");
-  const peek = head ? head.offsetTop + head.offsetHeight + 14 : 90;       // réduit : poignée et titre seulement
-  return {full: 0, mid: Math.max(0, H - Math.round(innerHeight * 0.5)), collapsed: Math.max(0, H - peek)};
+  const p = $("panel"), H = p.offsetHeight, last = p.lastElementChild;
+  // hauteur naturelle du contenu (comme avant : le panneau prenait la hauteur de ce qu'il contient)
+  const natural = last ? last.offsetTop + last.offsetHeight + parseFloat(getComputedStyle(p).paddingBottom) : H;
+  const normal = Math.min(H, Math.max(Math.round(innerHeight * 0.5), natural));
+  return {full: 0, mid: Math.max(0, H - normal)};
 }
 function sheetScrim() {
   let el = $("sheetScrim");
@@ -1528,7 +1531,7 @@ function paintSheet(y) {
   const p = $("panel"), ys = sheetStops();
   p.style.transform = `translateY(${y}px)`;
   document.documentElement.style.setProperty("--sheet-h", `${Math.max(0, Math.round(p.offsetHeight - y))}px`);
-  sheetScrim().style.opacity = ys.collapsed > 0 ? (0.25 * Math.max(0, Math.min(1, 1 - y / ys.collapsed))).toFixed(3) : "0";
+  sheetScrim().style.opacity = ys.mid > 0 ? (0.25 * Math.max(0, Math.min(1, 1 - y / ys.mid))).toFixed(3) : "0";
 }
 function setSheetY(y) {                                    // pendant le geste : une pose par image au plus
   sheetY = y;
@@ -1541,15 +1544,15 @@ function stopSheetAnim() {                                 // interruption : on 
   sheetY = y; paintSheet(y);
 }
 function sheetState() {                                    // ce qui dépend de l'arrêt : défilement, contenu, poignée
-  const p = $("panel"), full = S.sheet === "full";
-  p.classList.toggle("collapsed", S.sheet === "collapsed");
+  const p = $("panel"), full = S.sheet === "full" || sheetStops()[S.sheet] === 0;   // contenu haut : « normal » = plein
+  p.classList.remove("collapsed");
   p.style.overflowY = full ? "auto" : "hidden";
   p.style.touchAction = full ? "pan-y" : "none";
   if (!full) p.scrollTop = 0;
   const h = $("sheetHandle");
   if (h) {
-    h.setAttribute("aria-expanded", String(S.sheet !== "collapsed"));
-    h.setAttribute("aria-label", S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan");
+    h.setAttribute("aria-expanded", String(S.sheet === "full"));
+    h.setAttribute("aria-label", S.sheet === "full" ? "Remettre le panneau à sa place" : "Agrandir le panneau");
   }
 }
 function snapTo(stop, v = 0, duration = null) {
@@ -1565,7 +1568,8 @@ function snapTo(stop, v = 0, duration = null) {
     {duration: duration ?? snapDuration(to - from, v), easing});
   sheetAnim.onfinish = () => { sheetAnim = null; done(); };
 }
-function setSheet(collapsed) { snapTo(collapsed ? "collapsed" : "mid"); }   // (appels existants)
+const atTop = () => S.sheet === "full" || sheetStops()[S.sheet] === 0;   // panneau en haut de l'écran
+function setSheet() { snapTo("mid"); }                   // (appels existants : le panneau ne se plie plus)
 function layoutSheet() {
   const p = $("panel");
   if (!sheetActive()) {
@@ -1579,8 +1583,12 @@ function layoutSheet() {
     return;
   }
   if (drag || sheetAnim) return;                           // on ne coupe jamais un geste ou un calage en cours
+  if (!(S.sheet in sheetStops())) S.sheet = "mid";
+  const to = sheetStops()[S.sheet];
+  // le contenu a changé de hauteur (suggestions, itinéraires) : le panneau glisse à sa nouvelle place
+  if (sheetY !== null && Math.abs(to - sheetY) > 2 && !matchMedia("(prefers-reduced-motion: reduce)").matches) return snapTo(S.sheet);
   sheetState();
-  sheetY = sheetStops()[S.sheet];
+  sheetY = to;
   paintSheet(sheetY);
 }
 function dragStart(y, id, onHandle, onHead) {
@@ -1598,7 +1606,8 @@ function dragMove(y, target) {
     if (drag.id !== "touch") target?.setPointerCapture?.(drag.id);
   }
   // jamais au-dessus de « plein » (on voyait une bande noire sous le panneau) ; élastique seulement vers le bas
-  const ys = sheetStops(), next = Math.max(ys.full, rubber(drag.start + moved, ys.full, ys.collapsed));
+  // entre « plein » et « normal », jamais au-delà (ni bande noire en haut, ni pliage vers le bas)
+  const ys = sheetStops(), next = Math.max(ys.full, Math.min(ys.mid, drag.start + moved));
   drag.samples.push({t: performance.now(), y: next});
   if (drag.samples.length > 12) drag.samples.shift();
   setSheetY(next);
@@ -1608,8 +1617,7 @@ function dragEnd() {
   drag = null;
   document.body.classList.remove("dragging");
   if (!d.live) {                                           // simple toucher : la poignée bascule, le titre rouvre
-    if (d.onHandle) snapTo(S.sheet === "collapsed" ? "mid" : "collapsed");
-    else if (d.onHead && S.sheet === "collapsed") snapTo("mid");
+    if (d.onHandle) snapTo(S.sheet === "full" ? "mid" : "full");
     return;
   }
   const v = velocity(d.samples);
@@ -1620,7 +1628,7 @@ $("panel").addEventListener("pointerdown", e => {
   if (!sheetActive() || drag || e.button > 0) return;
   if (e.target.closest("input, textarea, select")) return;
   const onHead = !!e.target.closest(".sheet-head");
-  if (S.sheet === "full" && !onHead) return;               // plein : la liste défile normalement
+  if (atTop() && !onHead) return;                         // tout en haut : la liste défile normalement
   dragStart(e.clientY, e.pointerId, !!e.target.closest("#sheetHandle"), onHead);
 });
 $("panel").addEventListener("pointermove", e => { if (drag && e.pointerId === drag.id) dragMove(e.clientY, e.target); });
@@ -1629,7 +1637,7 @@ $("panel").addEventListener("pointerup", endPointer);
 $("panel").addEventListener("pointercancel", endPointer);
 // Panneau plein, liste tout en haut : tirer vers le bas fait descendre le panneau (au lieu de « rebondir »)
 $("panel").addEventListener("touchstart", e => {
-  pull = sheetActive() && S.sheet === "full" && !e.target.closest(".sheet-head") ? {y: e.touches[0].clientY} : null;
+  pull = sheetActive() && atTop() && S.sheet === "full" && !e.target.closest(".sheet-head") ? {y: e.touches[0].clientY} : null;
 }, {passive: true});
 $("panel").addEventListener("touchmove", e => {
   if (!pull) return;
@@ -1754,7 +1762,7 @@ function closeRoutes() {
   render();
 }
 function chooseDest(place) {
-  if (S.sheet === "collapsed") S.sheet = "mid";           // les itinéraires doivent se voir
+  if (S.sheet !== "full") S.sheet = "mid";               // les itinéraires doivent se voir
   // « Jusqu'à la bonne porte » : on vise l'entrée accessible du lieu quand elle est connue (js/arrival.js)
   const {entrance: ent, note} = net && !place.gps ? entranceFor(net, place) : {entrance: null, note: ""};
   const viaEntrance = ent && ent.d > 8;
@@ -1870,7 +1878,7 @@ function bind() {
   on("qClear", "onmousedown", e => e.preventDefault());
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
   on("q", "onfocus", () => { if (sheetActive() && S.sheet !== "full") snapTo("full"); });   // clavier : place aux suggestions
-  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); snapTo(S.sheet === "collapsed" ? "mid" : "collapsed"); } });
+  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); snapTo(S.sheet === "full" ? "mid" : "full"); } });
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
