@@ -89,7 +89,7 @@ p { margin: 0; }
 .handle::before { content: ""; position: absolute; left: 50%; top: 11px; width: 48px; height: 6px; margin-left: -24px; border-radius: 3px;
   background: var(--line); opacity: .7; }
 .sheet-head { touch-action: none; user-select: none; -webkit-user-select: none; }
-body.full #map { display: none; }
+body.full #map { visibility: hidden; pointer-events: none; }   /* (pas display: none : une carte de taille nulle cassait le fond vectoriel) */
 /* Recherche et choix d'itinéraire : le plan occupe tout l'écran, SOUS le panneau en verre ;
    le panneau prend la hauteur de son contenu et se réduit d'un glissement (voir layoutSheet) */
 body.sheet #map { height: 100vh; height: 100dvh; }
@@ -582,6 +582,10 @@ body:not(.sheet) .map-settings { display: none; }
 .confirm-box { width: min(440px, 100%); border-radius: 24px; padding: 18px; display: flex; flex-direction: column; gap: 14px;
   background: var(--surface-solid); color: var(--ink); box-shadow: var(--shadow); }
 .confirm-box h3 { color: var(--primary); }
+.loc-help ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; line-height: 1.35; }
+.loc-help ol b { color: var(--primary); }
+#ar .banner-btn { width: 100%; text-align: left; font: inherit; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+#ar .banner-btn > span { flex: 1; }
 
 /* ---- Authentification : Bienvenue, Connexion, Inscription (d'après la maquette) ----------------- */
 body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }

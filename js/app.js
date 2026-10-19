@@ -545,9 +545,15 @@ addEventListener("online", () => toast("Connexion retrouvée."));
 function fitRoute() {
   const r = S.routes[S.selected] || S.routes[0];
   if (!r || S.screen !== "route") return;
-  const panelTop = $("panel").getBoundingClientRect().top;
+  // La carte vient souvent de changer de taille (retour du Profil, choix d'un itinéraire) : on la remet à jour
+  // AVANT de cadrer. Sinon Leaflet cadrait avec son ancienne taille et une marge plus grande que la carte : zoom
+  // impossible, fond de carte cassé (noir, seuls les repères restaient) et écran à moitié redessiné (vidéo du 19/10).
+  map.invalidateSize({pan: false});
+  const size = map.getSize(), panelTop = $("panel").getBoundingClientRect().top;
+  if (size.y < 160 || size.x < 160) return;
   const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
-  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, under + 24]});
+  const bottom = Math.max(24, Math.min(under + 24, size.y - 84 - 120));     // il reste toujours 120 px de carte pour le trajet
+  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, bottom], maxZoom: 18});
 }
 // Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
 // le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
@@ -586,7 +592,7 @@ function locateOrigin(quiet = false) {
     }
     S.origin = p; S.originMode = "gps";
     if (S.screen === "route") S.dest ? computeRoute() : showOrigin();
-  }, () => { if (!quiet) toast("Position refusée ou indisponible : touchez « Départ » pour choisir une adresse."); },
+  }, err => { if (quiet) return; if (err?.code === 1) locationHelp(); else toast("Position indisponible : touchez « Départ » pour choisir une adresse."); },
   {enableHighAccuracy: true, timeout: 15000, maximumAge: 20000});
 }
 let searchTimer = null;
@@ -885,10 +891,9 @@ function wrongWay() {
 function onGpsError(err) {
   const n = S.nav;
   if (!n) return;
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  n.gpsDenied = err.code === 1;
   n.gpsProblem = err.code === 1
-    ? `La localisation est refusée. ${ios ? "Réglages → Confidentialité → Service de localisation → Safari (ou Vision AR) → « Lorsque l'app est active »"
-                                         : "Paramètres du navigateur → Autorisations du site → Position → Autoriser"}, puis réessayez.`
+    ? "La localisation est refusée. Touchez ici pour l'autoriser en quelques gestes."
     : "Position introuvable pour l'instant (à l'intérieur, le GPS capte mal). Réessayez à l'extérieur.";
   n.gpsInfo = "";
   renderNavLive();
@@ -1049,7 +1054,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "81";
+const APP_VERSION = "82";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1344,10 +1349,11 @@ const navApi = {
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
     mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
     detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
-    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsStatus: S.nav.gpsStatus,
+    gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsDenied: S.nav.gpsDenied, gpsStatus: S.nav.gpsStatus,
     placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly},
   reroute: () => manualReroute(),
   setOption: (key, value) => { S[key] = value; store.set(OPTION_KEYS[key], value); },
+  locationHelp: () => locationHelp(),
   obstacleAlert: text => { say(text, DANGER); buzz("obstacle"); },
   say: (text, level = INFO) => say(text, level),
   nativeFix: (lat, lon, acc) => onGps({coords: {latitude: lat, longitude: lon, accuracy: acc}}, true),
@@ -1692,6 +1698,39 @@ function startGuidance() {
   map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
 }
 // Confirmation avant de quitter un guidage par un geste (on ne l'arrête jamais par mégarde)
+// Localisation refusée : une page web n'a PAS le droit d'ouvrir les Réglages de l'iPhone (Apple le bloque hors
+// des applis natives). On affiche donc le chemin exact, adapté au téléphone et à la façon dont l'appli est ouverte,
+// puis « Réessayer » redemande la position.
+function locationHelp() {
+  if (document.querySelector(".confirm")) return;
+  const ua = navigator.userAgent, ios = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const home = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches, android = /android/i.test(ua);
+  const iosSettings = ["Ouvrez l'appli <b>Réglages</b> de l'iPhone", "<b>Confidentialité et sécurité</b> → <b>Service de localisation</b> : activé",
+    "Descendez jusqu'à <b>Sites web Safari</b>", "Choisissez <b>Lorsque l'app est active</b> et activez <b>Position exacte</b>"];
+  const steps = ios && !home ? ["Dans Safari, touchez <b>aA</b> (ou l'icône à gauche de l'adresse)", "<b>Réglages du site web</b> → <b>Position</b> → <b>Autoriser</b>",
+      "Si « Position » n'apparaît pas : faites les réglages ci-dessous"] .concat(iosSettings)
+    : ios ? iosSettings
+    : android ? ["Touchez le <b>cadenas</b> (ou ⓘ) à gauche de l'adresse, en haut", "<b>Autorisations</b> → <b>Position</b> → <b>Autoriser</b>",
+      "Vérifiez aussi : Paramètres du téléphone → <b>Localisation</b> activée"]
+    : ["Ouvrez les <b>réglages du site</b> (icône à gauche de l'adresse)", "<b>Position</b> → <b>Autoriser</b>"];
+  const el = document.createElement("div");
+  el.className = "confirm";
+  el.innerHTML = `<div class="confirm-box loc-help" role="alertdialog" aria-modal="true" aria-labelledby="lh">
+    <h3 id="lh">${icon("map-pin")} Autoriser la localisation</h3>
+    <p class="fine">Vision AR a besoin de votre position pour vous guider. Elle reste sur votre téléphone.</p>
+    <ol>${steps.map(t => `<li>${t}</li>`).join("")}</ol>
+    <div class="actions"><button class="btn soft" data-c="close">Fermer</button><button class="btn dark" data-c="retry">${icon("locate-fixed")} Réessayer</button></div></div>`;
+  el.onclick = e => {
+    const c = e.target.closest("[data-c]")?.dataset.c;
+    if (!c && e.target !== el) return;
+    el.remove();
+    if (c !== "retry") return;
+    if (S.nav) { S.nav.gpsDenied = false; S.nav.gpsProblem = null; startGps(); renderNavLive(); }
+    else locateOrigin();
+  };
+  document.body.append(el);
+  el.querySelector("[data-c=retry]").focus();
+}
 function confirmQuit() {
   if (document.querySelector(".confirm")) return;          // une seule confirmation à la fois
   const el = document.createElement("div");
@@ -1875,7 +1914,7 @@ function hideLoader() {
 function appIntro() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const easing = "cubic-bezier(.22, 1, .36, 1)", panel = $("panel");
-  if (getComputedStyle($("map")).display !== "none")
+  if (getComputedStyle($("map")).visibility !== "hidden")
     $("map").animate([{opacity: 0.2, transform: "scale(1.08)"}, {opacity: 1, transform: "scale(1)"}], {duration: 1100, easing});
   const sheetY = parseFloat(panel.style.getPropertyValue("--sheet-y")) || 0;
   panel.animate([{transform: "translateY(100%)"}, {transform: `translateY(${sheetY}px)`}], {duration: 750, easing});

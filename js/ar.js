@@ -850,6 +850,7 @@ function renderUi(s, heading, compass) {
   const haz = s.nav.hazard && Date.now() - s.nav.hazard.at < 6000 ? s.nav.hazard : null;   // alerte de proximité : 6 s à l'écran
   const banner = haz ? `<div class="banner danger" role="alert">${icon(haz.ic)}<span><b>${esc(haz.label)}</b> à ${haz.dist} m, ${esc(haz.where)}</span></div>`
     : rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
+    : s.gpsProblem && s.gpsDenied ? `<button class="banner warn banner-btn" data-act="gps-help">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span>${icon("chevron-right")}</button>`
     : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
     : s.gpsInfo ? `<div class="banner ${s.nav.offRoute ? "warn" : "info"}">${icon(s.nav.offRoute ? "route" : "locate-fixed")}<span>${esc(s.gpsInfo)}</span></div>` : "";
   const alt = s.alt;
@@ -1014,6 +1015,7 @@ function onAction(e) {
   else if (act === "report") { sheet = "report"; sheetMessage = null; }
   else if (act === "close-sheet") sheet = null;
   else if (act === "map") setMapFull(!mapFull);
+  else if (act === "gps-help") { api.locationHelp?.(); return; }
   else if (act === "hud") { sheet = null; api.openHud(); }
   else if (act === "voice") api.toggleVoice();
   else if (act === "reroute") { sheet = null; api.reroute(); }
