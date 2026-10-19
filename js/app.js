@@ -1049,7 +1049,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "79";
+const APP_VERSION = "80";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {

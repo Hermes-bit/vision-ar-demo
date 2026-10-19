@@ -339,11 +339,11 @@ body .leaflet-control-attribution { display: none; }
 .map-credits .leaflet-attribution-flag { display: none !important; }   /* petit drapeau de Leaflet : inutile ici */
 body.full .map-credits { display: none; }
 /* le bas du panneau laisse la place à la bande */
-body:not(.full) #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom) + 24px); }
+body:not(.full) #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom) + 24px + var(--vp-gap)); }
 body.sheet::after { display: none; }
 @media (orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px) {
   .map-credits { left: var(--side); border-top: 0; border-radius: 8px 0 0 0; background: color-mix(in srgb, var(--bg) 85%, transparent); }
-  body:not(.full) #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom)); }
+  body:not(.full) #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom) + var(--vp-gap)); }
 }
 /* carte du dôme (guidage) : la mention reste en bas, dans la partie visible */
 #ar .leaflet-top.leaflet-right { top: auto; bottom: 0; }
@@ -781,6 +781,15 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
 :root { --vp-gap: 0px; }
 #panel, body.sheet::after, .map-credits, #hud, #ar, .confirm, #loader, .stk-pop { bottom: calc(-1 * var(--vp-gap)); }
 body.sheet #map, body.nav #map { height: calc(100vh + var(--vp-gap)); height: calc(100dvh + var(--vp-gap)); }
+/* Le fond va jusqu'au bord, mais les COMMANDES restent au-dessus de cette rallonge : selon la version d'iOS, la
+   bande prolongée n'est pas toujours affichée, et la barre du guidage était coupée à moitié (retour du 19/10). */
+#ar .dock { bottom: calc(6px + var(--safe-bottom) * .5 + var(--vp-gap)); }
+#ar .sheet { bottom: calc(8px + var(--safe-bottom) + var(--vp-gap)); }
+#ar .rose { bottom: calc(88px + var(--safe-bottom) + var(--vp-gap)); }
+#ar .leaflet-bottom { margin-bottom: calc(70px + var(--safe-bottom) * .5 + var(--vp-gap)); }
+#ar .dome, #ar .dome-ui { height: calc(min(36vh, 330px) + var(--safe-bottom) + var(--vp-gap)); }
+.map-credits { padding-bottom: var(--vp-gap); }
+body.full #panel { padding-bottom: calc(var(--gutter) + var(--safe-bottom) + var(--vp-gap)); }
 
 /* ---- Plus de transparence quand le plan est derrière le panneau (recherche, itinéraires, guidage) ---------- */
 body.sheet #panel, body.nav #panel { -webkit-backdrop-filter: blur(14px) saturate(1.6); backdrop-filter: blur(14px) saturate(1.6); }
