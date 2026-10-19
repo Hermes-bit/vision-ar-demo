@@ -1050,7 +1050,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "70";
+const APP_VERSION = "71";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1437,6 +1437,17 @@ function markEntering(root, before) {
   }
   return now;
 }
+// Changement d'écran : Paramètres, Profil et Zones arrivent en glissant depuis la droite (comme une page qu'on
+// ouvre) ; au retour vers la carte, le panneau réapparaît en fondu. Rien si le téléphone réduit les animations.
+const PAGE_SCREENS = ["settings", "profile", "zones"];
+function pageTransition(panel, prev) {
+  if (!prev || prev === S.screen || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
+  if (PAGE_SCREENS.includes(S.screen))
+    panel.animate([{transform: "translateX(36%)", opacity: 0}, {transform: "translateX(0)", opacity: 1}], {duration: 380, easing});
+  else if (PAGE_SCREENS.includes(prev) && S.screen === "route")
+    panel.animate([{opacity: 0}, {opacity: 1}], {duration: 260, easing: "ease-out"});   // (transform : réservé au panneau du bas)
+}
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
@@ -1444,10 +1455,11 @@ function render() {
   // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
   // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
   const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
-  const panel = $("panel"), scroll = lastScreen === S.screen ? panel.scrollTop : 0;
+  const panel = $("panel"), scroll = lastScreen === S.screen ? panel.scrollTop : 0, prevScreen = lastScreen;
   panel.innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
   shownKeys = markEntering(panel, lastScreen === S.screen ? shownKeys : new Set());
   panel.scrollTop = scroll; lastScreen = S.screen;
+  pageTransition(panel, prevScreen);
   for (const img of $("panel").querySelectorAll("img.stk")) {
     const old = keepStk.get(img.className + img.getAttribute("src"));
     if (old) { img.replaceWith(old); keepStk.delete(img.className + img.getAttribute("src")); }
