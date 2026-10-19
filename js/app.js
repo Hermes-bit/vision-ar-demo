@@ -1049,7 +1049,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "68";
+const APP_VERSION = "79";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1254,7 +1254,7 @@ function favoritesHtml() {
   const list = favorites();
   return `<section class="favs" aria-labelledby="favsTitle"><h3 id="favsTitle">${icon("star")} Mes trajets favoris</h3>
     ${list.length ? `<div class="places">${list.map(f => `<div class="fav-row">
-        <button class="place" data-fav="${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
+        <button class="place" data-fav="${f.id}" data-key="fav-${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
           <span class="place-ic">${icon("route")}</span><span class="grow">${esc(f.dest.label)}<small>depuis ${esc(f.origin.label)}</small></span>
           ${icon("chevron-right")}</button>
         <button class="fav-del" data-unfav="${f.id}" aria-label="Retirer ${esc(f.dest.label)} des favoris">${icon("trash-2")}</button></div>`).join("")}</div>`
@@ -1274,14 +1274,16 @@ function pickPlace(i) {
 function placesHtml() {
   const list = placeList();
   if (!list.length && S.searchFor === "dest" && !S.dest && !S.query.trim()) return favoritesHtml();
-  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}">
+  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}" data-key="place-${esc(p.label)}-${esc(p.sub || "")}">
       <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
       ${icon("chevron-right")}</button>`).join("")}</div>` : "";
 }
 function renderPlaces() {
   const box = $("placesBox");
   if (!box) return;
+  const before = new Set([...box.querySelectorAll("[data-key]")].map(el => el.dataset.key));
   box.innerHTML = placesHtml();
+  for (const k of markEntering(box, before)) shownKeys.add(k);
   bindPlaces(box);
   layoutSheet();
 }
@@ -1292,7 +1294,7 @@ function indoorButton() {
 }
 function arrivalCard(f) {
   if (!f.lines.length) return `<p class="fine arrive-none">${icon("door-open")} Pas encore d'information sur l'accès à ce lieu.</p>`;
-  return `<section class="arrive-card" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
+  return `<section class="arrive-card" data-key="arrive-${esc(f.name)}" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
       <button class="btn soft small" id="arrSpeak">${icon("volume-2")} Écouter</button></div>
     <ul>${f.lines.map(l => `<li class="${l.tone}">${icon(l.ic)}<span>${esc(l.text)}</span></li>`).join("")}</ul>
     <p class="fine">Sources : ${esc(f.sources.join(", "))}.</p></section>`;
@@ -1325,7 +1327,7 @@ function routeCard(r, i) {
       .concat(incomplete ? [`<span class="tag warn">${icon("info")} données à confirmer</span>`] : [])
     : r.blocking_issues.map(w => `<span class="tag danger">${icon("triangle-alert")} ${esc(w)}</span>`);
   const stk = i === 0 && r.accessible ? (!r.steps_count ? "zero-marche" : r.max_slope_pct <= 5 ? "pente-douce" : "") : "";
-  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" role="button" tabindex="0"
+  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" data-key="route-${esc(S.dest?.label || "")}-${esc(r.label)}" role="button" tabindex="0"
       aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}${i === S.selected ? ", sélectionné" : ""}">
     <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge}</div><div class="rc-time"><b>${min}</b> min</div></div>
     <div class="rc-meta">
@@ -1420,6 +1422,31 @@ function renderHud() {
   h.innerHTML = body + `<div class="close">Vue lunettes (le noir est transparent) · toucher : fermer · appui long : contraste</div>`;
 }
 
+// ---- render() et animations ------------------------------------------------------------------------
+// #map et #panel sont créés une fois (index.html) : render() ne remplace que le CONTENU de #panel. Pour que
+// ce remplacement ne rejoue pas les animations : un élément animé à l'entrée porte une clé stable (data-key) et
+// ne reçoit la classe « enter » que si cette clé n'était pas à l'écran au render précédent. Le défilement de
+// #panel est conservé tant qu'on reste sur le même écran ; la position du panneau (--sheet-y, sur #panel) aussi.
+let shownKeys = new Set(), lastScreen = null;
+function markEntering(root, before) {
+  const now = new Set();
+  for (const el of root.querySelectorAll("[data-key]")) {
+    now.add(el.dataset.key);
+    if (!before.has(el.dataset.key)) el.classList.add("enter");
+  }
+  return now;
+}
+// Changement d'écran : Paramètres, Profil et Zones arrivent en glissant depuis la droite (comme une page qu'on
+// ouvre) ; au retour vers la carte, le panneau réapparaît en fondu. Rien si le téléphone réduit les animations.
+const PAGE_SCREENS = ["settings", "profile", "zones"];
+function pageTransition(panel, prev) {
+  if (!prev || prev === S.screen || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
+  if (PAGE_SCREENS.includes(S.screen))
+    panel.animate([{transform: "translateX(36%)", opacity: 0}, {transform: "translateX(0)", opacity: 1}], {duration: 380, easing});
+  else if (PAGE_SCREENS.includes(prev) && S.screen === "route")
+    panel.animate([{opacity: 0}, {opacity: 1}], {duration: 260, easing: "ease-out"});   // (transform : réservé au panneau du bas)
+}
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
@@ -1427,7 +1454,11 @@ function render() {
   // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
   // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
   const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
-  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
+  const panel = $("panel"), scroll = lastScreen === S.screen ? panel.scrollTop : 0, prevScreen = lastScreen;
+  panel.innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
+  shownKeys = markEntering(panel, lastScreen === S.screen ? shownKeys : new Set());
+  panel.scrollTop = scroll; lastScreen = S.screen;
+  pageTransition(panel, prevScreen);
   for (const img of $("panel").querySelectorAll("img.stk")) {
     const old = keepStk.get(img.className + img.getAttribute("src"));
     if (old) { img.replaceWith(old); keepStk.delete(img.className + img.getAttribute("src")); }
@@ -1835,7 +1866,24 @@ const loaderStart = performance.now();
 function hideLoader() {
   const l = $("loader");
   if (!l) return;
-  setTimeout(() => { l.classList.add("done"); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
+  setTimeout(() => { l.classList.add("done"); appIntro(); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
+}
+// Ouverture de l'appli, pendant que l'écran de chargement s'efface : la carte se pose (léger zoom arrière), le
+// panneau monte du bas jusqu'à sa place, puis son contenu apparaît élément par élément. Rien si le téléphone
+// demande de réduire les animations. (Le panneau garde sa position habituelle : l'animation part de sous
+// l'écran et revient exactement à son décalage --sheet-y.)
+function appIntro() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const easing = "cubic-bezier(.22, 1, .36, 1)", panel = $("panel");
+  if (getComputedStyle($("map")).display !== "none")
+    $("map").animate([{opacity: 0.2, transform: "scale(1.08)"}, {opacity: 1, transform: "scale(1)"}], {duration: 1100, easing});
+  const sheetY = parseFloat(panel.style.getPropertyValue("--sheet-y")) || 0;
+  panel.animate([{transform: "translateY(100%)"}, {transform: `translateY(${sheetY}px)`}], {duration: 750, easing});
+  [...panel.children].slice(0, 8).forEach((el, i) => el.animate(
+    [{opacity: 0, transform: "translateY(16px)"}, {opacity: 1, transform: "none"}],
+    {duration: 520, delay: 220 + i * 80, easing, fill: "backwards"}));
+  for (const b of [$("mapSettings"), $("mapClose")]) b?.animate([{opacity: 0, transform: "scale(.6)"}, {opacity: 1, transform: "none"}],
+    {duration: 450, delay: 500, easing, fill: "backwards"});
 }
 fetch(ZONE.data).then(r => r.json()).then(data => {
   net = loadNetwork(data);
