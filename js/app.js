@@ -1050,7 +1050,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "72";
+const APP_VERSION = "73";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1163,8 +1163,8 @@ function screenRoute() {
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
     ${S.dest ? "" : sticker("on-y-va", "stk-sheet")}
-    <button class="handle" id="sheetHandle" aria-expanded="${S.sheet !== "collapsed"}"
-      aria-label="${S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
+    ${SHEET_DRAG ? `<button class="handle" id="sheetHandle" aria-expanded="${S.sheet !== "collapsed"}"
+      aria-label="${S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>` : ""}
     <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
       <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
   </div>
@@ -1451,7 +1451,7 @@ function pageTransition(panel, prev) {
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
-  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : "sheet";
+  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : SHEET_DRAG ? "sheet sheet-drag" : "sheet";
   // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
   // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
   const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
@@ -1505,7 +1505,10 @@ function render() {
 // Un voile assombrit la carte (opacité 0 à 0,25) quand le panneau monte. Un nouveau geste reprend depuis la
 // position réelle, même en pleine animation. L'arrêt courant est S.sheet et suit le cycle render normal.
 const sideLayout = () => matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
-const sheetActive = () => S.screen === "route" && !sideLayout();
+// Demande de l'usager : le panneau ne se plie plus (ni geste, ni poignée). Il reste à sa place et son contenu
+// défile normalement. Le code des 3 points d'arrêt est gardé : SHEET_DRAG = true le réactive.
+const SHEET_DRAG = false;
+const sheetActive = () => SHEET_DRAG && S.screen === "route" && !sideLayout();
 let sheetY = null, sheetAnim = null, sheetRaf = 0, drag = null, pull = null;
 function sheetStops() {
   const p = $("panel"), H = p.offsetHeight, head = p.querySelector(".sheet-head");
@@ -1569,7 +1572,8 @@ function layoutSheet() {
     stopSheetAnim();
     p.style.transform = p.style.overflowY = p.style.touchAction = "";
     p.classList.remove("collapsed");
-    document.documentElement.style.setProperty("--sheet-h", "0px");
+    // panneau fixe : les commandes de la carte restent au-dessus de lui
+    document.documentElement.style.setProperty("--sheet-h", S.screen === "route" && !sideLayout() ? `${p.offsetHeight}px` : "0px");
     if ($("sheetScrim")) $("sheetScrim").style.opacity = "0";
     sheetY = null;
     return;
@@ -1969,7 +1973,8 @@ function appIntro() {
     sheetY = panel.offsetHeight;                           // part de sous l'écran…
     paintSheet(sheetY);
     snapTo(S.sheet, 0, 750);                               // …et monte jusqu'à son point d'arrêt
-  } else panel.animate([{opacity: 0, transform: "translateY(40px)"}, {opacity: 1, transform: "none"}], {duration: 650, easing});
+  } else panel.animate([{opacity: S.screen === "route" ? 1 : 0, transform: S.screen === "route" ? "translateY(100%)" : "translateY(40px)"},
+                        {opacity: 1, transform: "none"}], {duration: S.screen === "route" ? 750 : 650, easing});
   [...panel.children].slice(0, 8).forEach((el, i) => el.animate(
     [{opacity: 0, transform: "translateY(16px)"}, {opacity: 1, transform: "none"}],
     {duration: 520, delay: 220 + i * 80, easing, fill: "backwards"}));

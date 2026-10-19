@@ -95,8 +95,9 @@ body.full #map { display: none; }
    le panneau prend la hauteur de son contenu et se réduit d'un glissement (voir layoutSheet) */
 body.sheet #map { height: 100vh; height: 100dvh; }
 /* 3 points d'arrêt : le panneau a toujours la hauteur « plein » ; JS le décale (transform), jamais height ni top */
-body.sheet #panel { top: auto; height: calc(100vh - 96px - var(--safe-top)); height: calc(100dvh - 96px - var(--safe-top));
-  overflow-y: hidden; will-change: transform; }
+body.sheet #panel { top: auto; min-height: 50vh; min-height: 50dvh; max-height: calc(100vh - 96px - var(--safe-top)); max-height: calc(100dvh - 96px - var(--safe-top)); }
+/* (panneau à 3 points d'arrêt, si SHEET_DRAG est réactivé dans app.js : hauteur « plein » fixe, déplacé par transform) */
+body.sheet.sheet-drag #panel { height: calc(100vh - 96px - var(--safe-top)); height: calc(100dvh - 96px - var(--safe-top)); overflow-y: hidden; will-change: transform; }
 /* Voile sur la carte : 0 (panneau réduit) à 0,25 (plein), suit le panneau */
 .sheet-scrim { position: fixed; inset: 0; z-index: 499; background: #0F2537; opacity: 0; pointer-events: none; transition: opacity .3s var(--ease-sheet); }
 body:not(.sheet) .sheet-scrim { display: none; }
