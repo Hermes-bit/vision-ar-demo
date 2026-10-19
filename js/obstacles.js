@@ -1,40 +1,31 @@
-// Détection d'obstacles par la caméra (expérimental) et collecte d'images pour entraîner un modèle dédié.
+// Détection d'obstacles par la caméra et collecte d'images pour améliorer le modèle.
 //
-// Modèle dédié (prioritaire) : YOLO entraîné sur 10 classes d'obstacles de trottoir (potelet, poteau, barrière,
-// mobilier, deux-roues, voiture sur le trottoir, travaux, dénivelé, obstacle en hauteur, piéton immobile),
-// exporté pour le web dans models/obstacles/ (model.json + labels.json : voir ml/ et
-// docs/entrainement-obstacles.md). S'il n'est pas là, on se rabat sur le modèle généraliste ci-dessous.
+// Modèle : models/detecteur_obstacles.onnx — YOLO11n entraîné par Geomessen sur les obstacles du trottoir,
+// exporté par Ultralytics (entrée 640 × 640, sortie [1, 4 + classes, 8400], sans NMS). Exécuté sur le
+// téléphone par onnxruntime-web : WebGPU si le navigateur l'a (Safari iOS 26, Chrome Android récents), sinon
+// WebAssembly. Rien n'est envoyé sur Internet.
 //
-// Modèle de secours : COCO-SSD (TensorFlow.js, entraîné sur 80 objets du quotidien), chargé seulement si
-// l'usager active la détection. Il reconnaît une partie des obstacles du trottoir : vélos et deux-roues,
-// voitures et camions, bancs, bornes à incendie, horodateurs, panneaux, bacs à plantes, chaises et tables
-// de terrasse, valises. Il NE connaît PAS les potelets, poubelles, barrières de travaux, trous, marches :
-// c'est le rôle du modèle dédié, entraîné avec les images collectées ici (voir docs/entrainement-obstacles.md).
+// Remplacer le modèle par une v2 : déposer le nouveau fichier sous le même nom. Le nombre de classes est lu sur
+// la sortie du modèle et leurs noms dans les métadonnées du fichier (js/yolo.js) : aucun code à changer
+// (ajouter seulement le nom parlé des nouvelles classes dans OBSTACLE_LABELS, js/corridor.js).
 //
-// Distance et côté : le bas de la boîte détectée touche le sol ; avec la hauteur du téléphone, son
-// inclinaison et la focale de la caméra, on en déduit la distance et le décalage gauche / droite.
+// Calculs (mise au carré, décodage, NMS) : js/yolo.js. Couloir, distance et annonces : js/corridor.js.
 
-import {OBSTACLE_LABELS} from "./corridor.js";
+import {spokenName} from "./corridor.js";
+import {decodeYolo, letterbox, namesFromOnnx, toNCHW} from "./yolo.js";
 
-export let MODEL_VERSION = "coco-ssd-lite-mobilenet-v2@2.2.3";
-const YOLO_DIR = "models/obstacles/";
-const TFJS = "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js";
-const COCO = "https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js";
+const MODEL_URL = "models/detecteur_obstacles.onnx";
+const ORT_DIR = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+const INPUT = 640;
+// Noms si le fichier n'en contient pas (ordre du modèle v1)
+const DEFAULT_NAMES = ["barriere", "deux_roues", "mobilier", "pieton_immobile", "poteau", "potelet", "travaux", "voiture_trottoir"];
 
-// Classes COCO utiles sur un trottoir -> nom en français, et si elles déclenchent une alerte
-export const CLASSES = {
-  // véhicules : jamais d'alerte (on ne sait pas s'ils sont garés sur la chaussée ou sur le trottoir)
-  bicycle: ["Vélo", true], motorcycle: ["Deux-roues", true], car: ["Voiture", false], truck: ["Camion", false],
-  bench: ["Banc", true], "fire hydrant": ["Borne", true], "parking meter": ["Horodateur", true], "stop sign": ["Panneau", true],
-  "potted plant": ["Bac à plantes", true], chair: ["Chaise de terrasse", true], "dining table": ["Table de terrasse", true],
-  suitcase: ["Valise", true], person: ["Personne", false], dog: ["Chien", false], bus: ["Bus", false], "traffic light": ["Feu", false],
-};
-// Catégories à annoter pour le modèle dédié (le modèle actuel n'en connaît qu'une partie)
-// (les 10 classes du modèle dédié, dans le même ordre que ml/obstacles.yaml)
-export const TARGET_CATEGORIES = ["potelet", "poteau", "barriere", "mobilier", "deux_roues", "voiture_trottoir", "travaux",
-  "denivele", "obstacle_haut", "pieton_immobile"];
+export let MODEL_VERSION = "detecteur_obstacles.onnx";
+export let TARGET_CATEGORIES = DEFAULT_NAMES;           // catégories de l'export d'images (= classes du modèle)
+export let BACKEND = "";                                  // « webgpu » ou « wasm », pour le mode test
 
-let model = null, loading = null, yolo = null;   // yolo : {graph, names, imgsz}
+let session = null, loading = null, names = DEFAULT_NAMES, canvas = null, ctx2d = null, input = null;
+let modelBytes = null, slowRuns = 0, switching = false;
 function loadScript(src) {
   return new Promise((ok, ko) => {
     if (document.querySelector(`script[src="${src}"]`)) return ok();
@@ -44,78 +35,79 @@ function loadScript(src) {
     document.head.append(s);
   });
 }
-/** Charge TensorFlow.js et le modèle : le modèle dédié s'il est publié, sinon COCO-SSD (≈ 6 Mo, une seule fois). */
+/** Charge onnxruntime-web et le modèle (≈ 11 Mo, une seule fois ; gardé ensuite pour le hors-ligne). */
 export function loadModel() {
-  if (model) return Promise.resolve(model);
+  if (session) return Promise.resolve(session);
   loading ||= (async () => {
-    await loadScript(TFJS);
-    const meta = await fetch(YOLO_DIR + "labels.json").then(r => r.ok ? r.json() : null).catch(() => null);
-    if (meta?.names?.length) {
+    const gpu = !!navigator.gpu;
+    await loadScript(ORT_DIR + (gpu ? "ort.webgpu.min.js" : "ort.min.js"));
+    const ort = window.ort;
+    ort.env.wasm.wasmPaths = ORT_DIR;
+    ort.env.wasm.numThreads = globalThis.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+    const bytes = new Uint8Array(await fetch(MODEL_URL).then(r => { if (!r.ok) throw new Error(`modèle introuvable (${r.status})`); return r.arrayBuffer(); }));
+    modelBytes = bytes;
+    const read = namesFromOnnx(bytes);
+    if (read.length) names = read;
+    for (const providers of gpu ? [["webgpu"], ["wasm"]] : [["wasm"]]) {
       try {
-        yolo = {graph: await window.tf.loadGraphModel(YOLO_DIR + "model.json"), names: meta.names, imgsz: meta.imgsz || 320};
-        MODEL_VERSION = meta.version || "yolo-obstacles";
-        model = yolo.graph;
-        return model;
-      } catch (e) { console.warn("Modèle dédié illisible, retour au modèle généraliste", e); yolo = null; }
+        session = await ort.InferenceSession.create(bytes, {executionProviders: providers, graphOptimizationLevel: "all"});
+        BACKEND = providers[0];
+        break;
+      } catch (e) { console.warn(`Détecteur : ${providers[0]} indisponible`, e); }
     }
-    await loadScript(COCO);
-    model = await window.cocoSsd.load({base: "lite_mobilenet_v2"});
-    return model;
+    if (!session) throw new Error("aucun moteur d'exécution disponible");
+    // analyse « à vide » : la première exécution prépare les calculs (plusieurs secondes en WebGPU) ;
+    // faite ici, pendant « Chargement du détecteur », la première vraie image est analysée sans attente
+    try {
+      const warm = await session.run({[session.inputNames[0]]: new ort.Tensor("float32", new Float32Array(3 * INPUT * INPUT), [1, 3, INPUT, INPUT])});
+      Object.values(warm).forEach(t => t.dispose?.());
+    } catch (e) { console.warn("Détecteur : préchauffage impossible", e); }
+    TARGET_CATEGORIES = names;
+    MODEL_VERSION = `detecteur_obstacles.onnx (${names.length} classes, ${BACKEND})`;
+    return session;
   })().catch(e => { loading = null; throw e; });
   return loading;
 }
-export const modelReady = () => !!model;
-
-/** Détections sur l'image vidéo : [{cls, label, alert, score, box: [x, y, w, h] en pixels vidéo}]. */
-export async function detect(video, minScore = 0.2) {
-  if (!model || !video.videoWidth) return [];
-  if (yolo) return detectYolo(video, minScore);
-  const raw = await model.detect(video, 20, minScore);
-  return raw.map(d => ({cls: d.class, label: OBSTACLE_LABELS[d.class] || CLASSES[d.class]?.[0] || d.class, alert: !!CLASSES[d.class]?.[1], score: d.score, box: d.bbox}));
-}
-// Modèle dédié (export Ultralytics « tfjs », sans NMS intégré) : image mise au carré (bandes grises comme à
-// l'entraînement), sortie [1, 4 + classes, N] -> boîtes, puis suppression des doublons (NMS, IoU 0,45).
-async function detectYolo(video, minScore) {
-  const tf = window.tf, S = yolo.imgsz, vw = video.videoWidth, vh = video.videoHeight, k = S / Math.max(vw, vh);
-  const nw = Math.round(vw * k), nh = Math.round(vh * k), px = Math.floor((S - nw) / 2), py = Math.floor((S - nh) / 2);
-  const [boxes, scores, classes] = tf.tidy(() => {
-    const img = tf.image.resizeBilinear(tf.browser.fromPixels(video), [nh, nw]).div(255);
-    const input = img.pad([[py, S - nh - py], [px, S - nw - px], [0, 0]], 114 / 255).expandDims(0);
-    let out = yolo.graph.execute(input);
-    if (Array.isArray(out)) out = out[0];
-    const t = out.squeeze([0]).transpose();               // [N, 4 + classes]
-    const xywh = t.slice([0, 0], [-1, 4]), cls = t.slice([0, 4], [-1, -1]);
-    const [cx, cy, w, h] = tf.split(xywh, 4, 1);
-    const yx = tf.concat([cy.sub(h.div(2)), cx.sub(w.div(2)), cy.add(h.div(2)), cx.add(w.div(2))], 1);
-    return [yx, cls.max(1), cls.argMax(1)];
-  });
-  const keep = await tf.image.nonMaxSuppressionAsync(boxes, scores, 20, 0.45, minScore);
-  const [b, sc, c, idx] = await Promise.all([boxes.array(), scores.array(), classes.array(), keep.array()]);
-  tf.dispose([boxes, scores, classes, keep]);
-  return idx.map(i => {
-    const [y1, x1, y2, x2] = b[i], cls = yolo.names[c[i]] || String(c[i]);
-    const x = (x1 - px) / k, y = (y1 - py) / k;
-    return {cls, label: OBSTACLE_LABELS[cls] || cls, alert: cls in OBSTACLE_LABELS, score: sc[i], box: [x, y, (x2 - x1) / k, (y2 - y1) / k]};
-  });
+export const modelReady = () => !!session;
+// Garde-fou : si WebGPU est plus lent que prévu (pilote graphique, téléphone chargé), au-delà de 1,5 s par
+// image trois fois de suite, on repasse en WebAssembly, plus prévisible.
+function watchdog(ms) {
+  if (BACKEND !== "webgpu" || switching) return;
+  slowRuns = ms > 1500 ? slowRuns + 1 : 0;
+  if (slowRuns < 3) return;
+  switching = true;
+  window.ort.InferenceSession.create(modelBytes, {executionProviders: ["wasm"], graphOptimizationLevel: "all"})
+    .then(s => { const old = session; session = s; BACKEND = "wasm"; MODEL_VERSION = MODEL_VERSION.replace("webgpu", "wasm"); old.release?.(); })
+    .catch(e => console.warn("Détecteur : passage en WebAssembly impossible", e))
+    .finally(() => { switching = false; slowRuns = 0; });
 }
 
 /**
- * Position au sol d'une détection : distance (m) et décalage latéral (m, négatif = à gauche).
- * `view` : {vw, vh, W, H, focal (px écran), pitchDeg, height (m)} ; image vidéo affichée en « cover ».
+ * Détections sur l'image vidéo : [{cls, label, alert, score, box: [x, y, w, h] en pixels vidéo}].
+ * Image mise au carré 640 × 640 (bandes grises comme à l'entraînement), valeurs 0–1, format NCHW ;
+ * sortie décodée, seuil `minScore`, NMS (IoU 0,45), boîtes ramenées à l'échelle de la vidéo.
  */
-export function groundPosition(det, view) {
-  const {vw, vh, W, H, focal, pitchDeg, height} = view;
-  const scale = Math.max(W / vw, H / vh), ox = (W - vw * scale) / 2, oy = (H - vh * scale) / 2;
-  const [x, y, w, h] = det.box;
-  const sx = ox + (x + w / 2) * scale, sy = oy + (y + h) * scale;         // milieu du bas de la boîte, à l'écran
-  const below = pitchDeg * Math.PI / 180 + Math.atan((sy - H / 2) / focal);
-  if (below < 0.03) return null;                                          // au-dessus de l'horizon : pas au sol
-  const dist = height / Math.tan(below);
-  const lateral = dist * (sx - W / 2) / focal;
-  const halfWidth = dist * (w * scale / 2) / focal;                        // demi-largeur de l'objet, au sol (m)
-  return {dist, lateral, halfWidth, screen: [ox + x * scale, oy + y * scale, w * scale, h * scale]};
+export async function detect(video, minScore = 0.5) {
+  if (!session || !video.videoWidth) return [];
+  const vw = video.videoWidth, vh = video.videoHeight, lb = letterbox(vw, vh, INPUT);
+  if (!canvas) {
+    canvas = document.createElement("canvas"); canvas.width = canvas.height = INPUT;
+    ctx2d = canvas.getContext("2d", {willReadFrequently: true});
+  }
+  ctx2d.fillStyle = "rgb(114,114,114)";
+  ctx2d.fillRect(0, 0, INPUT, INPUT);
+  ctx2d.drawImage(video, lb.px, lb.py, lb.nw, lb.nh);
+  input = toNCHW(ctx2d.getImageData(0, 0, INPUT, INPUT).data, INPUT, input || undefined);
+  const ort = window.ort, feeds = {[session.inputNames[0]]: new ort.Tensor("float32", input, [1, 3, INPUT, INPUT])};
+  const t0 = performance.now(), res = await session.run(feeds), out = res[session.outputNames[0]];
+  watchdog(performance.now() - t0);
+  const data = out.data instanceof Float32Array ? out.data : Float32Array.from(await out.getData());
+  out.dispose?.();
+  return decodeYolo(data, out.dims, lb, {minScore, iouMax: 0.45, vw, vh}).map(d => {
+    const cls = names[d.cls] ?? `classe_${d.cls}`;
+    return {cls, label: spokenName(cls), alert: true, score: d.score, box: d.box};
+  });
 }
-export const sideText = lateral => lateral < -0.5 ? "sur votre gauche" : lateral > 0.5 ? "sur votre droite" : "devant vous";
 
 // ---- Collecte pour l'entraînement (N°18) : images floutées, stockées sur ce téléphone ------------------------
 const DB = "va-dataset", STORE = "samples";
@@ -153,8 +145,8 @@ export async function captureSample(video, {kind, note = "", detections = [], me
   };
   for (const d of detections) {
     const [x, y, bw, bh] = d.box.map(v => v * k);
-    if (d.cls === "person") blur(x - 8, y - 8, bw + 16, bh + 16);
-    if (["car", "truck", "bus", "motorcycle"].includes(d.cls)) blur(x, y + bh * 0.55, bw, bh * 0.45);
+    if (d.cls === "pieton_immobile") blur(x - 8, y - 8, bw + 16, bh + 16);
+    if (["voiture_trottoir", "deux_roues"].includes(d.cls)) blur(x, y + bh * 0.55, bw, bh * 0.45);
   }
   const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.82));
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -194,7 +186,7 @@ function zip(files) {                                         // fichiers stock�
 export async function exportZip() {
   const samples = await listSamples();
   const cats = TARGET_CATEGORIES.map((name, i) => ({id: i + 1, name}));
-  // pré-annotations : classes COCO -> classes du modèle dédié (les voitures sont à vérifier : sur le trottoir ou non)
+  // images prises avec l'ancien détecteur (COCO) : classes COCO -> classes du modèle (voitures à vérifier)
   const cocoToTarget = {bicycle: "deux_roues", motorcycle: "deux_roues", car: "voiture_trottoir", truck: "voiture_trottoir",
     bench: "mobilier", "fire hydrant": "potelet", "parking meter": "mobilier", "stop sign": "poteau", "potted plant": "mobilier",
     chair: "mobilier", "dining table": "mobilier", person: "pieton_immobile"};

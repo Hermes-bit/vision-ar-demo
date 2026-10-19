@@ -119,6 +119,18 @@ const speech = makeSpeech({
   },
   cancel() { if (!window.VisionARNative) window.speechSynthesis?.cancel(); },
 });
+// iPhone : Safari ne parle qu'après une première lecture lancée PENDANT un appui de l'usager. Appelé dans
+// le geste « Démarrer le guidage » : une phrase vide et muette débloque la voix pour tout le trajet.
+function unlockVoice() {
+  if (window.VisionARNative || !("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel(); speechSynthesis.resume();
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0; u.lang = "fr-FR";
+    speechSynthesis.speak(u);
+    speechSynthesis.getVoices();                          // charge la liste des voix (française) en avance
+  } catch { /* pas de synthèse vocale : l'écran et les vibrations restent */ }
+}
 function say(text, level = false) {
   if (!S.voice) return;
   speech.say(text, level === true ? CONSIGNE : level === false ? INFO : level);
@@ -1088,10 +1100,10 @@ function screenSettings() {
   </section>
   <section class="card"><h3>${icon("scan-eye")} Obstacles vus par la caméra</h3>
     ${sw("setDetect", "scan-eye", "Détecter les obstacles (expérimental)", S.detect)}
-    <p class="fine">${icon("info")} Télécharge un modèle de 6 Mo à la première utilisation. Reconnaît déjà : vélos, deux-roues, voitures,
-      bancs, bornes, horodateurs, bacs à plantes, tables et chaises de terrasse. Pas encore : potelets, poubelles, travaux, trous, marches
-      (modèle dédié en préparation, grâce aux images collectées ci-dessous).</p>
-    ${sw("setDetectDebug", "square-dashed", "Mode test : encadrer tout ce qui est détecté", S.detectDebug)}
+    <p class="fine">${icon("info")} Détecteur Vision AR (11 Mo, téléchargé une fois puis gardé hors connexion, tout reste sur le téléphone).
+      Reconnaît : potelets, poteaux, barrières, mobilier urbain, vélos et trottinettes, voitures sur le trottoir, travaux, piétons arrêtés.
+      Seuls les obstacles devant vous, sur votre passage, sont annoncés.</p>
+    ${sw("setDetectDebug", "square-dashed", "Mode test : boîtes, scores et couloir de passage (calibrage)", S.detectDebug)}
     ${sw("setConsent", "shield-check", "Contribuer à l'entraînement", S.dataConsent)}
     <p class="fine">${icon("info")} Avec votre accord, le bouton ⚠ du guidage permet d'enregistrer l'image caméra d'un obstacle manqué ou
       d'une fausse alerte, avec la position et l'heure. Visages et plaques sont floutés avant tout enregistrement ; les images restent sur ce
@@ -1629,6 +1641,7 @@ function chooseOrigin(place) {
 }
 function cancelOrigin() { S.searchFor = "dest"; S.oquery = ""; S.places = []; render(); }
 function startGuidance() {
+  unlockVoice();                                          // dans le geste de l'usager (obligatoire sur iPhone)
   hazardAlerted.clear();                                  // nouveau trajet : tous les obstacles seront annoncés
   startNav(S.routes[S.selected]);
   prepareOffline(S.routes[S.selected], true);           // carte du trajet gardée : le guidage tient sans réseau

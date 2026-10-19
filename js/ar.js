@@ -16,8 +16,8 @@
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {captureSample, detect, groundPosition, loadModel, modelReady} from "./obstacles.js";
-import {CORRIDOR, MAX_SHOWN, makeTracker, nextAnnouncement} from "./corridor.js";
+import {BACKEND, captureSample, detect, loadModel, modelReady} from "./obstacles.js";
+import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
@@ -521,19 +521,21 @@ function drawAnchors(cam, s, here) {
   toDraw.reverse().forEach(draw => draw());          // les lointains d'abord, les proches par-dessus
 }
 // ---- Obstacles vus par la caméra -----------------------------------------------------------------------------
-function detView() {
-  const W = canvas.clientWidth, H = canvas.clientHeight;
-  return {vw: video.videoWidth, vh: video.videoHeight, W, H, focal: focalPx(W, H), pitchDeg: lastPitch, height: camHeight};
+// Point de l'image vidéo (coordonnées normalisées 0–1) -> pixels du canevas (vidéo affichée en « cover »)
+function videoToCanvas(nx, ny) {
+  const W = canvas.clientWidth, H = canvas.clientHeight, vw = video.videoWidth, vh = video.videoHeight;
+  const sc = Math.max(W / vw, H / vh), dpr = devicePixelRatio;
+  return [((W - vw * sc) / 2 + nx * vw * sc) * dpr, ((H - vh * sc) / 2 + ny * vh * sc) * dpr];
 }
-// Fréquence d'analyse adaptée à la batterie : 2,5 images par seconde en marchant, 1 en mode économie,
-// 1 toutes les 2 s à l'arrêt (aucun progrès d'1 m depuis 6 s)
+// Fréquence d'analyse : au plus ~3 images par seconde en marchant, 1 en mode économie, 1 toutes les 2 s à
+// l'arrêt (aucun progrès d'1 m depuis 6 s). En arrière-plan : aucune analyse.
 function detectInterval(s) {
   const now = performance.now(), pos = s.nav.pos;
   if (lastMovePos === null || Math.abs(pos - lastMovePos) > 1) { lastMovePos = pos; lastMoveAt = now; }
-  return now - lastMoveAt > 6000 ? 2000 : s.eco ? 1000 : 400;
+  return now - lastMoveAt > 6000 ? 2000 : s.eco ? 1000 : 300;
 }
 function runDetection(s) {
-  if (detBusy || performance.now() - detsAt < detectInterval(s) || !video?.videoWidth) return;
+  if (document.hidden || detBusy || performance.now() - detsAt < detectInterval(s) || !video?.videoWidth) return;
   if (!modelReady()) {
     if (detState !== "loading" && detState !== "error") {
       detState = "loading"; lastUi = "";
@@ -542,37 +544,36 @@ function runDetection(s) {
     return;
   }
   detBusy = true;
-  detect(video, s.detectDebug ? 0.2 : 0.3).then(found => {
+  // seuil 0,3 pour repérer les cas douteux (collecte d'images) ; seuls ceux ≥ 0,5 sont suivis et annoncés
+  detect(video, s.detectDebug ? 0.25 : 0.3).then(found => {
     dets = found; detsAt = performance.now();
-    const view = detView();
-    for (const d of dets) d.ground = groundPosition(d, view);
-    // seuls les objets sûrs (≥ 50 %), d'une classe d'obstacle, posés au sol, alimentent le suivi
+    for (const d of dets) d.ground = corridor2D(d.box, video.videoWidth, video.videoHeight);
+    // seuls les objets sûrs (≥ 50 %) dont le bas est dans le trapèze du couloir alimentent le suivi
     tracker.update(dets.filter(d => d.alert && d.score >= CORRIDOR.minScore && d.ground), detsAt);
     obstacleAlerts(s);
     autoSample(s);
   }).catch(() => {}).finally(() => { detBusy = false; });
 }
 // Alerte (voix + vibration) : obstacle confirmé dans le couloir, une seule fois, le plus proche d'abord,
-// avec le côté pour passer (« Potelet légèrement à droite, 3 mètres, passez à gauche »)
+// avec le côté pour passer (« Potelet à droite, environ 3 mètres, passez à gauche »)
 function obstacleAlerts(s) {
   const a = nextAnnouncement(tracker, performance.now(), annState, {wheelchair: (s.mobility || "").includes("wheelchair")});
   if (a) api.obstacleAlert(a.text);
 }
-// Repères à l'écran : au plus 3 obstacles du couloir, un anneau orange posé au sol et son nom (pas de boîte)
+// Repères à l'écran : au plus 3 obstacles du couloir, un anneau orange au pied de l'objet et son nom (pas de boîte)
 function drawCorridorMarks() {
   if (performance.now() - detsAt > 2500) return;
-  const {W, H, focal, pitchDeg, height} = detView(), dpr = devicePixelRatio;
+  const dpr = devicePixelRatio;
   ctx.save();
   ctx.font = font(700, 14 * dpr); ctx.textAlign = "center"; ctx.textBaseline = "bottom";
   for (const t of tracker.confirmed().slice(0, MAX_SHOWN)) {
-    const below = Math.atan(height / t.dist) - pitchDeg * Math.PI / 180;
-    const x = (W / 2 + t.lateral * focal / t.dist) * dpr, y = (H / 2 + focal * Math.tan(below)) * dpr;
-    if (y < 0 || y > H * dpr) continue;
-    const r = Math.max(10 * dpr, Math.min(60 * dpr, (t.halfWidth + 0.15) * focal / t.dist * dpr));
+    if (!t.g) continue;
+    const [x, y] = videoToCanvas(t.g.nx, t.g.ny);
+    const r = Math.max(14 * dpr, Math.min(70 * dpr, 60 * dpr / t.dist));
     ctx.lineWidth = 4 * dpr; ctx.strokeStyle = "#FF8A00"; ctx.shadowColor = "rgba(255,138,0,.8)"; ctx.shadowBlur = 14 * dpr;
     ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.35, 0, 0, 2 * Math.PI); ctx.stroke();
     ctx.shadowBlur = 0;
-    const text = `${t.label} · ${Math.max(1, Math.round(t.dist))} m`, tw = ctx.measureText(text).width + 14 * dpr;
+    const text = `${t.label} · ≈ ${Math.max(1, Math.round(t.dist))} m`, tw = ctx.measureText(text).width + 14 * dpr;
     ctx.fillStyle = "rgba(15,37,55,.85)"; ctx.fillRect(x - tw / 2, y - r * 0.35 - 30 * dpr, tw, 24 * dpr);
     ctx.fillStyle = "#FFB45C"; ctx.fillText(text, x, y - r * 0.35 - 10 * dpr);
   }
@@ -591,20 +592,34 @@ function sampleMeta(s) {
 }
 // Mode test : toutes les détections encadrées, avec le nom et le score
 function drawDetections() {
-  if (performance.now() - detsAt > 4000) return;              // jusqu'au résultat suivant (téléphone lent : jusqu'à 4 s)
+  if (!video?.videoWidth) return;
   const dpr = devicePixelRatio;
+  // couloir (trapèze) et graduations de distance : pour calibrer DIST_CALIB sur le terrain
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 2 * dpr; ctx.setLineDash([8 * dpr, 6 * dpr]);
+  const T = TRAPEZE, pts = [[0.5 - T.topHalf, T.top], [0.5 + T.topHalf, T.top], [0.5 + T.bottomHalf, 1], [0.5 - T.bottomHalf, 1]].map(([x, y]) => videoToCanvas(x, y));
+  ctx.beginPath(); pts.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]); ctx.font = font(700, 12 * dpr); ctx.fillStyle = "#fff"; ctx.textBaseline = "middle";
+  for (const [y, d] of DIST_CALIB) {
+    const [x0, yy] = videoToCanvas(0.5 - halfAt(y), Math.min(y, 0.995)), [x1] = videoToCanvas(0.5 + halfAt(y), y);
+    ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.globalAlpha = 0.35; ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillText(`${String(d).replace(".", ",")} m`, x1 + 6 * dpr, yy);
+  }
+  ctx.fillText(`détecteur : ${BACKEND || "…"}`, 12 * dpr, videoToCanvas(0, T.top)[1] - 14 * dpr);
+  ctx.restore();
+  if (performance.now() - detsAt > 4000) return;              // jusqu'au résultat suivant (téléphone lent : jusqu'à 4 s)
   ctx.save();
   ctx.lineWidth = 3 * dpr; ctx.font = font(700, 14 * dpr); ctx.textBaseline = "top";
   for (const d of dets) {
-    const g = d.ground ?? groundPosition(d, detView());
-    const view = detView(), sc = Math.max(view.W / view.vw, view.H / view.vh);
-    const raw = g?.screen ?? [(view.W - view.vw * sc) / 2 + d.box[0] * sc, (view.H - view.vh * sc) / 2 + d.box[1] * sc, d.box[2] * sc, d.box[3] * sc];
+    const g = d.ground, W = canvas.clientWidth, H = canvas.clientHeight, vw = video.videoWidth, vh = video.videoHeight;
+    const sc = Math.max(W / vw, H / vh);
+    const raw = [(W - vw * sc) / 2 + d.box[0] * sc, (H - vh * sc) / 2 + d.box[1] * sc, d.box[2] * sc, d.box[3] * sc];
     // boîte ramenée dans la partie visible de l'écran (un objet tout proche dépasse souvent du cadre)
     const top = (root.querySelector(".top")?.getBoundingClientRect().bottom ?? 0) + 4;
-    const x0 = Math.max(2, raw[0]), y0 = Math.max(top, raw[1]), x1 = Math.min(view.W - 2, raw[0] + raw[2]), y1 = Math.min(view.H - 2, raw[1] + raw[3]);
+    const x0 = Math.max(2, raw[0]), y0 = Math.max(top, raw[1]), x1 = Math.min(W - 2, raw[0] + raw[2]), y1 = Math.min(H - 2, raw[1] + raw[3]);
     if (x1 - x0 < 8 || y1 - y0 < 8) continue;
     const [x, y, w, h] = [x0, y0 + 22, x1 - x0, y1 - y0 - 22].map(v => v * dpr);
-    const strong = d.alert && d.score >= 0.5;
+    const strong = d.alert && d.score >= 0.5 && !!g;                 // orange : sûr ET dans le couloir
     ctx.strokeStyle = strong ? "#FF8A00" : "rgba(255,255,255,.85)";
     ctx.strokeRect(x, y, w, h);
     const text = `${d.label} ${Math.round(d.score * 100)} %${g ? ` · ${g.dist.toFixed(1).replace(".", ",")} m` : ""}`;

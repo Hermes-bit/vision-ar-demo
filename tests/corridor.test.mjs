@@ -1,7 +1,7 @@
 // Tests du couloir de marche (js/corridor.js). Lancer : node --test web/tests/
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {announceText, freeSpace, inCorridor, makeTracker, nextAnnouncement, positionText} from "../js/corridor.js";
+import {announceText, corridor2D, distanceFromY, freeSpace, inCorridor, makeTracker, nextAnnouncement, positionText, spokenName} from "../js/corridor.js";
 
 const det = (cls, dist, lateral, halfWidth = 0.1, score = 0.8) => ({cls, label: cls === "potelet" ? "Potelet" : cls, score, ground: {dist, lateral, halfWidth}});
 
@@ -32,10 +32,10 @@ test("une annonce par obstacle, la plus proche d'abord, avec le côté pour pass
   const tr = makeTracker(), st = {};
   for (const t of [0, 350]) tr.update([det("potelet", 3, 0.4), det("barriere", 6, -0.3, 0.3)], t);
   const a = nextAnnouncement(tr, 400, st);
-  assert.equal(a.text, "Potelet légèrement à droite, 3 mètres, passez à gauche.");
+  assert.equal(a.text, "Potelet à droite, environ 3 mètres, passez à gauche.");
   assert.equal(nextAnnouncement(tr, 500, st), null);                          // pas deux annonces en 2,5 s
   const b = nextAnnouncement(tr, 3000, st);
-  assert.match(b.text, /^barriere légèrement à gauche, 6 mètres, passez à droite/);
+  assert.match(b.text, /^barriere à gauche, environ 6 mètres, passez à droite/);
   tr.update([det("potelet", 2.5, 0.4), det("barriere", 5.5, -0.3, 0.3)], 3100);
   assert.equal(nextAnnouncement(tr, 6000, st), null);                         // jamais répétée
 });
@@ -61,7 +61,37 @@ test("place libre réduite par un obstacle voisin", () => {
 });
 
 test("textes de position", () => {
-  assert.equal(positionText(0.1), "droit devant");
-  assert.equal(positionText(-0.4), "légèrement à gauche");
+  assert.equal(positionText(0.1), "devant");
+  assert.equal(positionText(-0.4), "à gauche");
   assert.equal(positionText(1.0), "à droite");
+});
+
+// ---- Couloir 2D (trapèze dans l'image) ----
+const VW = 1280, VH = 720;
+test("bas de la boîte dans la moitié haute : ignoré", () => {
+  assert.equal(corridor2D([600, 100, 80, 200], VW, VH), null);              // bas à y = 300 / 720 = 0,42
+});
+test("objet au centre en bas : dans le couloir, devant, proche", () => {
+  const g = corridor2D([600, 520, 80, 200], VW, VH);                        // bas tout en bas, au centre
+  assert.ok(g);
+  assert.equal(positionText(g.lateral), "devant");
+  assert.ok(g.dist <= 1.01);
+});
+test("objet sur le bord de l'image en bas : hors du trapèze", () => {
+  assert.equal(corridor2D([20, 500, 60, 200], VW, VH), null);               // x = 50 / 1280 : tout à gauche
+});
+test("plus le bas de la boîte est haut dans l'image, plus c'est loin", () => {
+  assert.ok(distanceFromY(0.95) < distanceFromY(0.75));
+  assert.ok(distanceFromY(0.75) < distanceFromY(0.55));
+  assert.equal(distanceFromY(0.7), 3.2);
+});
+test("côté gauche / droite dans le trapèze", () => {
+  const left = corridor2D([380, 520, 60, 100], VW, VH), right = corridor2D([840, 520, 60, 100], VW, VH);
+  assert.equal(positionText(left.lateral), "à gauche");
+  assert.equal(positionText(right.lateral), "à droite");
+});
+test("noms parlés", () => {
+  assert.equal(spokenName("deux_roues"), "Vélo ou trottinette");
+  assert.equal(spokenName("pieton_immobile"), "Piéton arrêté");
+  assert.equal(spokenName("nouvelle_classe"), "Nouvelle classe");          // modèle v2 : classe inconnue
 });
