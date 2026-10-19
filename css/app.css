@@ -487,6 +487,7 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 .alt-tag { display: inline-block; white-space: nowrap; transform: translate(-50%, -50%); padding: 4px 10px; border-radius: 999px; font: 700 13px "Atkinson Hyperlegible", sans-serif;
   color: #fff; background: linear-gradient(135deg, #E8457C, #C2389E); box-shadow: 0 4px 12px rgba(194, 56, 158, .45); }
 .puck { position: relative; width: 90px; height: 90px; }
+.puck.stale { opacity: .45; filter: grayscale(1); }       /* plus de position GPS récente */
 .puck .cone { position: absolute; left: 50%; top: 50%; width: 90px; height: 90px; margin: -45px; border-radius: 50%;
   background: conic-gradient(from -30deg, rgba(47, 128, 237, .45) 0deg, rgba(47, 128, 237, 0) 60deg, transparent 60deg);
   transform: rotate(var(--heading)); }

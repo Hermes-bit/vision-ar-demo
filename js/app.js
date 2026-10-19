@@ -840,7 +840,26 @@ function startGps() {
   n.gpsStatus = "Recherche de votre position…";
   n.gpsProblem = null;
   n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
+  n.gpsStartedAt = Date.now();
 }
+// Le GPS se tait (iPhone : ouverture de la caméra ou d'une demande d'autorisation, retour d'arrière-plan,
+// passage sous un porche…) : sans nouvelle position depuis 15 s, on relance la recherche, toutes les 15 s au plus.
+function restartGps(reason) {
+  const n = S.nav;
+  if (!n || n.watch === null || !navigator.geolocation || n.arrived) return;
+  navigator.geolocation.clearWatch(n.watch);
+  n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 0, timeout: 20000});
+  n.gpsStartedAt = n.gpsRestartAt = Date.now();
+  if (reason) n.gpsInfo = reason;
+  renderNavLive();
+}
+setInterval(() => {
+  const n = S.nav;
+  if (!n || n.watch === null || document.hidden) return;
+  const last = Math.max(n.real?.at || 0, n.gpsStartedAt || 0);
+  if (Date.now() - last > 15000 && Date.now() - (n.gpsRestartAt || 0) > 15000) restartGps("Signal GPS perdu : nouvelle recherche de votre position…");
+  else if (n.real && Date.now() - n.real.at > 15000) renderNavLive();     // icône grisée : position trop ancienne
+}, 5000);
 // Précision du GPS en mots simples (au lieu de « GPS ± 14 m »)
 function accuracyText(acc) {
   const m = Math.max(1, Math.round(acc));
@@ -1050,7 +1069,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "74";
+const APP_VERSION = "75";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1677,8 +1696,14 @@ function renderNavLive() {
   renderHud();
   const n = S.nav;
   if (!n) return;
-  const shown = (n.phase === "approach" || n.away || n.offRoute) && n.real ? n.real : n.here;   // N°15 : pas accroché pendant l'approche
+  // L'icône suit la VRAIE position GPS. Sur l'itinéraire, à quelques mètres du tracé, elle se pose sur le tracé
+  // au point le plus proche (et non sur la progression, qui ne fait qu'avancer : l'icône restait bloquée quand
+  // on s'arrêtait, reculait ou que le GPS hésitait). Sans position récente : grisée, à la dernière place connue.
+  const fresh = n.real && Date.now() - n.real.at < 15000;
+  const onLine = n.phase === "route" && !n.away && !n.offRoute && n.gap <= Math.max(6, Math.min(12, n.real?.acc ?? 0));
+  const shown = !fresh ? (n.real || n.here) : onLine ? posAt(n.gapAlong ?? n.pos) : n.real;
   n.marker?.setLatLng([shown.lat, shown.lon]);
+  n.marker?.getElement()?.querySelector(".puck")?.classList.toggle("stale", !fresh);
   if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); refreshTransit(); announceStops(); }
 }
 // N°16 : le tracé s'allume sur 30 m devant soi ; déjà parcouru = gris ; la suite reste visible, atténuée
@@ -1950,7 +1975,11 @@ $("hud").addEventListener("pointerdown", () => { pressTimer = setTimeout(() => {
 $("hud").addEventListener("pointerup", () => { if (pressTimer) { clearTimeout(pressTimer); S.hud = false; renderHud(); } });
 
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; if (S.screen === "profile") render(); });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.nav) requestWakeLock(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !S.nav) return;
+  requestWakeLock();
+  restartGps();                                           // iPhone : le suivi GPS ne reprend pas toujours seul
+});
 if ("serviceWorker" in navigator) {
   // Une nouvelle version prend la main : on recharge une fois pour l'afficher (sauf pendant un guidage)
   const hadController = !!navigator.serviceWorker.controller;
