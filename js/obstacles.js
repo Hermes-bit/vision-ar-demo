@@ -2,8 +2,8 @@
 //
 // Modèle : models/detecteur_obstacles.onnx — YOLO11n entraîné par Geomessen sur les obstacles du trottoir,
 // exporté par Ultralytics (entrée 640 × 640, sortie [1, 4 + classes, 8400], sans NMS). Exécuté sur le
-// téléphone par onnxruntime-web : WebGPU si le navigateur l'a (Safari iOS 26, Chrome Android récents), sinon
-// WebAssembly. Rien n'est envoyé sur Internet.
+// téléphone par onnxruntime-web (WebAssembly), dans un fil à part (js/detector-worker.js) : il ne peut plus
+// bloquer l'écran. Rien n'est envoyé sur Internet.
 //
 // Remplacer le modèle par une v2 : déposer le nouveau fichier sous le même nom. Le nombre de classes est lu sur
 // la sortie du modèle et leurs noms dans les métadonnées du fichier (js/yolo.js) : aucun code à changer
@@ -15,80 +15,61 @@ import {spokenName} from "./corridor.js";
 import {decodeYolo, letterbox, namesFromOnnx, toNCHW} from "./yolo.js";
 
 const MODEL_URL = "models/detecteur_obstacles.onnx";
-const ORT_DIR = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 const INPUT = 640;
 // Noms si le fichier n'en contient pas (ordre du modèle v1)
 const DEFAULT_NAMES = ["barriere", "deux_roues", "mobilier", "pieton_immobile", "poteau", "potelet", "travaux", "voiture_trottoir"];
 
 export let MODEL_VERSION = "detecteur_obstacles.onnx";
 export let TARGET_CATEGORIES = DEFAULT_NAMES;           // catégories de l'export d'images (= classes du modèle)
-export let BACKEND = "";                                  // « webgpu » ou « wasm », pour le mode test
+export let BACKEND = "";                                  // moteur utilisé, affiché en mode test
 
-let session = null, loading = null, names = DEFAULT_NAMES, canvas = null, ctx2d = null, input = null;
-let modelBytes = null, slowRuns = 0, switching = false;
-function loadScript(src) {
+let worker = null, ready = false, loading = null, names = DEFAULT_NAMES, canvas = null, ctx2d = null;
+let spare = null, seq = 0;
+const pending = new Map();                               // analyses en cours dans le fil du détecteur
+function ask(msg, transfer = []) {
   return new Promise((ok, ko) => {
-    if (document.querySelector(`script[src="${src}"]`)) return ok();
-    const s = document.createElement("script");
-    s.src = src; s.async = true; s.crossOrigin = "anonymous";
-    s.onload = ok; s.onerror = () => ko(new Error(`chargement impossible : ${src}`));
-    document.head.append(s);
+    const id = ++seq;
+    const timer = setTimeout(() => { pending.delete(id); ko(new Error("détecteur trop lent")); }, msg.type === "init" ? 120000 : 15000);
+    pending.set(id, {ok: v => { clearTimeout(timer); ok(v); }, ko: e => { clearTimeout(timer); ko(e); }, type: msg.type});
+    worker.postMessage({...msg, id}, transfer);
   });
 }
-/** Charge onnxruntime-web et le modèle (≈ 11 Mo, une seule fois ; gardé ensuite pour le hors-ligne). */
+/**
+ * Charge le modèle (≈ 11 Mo, une seule fois ; gardé ensuite pour le hors-ligne) dans un fil à part
+ * (js/detector-worker.js) : l'écran reste utilisable pendant le chargement et les analyses.
+ */
 export function loadModel() {
-  if (session) return Promise.resolve(session);
+  if (ready) return Promise.resolve(true);
   loading ||= (async () => {
-    const gpu = !!navigator.gpu;
-    await loadScript(ORT_DIR + (gpu ? "ort.webgpu.min.js" : "ort.min.js"));
-    const ort = window.ort;
-    ort.env.wasm.wasmPaths = ORT_DIR;
-    ort.env.wasm.numThreads = globalThis.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
-    const bytes = new Uint8Array(await fetch(MODEL_URL).then(r => { if (!r.ok) throw new Error(`modèle introuvable (${r.status})`); return r.arrayBuffer(); }));
-    modelBytes = bytes;
-    const read = namesFromOnnx(bytes);
+    const bytes = await fetch(MODEL_URL).then(r => { if (!r.ok) throw new Error(`modèle introuvable (${r.status})`); return r.arrayBuffer(); });
+    const read = namesFromOnnx(new Uint8Array(bytes));
     if (read.length) names = read;
-    for (const providers of gpu ? [["webgpu"], ["wasm"]] : [["wasm"]]) {
-      try {
-        session = await ort.InferenceSession.create(bytes, {executionProviders: providers, graphOptimizationLevel: "all"});
-        BACKEND = providers[0];
-        break;
-      } catch (e) { console.warn(`Détecteur : ${providers[0]} indisponible`, e); }
-    }
-    if (!session) throw new Error("aucun moteur d'exécution disponible");
-    // analyse « à vide » : la première exécution prépare les calculs (plusieurs secondes en WebGPU) ;
-    // faite ici, pendant « Chargement du détecteur », la première vraie image est analysée sans attente
-    try {
-      const warm = await session.run({[session.inputNames[0]]: new ort.Tensor("float32", new Float32Array(3 * INPUT * INPUT), [1, 3, INPUT, INPUT])});
-      Object.values(warm).forEach(t => t.dispose?.());
-    } catch (e) { console.warn("Détecteur : préchauffage impossible", e); }
+    worker = new Worker(new URL("./detector-worker.js", import.meta.url));
+    worker.onmessage = ({data: m}) => {
+      const job = m.type === "ready" ? [...pending.entries()].find(([, j]) => j.type === "init") : [m.id, pending.get(m.id)];
+      if (!job?.[1]) return;
+      pending.delete(job[0]);
+      if (m.type === "error") job[1].ko(new Error(m.message)); else job[1].ok(m);
+    };
+    worker.onerror = e => { for (const j of pending.values()) j.ko(new Error(e.message || "erreur du détecteur")); pending.clear(); };
+    await ask({type: "init", bytes, size: INPUT}, [bytes]);
+    ready = true;
+    BACKEND = "wasm (fil séparé)";
     TARGET_CATEGORIES = names;
     MODEL_VERSION = `detecteur_obstacles.onnx (${names.length} classes, ${BACKEND})`;
-    return session;
-  })().catch(e => { loading = null; throw e; });
+    return true;
+  })().catch(e => { loading = null; worker?.terminate(); worker = null; throw e; });
   return loading;
 }
-export const modelReady = () => !!session;
-// Garde-fou : si WebGPU est plus lent que prévu (pilote graphique, téléphone chargé), au-delà de 1,5 s par
-// image trois fois de suite, on repasse en WebAssembly, plus prévisible.
-function watchdog(ms) {
-  if (BACKEND !== "webgpu" || switching) return;
-  slowRuns = ms > 1500 ? slowRuns + 1 : 0;
-  if (slowRuns < 3) return;
-  switching = true;
-  window.ort.InferenceSession.create(modelBytes, {executionProviders: ["wasm"], graphOptimizationLevel: "all"})
-    .then(s => { const old = session; session = s; BACKEND = "wasm"; MODEL_VERSION = MODEL_VERSION.replace("webgpu", "wasm"); old.release?.(); })
-    .catch(e => console.warn("Détecteur : passage en WebAssembly impossible", e))
-    .finally(() => { switching = false; slowRuns = 0; });
-}
+export const modelReady = () => ready;
 
 /**
  * Détections sur l'image vidéo : [{cls, label, alert, score, box: [x, y, w, h] en pixels vidéo}].
- * Image mise au carré 640 × 640 (bandes grises comme à l'entraînement), valeurs 0–1, format NCHW ;
- * sortie décodée, seuil `minScore`, NMS (IoU 0,45), boîtes ramenées à l'échelle de la vidéo.
+ * Image mise au carré 640 × 640 (bandes grises comme à l'entraînement), valeurs 0–1, format NCHW ; le modèle
+ * tourne dans son fil ; sortie décodée ici : seuil `minScore`, NMS (IoU 0,45), boîtes à l'échelle de la vidéo.
  */
 export async function detect(video, minScore = 0.5) {
-  if (!session || !video.videoWidth) return [];
+  if (!ready || !video.videoWidth) return [];
   const vw = video.videoWidth, vh = video.videoHeight, lb = letterbox(vw, vh, INPUT);
   if (!canvas) {
     canvas = document.createElement("canvas"); canvas.width = canvas.height = INPUT;
@@ -97,13 +78,11 @@ export async function detect(video, minScore = 0.5) {
   ctx2d.fillStyle = "rgb(114,114,114)";
   ctx2d.fillRect(0, 0, INPUT, INPUT);
   ctx2d.drawImage(video, lb.px, lb.py, lb.nw, lb.nh);
-  input = toNCHW(ctx2d.getImageData(0, 0, INPUT, INPUT).data, INPUT, input || undefined);
-  const ort = window.ort, feeds = {[session.inputNames[0]]: new ort.Tensor("float32", input, [1, 3, INPUT, INPUT])};
-  const t0 = performance.now(), res = await session.run(feeds), out = res[session.outputNames[0]];
-  watchdog(performance.now() - t0);
-  const data = out.data instanceof Float32Array ? out.data : Float32Array.from(await out.getData());
-  out.dispose?.();
-  return decodeYolo(data, out.dims, lb, {minScore, iouMax: 0.45, vw, vh}).map(d => {
+  const input = toNCHW(ctx2d.getImageData(0, 0, INPUT, INPUT).data, INPUT, spare || undefined);
+  spare = null;
+  const res = await ask({type: "run", input, size: INPUT}, [input.buffer]);
+  spare = res.input;                                     // le tampon revient : réutilisé à l'image suivante
+  return decodeYolo(res.data, res.dims, lb, {minScore, iouMax: 0.45, vw, vh}).map(d => {
     const cls = names[d.cls] ?? `classe_${d.cls}`;
     return {cls, label: spokenName(cls), alert: true, score: d.score, box: d.box};
   });
