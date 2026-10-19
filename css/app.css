@@ -95,6 +95,10 @@ body.full #map { visibility: hidden; pointer-events: none; }   /* (pas display: 
 body.sheet #map { height: 100vh; height: 100dvh; }
 body.sheet #panel { top: auto; min-height: 50vh; min-height: 50dvh; max-height: calc(100vh - 96px - var(--safe-top)); max-height: calc(100dvh - 96px - var(--safe-top));
   transform: translateY(var(--sheet-y, 0px)); transition: transform .3s cubic-bezier(.2, .8, .2, 1); }
+/* Une longue liste d'itinéraires ne recouvre plus la carte : le panneau s'arrête à 58 % de l'écran et sa liste
+   défile dedans (la carte et le trajet restent visibles au-dessus). Pendant la saisie d'une adresse, il reprend
+   toute la hauteur pour les suggestions. */
+body.sheet:not(.typing) #panel { max-height: min(calc(100vh - 96px - var(--safe-top)), 58vh); max-height: min(calc(100dvh - 96px - var(--safe-top)), 58dvh); }
 body.sheet.dragging #panel { transition: none; }
 /* Panneau abaissé : la poignée et le titre seulement ; le reste s'efface au lieu d'être coupé */
 body.sheet #panel > :not(.sheet-head) { transition: opacity .2s ease; }

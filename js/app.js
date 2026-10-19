@@ -1059,7 +1059,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "83";
+const APP_VERSION = "84";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1461,7 +1461,8 @@ function pageTransition(panel, prev) {
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
-  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : "sheet";
+  const typing = document.body.classList.contains("typing") && document.activeElement?.id === "q";
+  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : typing ? "sheet typing" : "sheet";
   // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
   // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
   const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
@@ -1821,7 +1822,9 @@ function bind() {
   // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
   on("qClear", "onmousedown", e => e.preventDefault());
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
-  on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
+  on("q", "onfocus", () => { document.body.classList.add("typing"); if (sheetCollapsed) setSheet(false); else layoutSheet(); });
+  // (petit délai : un toucher sur une suggestion doit arriver avant que le panneau reprenne sa hauteur normale)
+  on("q", "onblur", () => setTimeout(() => { if (document.activeElement?.id !== "q") { document.body.classList.remove("typing"); layoutSheet(); } }, 300));
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
