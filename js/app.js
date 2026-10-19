@@ -942,7 +942,7 @@ function onGps(pos, precise = false) {
     Object.assign(n, {approachDist: dStart, gap: dStart, gapAlong: 0, away: true, offRoute: false});
     if (!n.said.has("approach")) {
       n.said.add("approach");
-      say(`Rejoignez l'itinéraire, à ${Math.round(dStart)} mètres. Suivez les pointillés.`, true);
+      say(`Rejoignez l'itinéraire, à ${Math.round(dStart)} mètres.`, true);
     }
     return renderNavLive();
   }

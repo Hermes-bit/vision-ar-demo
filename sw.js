@@ -1,6 +1,6 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
-const VERSION = "vision-ar-v65";
+const VERSION = "vision-ar-v66";
 // Cartes et bibliothèques gardées pour le hors-ligne : un cache à part, qui SURVIT aux mises à jour de l'appli
 // (avant, chaque nouvelle version effaçait les cartes déjà téléchargées)
 const MAP_CACHE = "vision-ar-cartes", MAX_MAP = 4000;

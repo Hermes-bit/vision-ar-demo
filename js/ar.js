@@ -116,7 +116,10 @@ let lastAbsolute = 0;
 function onOrientation(e) {
   if (typeof e.beta !== "number" || typeof e.gamma !== "number") return;
   let heading = null;
-  if (typeof e.webkitCompassHeading === "number" && e.webkitCompassHeading >= 0) heading = e.webkitCompassHeading;   // iPhone
+  if (typeof e.webkitCompassHeading === "number" && e.webkitCompassHeading >= 0) {
+    heading = e.webkitCompassHeading;                                                // iPhone
+    sensors.compassAcc = typeof e.webkitCompassAccuracy === "number" ? e.webkitCompassAccuracy : null;   // degrés, -1 = à calibrer
+  }
   else if (e.absolute && typeof e.alpha === "number") { heading = backCameraHeading(e.alpha, e.beta, e.gamma); lastAbsolute = performance.now(); }
   else if (performance.now() - lastAbsolute < 2000) return;   // Android : l'événement relatif ne remplace pas l'absolu
   if (heading !== null) sensors.heading = heading;
@@ -146,7 +149,8 @@ class OneEuro {
     return this.x;
   }
 }
-const F = {heading: new OneEuro(0.35, 0.012, true), pitch: new OneEuro(0.4, 0.01), roll: new OneEuro(0.4, 0.01)};
+// Réglage terrain (v66) : plus lisse qu'avant (le ruban et les étiquettes tremblaient), toujours réactif quand on tourne
+const F = {heading: new OneEuro(0.15, 0.006, true), pitch: new OneEuro(0.25, 0.006), roll: new OneEuro(0.25, 0.006)};
 async function startSensors() {
   try {
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function")
@@ -347,8 +351,8 @@ function drawGrid(cam, here, headingDeg) {
 }
 
 // ---- Repères dans la rue ----------------------------------------------------------------------------
-function anchorsAhead(s) {
-  const {nav, net, reports, posAt} = s, out = [];
+function anchorsAhead(s, me) {
+  const {nav, net, reports, posAt} = s, out = [], from = me || nav.here;
   let along = 0;
   for (const id of nav.route.edge_ids || []) {
     const e = net.edges[id];
@@ -356,30 +360,30 @@ function anchorsAhead(s) {
     for (let i = 1; i < e.shape.length; i++) len += haversineM(e.shape[i - 1][0], e.shape[i - 1][1], e.shape[i][0], e.shape[i][1]);
     const ahead = along - nav.pos;
     if (ahead > -2 && ahead < AHEAD_M) {
-      const at = posAt(along + Math.min(1.5, len / 2));
-      if (e.is_crossing && e.kerb_lowered === true) out.push({at, label: "Trottoir abaissé", ic: "accessibility", ahead, color: "#1C7A4D", glow: "#3DDC97"});
-      else if (e.is_crossing && e.kerb_lowered === false) out.push({at, label: "Bordure haute", ic: "triangle-alert", ahead, color: "#B42318", glow: "#FF6B5B"});
-      if (e.is_crossing && e.sound_signal) out.push({at, label: "Feu sonore", ic: "volume-2", ahead: ahead + 0.01, color: "#1C7A4D", glow: "#3DDC97"});
-      if (e.has_step) out.push({at, label: "Marche", ic: "stairs", ahead, color: "#7A4B00", glow: "#FFC24B"});
+      const at = posAt(along + Math.min(1.5, len / 2)), d = haversineM(from.lat, from.lon, at.lat, at.lon);
+      if (e.is_crossing && e.kerb_lowered === true) out.push({at, label: "Trottoir abaissé", ic: "accessibility", ahead: d, color: "#1C7A4D", glow: "#3DDC97"});
+      else if (e.is_crossing && e.kerb_lowered === false) out.push({at, label: "Bordure haute", ic: "triangle-alert", ahead: d, color: "#B42318", glow: "#FF6B5B"});
+      if (e.is_crossing && e.sound_signal) out.push({at, label: "Feu sonore", ic: "volume-2", ahead: d + 0.01, color: "#1C7A4D", glow: "#3DDC97"});
+      if (e.has_step) out.push({at, label: "Marche", ic: "stairs", ahead: d, color: "#7A4B00", glow: "#FFC24B"});
       if (e.slope_pct !== null && Math.abs(e.slope_pct) >= 5)
-        out.push({at, label: `${e.slope_pct > 0 ? "Montée" : "Descente"} ${Math.abs(e.slope_pct).toFixed(0)} %`, ic: "mountain", ahead, color: "#7A4B00", glow: "#FFC24B"});
+        out.push({at, label: `${e.slope_pct > 0 ? "Montée" : "Descente"} ${Math.abs(e.slope_pct).toFixed(0)} %`, ic: "mountain", ahead: d, color: "#7A4B00", glow: "#FFC24B"});
     }
     along += len;
   }
   for (const r of reports) {
-    const d = haversineM(nav.here.lat, nav.here.lon, r.lat, r.lon);
+    const d = haversineM(from.lat, from.lon, r.lat, r.lon);
     const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
     if (d < AHEAD_M) out.push({at: r, label: k[1], ic: k[2], ahead: d, color: "#B42318", glow: "#FF6B5B", obstacle: true});
   }
   for (const [cat, lat, lon, name, wheel] of net.places || []) {
-    const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
+    const d = haversineM(from.lat, from.lon, lat, lon);
     if (d > (s.placesRange ?? PLACES_M) || !PLACE[cat]) continue;
     const [ic, color, label] = PLACE[cat];
     out.push({at: {lat, lon}, label: name || label, ic, ahead: d, color, glow: "#5BE0EA", place: true, wheel: WHEEL[wheel]});
   }
   for (const [kind, lat, lon, name] of net.pois) {
     if (!POI[kind]) continue;
-    const d = haversineM(nav.here.lat, nav.here.lon, lat, lon);
+    const d = haversineM(from.lat, from.lon, lat, lon);
     if (d < (s.placesRange ?? PLACES_M)) out.push({at: {lat, lon}, label: POI[kind][1], sub: name, ic: POI[kind][0], ahead: d, color: "#007489", glow: "#5BE0EA", poi: true});
   }
   return out;
@@ -481,17 +485,58 @@ function glassPin(x, y, a, H) {
   ctx.shadowBlur = 0; ctx.textAlign = "start";
   return {left: x - R, top: cy - R, w: W, h: H};
 }
-function drawAnchors(cam, s, here) {
+// ---- Où suis-je vraiment ? -----------------------------------------------------------------------------
+// Les étiquettes se placent depuis la VRAIE position GPS (et non la position ramenée sur l'itinéraire), lissée
+// pour ne pas sauter à chaque mesure : plus le GPS est imprécis, plus le lissage est lent.
+let obs = null;
+function observer(s, fallback) {
+  const r = s.nav.real;
+  // pas de position récente : rien (sur ordinateur, sans boussole, on montre depuis le point de vue du trajet)
+  if (!r || Date.now() - r.at > 15000) return fallback ? {...fallback, acc: 0} : null;
+  const now = performance.now();
+  if (!obs || haversineM(obs.lat, obs.lon, r.lat, r.lon) > 80) obs = {lat: r.lat, lon: r.lon, acc: r.acc, t: now};
+  else {
+    const k = 1 - Math.exp(-Math.min(1, (now - obs.t) / 1000) / (1.5 + r.acc / 8));
+    obs = {lat: obs.lat + (r.lat - obs.lat) * k, lon: obs.lon + (r.lon - obs.lon) * k, acc: r.acc, t: now};
+  }
+  return obs;
+}
+// Boussole utilisable : sur iPhone, précision annoncée ≤ 25° (−1 = à calibrer) ; ailleurs, pas d'information
+const compassOk = () => sensors.compassAcc === null || sensors.compassAcc === undefined || (sensors.compassAcc >= 0 && sensors.compassAcc <= 25);
+// Erreur d'angle possible pour un repère à d mètres quand la position est connue à acc mètres près
+const angleError = (acc, d) => Math.atan2(acc, Math.max(1, d)) * 180 / Math.PI;
+const MAX_LABEL_ERROR_DEG = 12;                 // au-delà, l'étiquette pourrait pointer à côté : on ne l'affiche pas
+const labelSmooth = new Map();                  // position à l'écran lissée, par étiquette
+
+// Étiquettes : chacune est accrochée à SA position fixe sur la carte. On calcule la direction (cap) depuis soi,
+// et on la dessine sur la ligne d'horizon de la caméra (plus bas quand c'est proche). Ce placement ne dépend pas
+// de la hauteur du téléphone : il reste juste à l'étage d'un immeuble comme dans la rue. Une étiquette dont la
+// direction est trop incertaine (GPS imprécis pour sa distance, boussole à calibrer) n'est pas affichée.
+function drawAnchors(cam, s, me) {
   const dpr = devicePixelRatio, w = canvas.width, h = canvas.height, neon = theme().pins;
+  if (!me || !compassOk()) { labelSmooth.clear(); return; }
   // les plus proches d'abord : si deux repères se gênent, le plus lointain attend d'être plus près
   const rank = a => a.obstacle ? 0 : a.place || a.poi ? 2 : 1;   // obstacles d'abord, puis le trajet, puis les lieux
-  const anchors = anchorsAhead(s).sort((a, b) => rank(a) - rank(b) || a.ahead - b.ahead).slice(0, 10);
-  const taken = reservedAreas(), toDraw = [];
+  const anchors = anchorsAhead(s, me).filter(a => angleError(me.acc, a.ahead) <= MAX_LABEL_ERROR_DEG)
+    .sort((a, b) => rank(a) - rank(b) || a.ahead - b.ahead).slice(0, 10);
+  const taken = reservedAreas(), toDraw = [], seen = new Set();
   const topLimit = (root.querySelector(".top")?.getBoundingClientRect().bottom ?? 0) * dpr + 6 * dpr;
   for (const a of anchors) {
-    const c = cam.toCam(enu(here, a.at));
+    const p = enu(me, a.at);
+    p.z = 0;                                           // à hauteur des yeux : sur l'horizon, quelle que soit l'altitude
+    const c = cam.toCam(p);
     if (c.d < 2) continue;
-    const [x, y] = cam.toScreen(c);
+    let [x, y] = cam.toScreen(c);
+    y += Math.min(h * 0.14, 520 * dpr / c.d);          // proche : un peu sous l'horizon ; loin : sur l'horizon
+    // téléphone penché vers le sol : l'horizon passe derrière la consigne. Seule la DIRECTION (gauche / droite)
+    // compte : l'étiquette descend dans la zone visible, au même endroit horizontalement.
+    const domeTop = (root.querySelector(".dome")?.getBoundingClientRect().top ?? h / dpr) * dpr;
+    y = Math.max(topLimit + (neon ? 150 : 80) * dpr, Math.min(domeTop - 20 * dpr, y));
+    // lissage à l'écran (les petites secousses de la main ne font plus danser les étiquettes)
+    const key = `${a.label}|${a.at.lat}|${a.at.lon}`, prev = labelSmooth.get(key);
+    seen.add(key);
+    if (prev && Math.abs(prev.x - x) < w / 3) { x = prev.x + (x - prev.x) * 0.25; y = prev.y + (y - prev.y) * 0.25; }
+    labelSmooth.set(key, {x, y});
     if (x < -60 * dpr || x > w + 60 * dpr || y < topLimit || y > h) continue;
     // taille de la goutte : selon la distance, mais jamais sous les pastilles ou l'alerte du haut
     const ceiling = Math.max(0, ...taken.filter(t => t.ui && !t.bubble && t.top + t.h <= y).map(t => t.top + t.h));
@@ -518,6 +563,7 @@ function drawAnchors(cam, s, here) {
     taken.push(est);
     toDraw.push(() => neon ? glassPin(x, y, a, H) : glassLabel(x, labelY, a, y));
   }
+  for (const k of labelSmooth.keys()) if (!seen.has(k)) labelSmooth.delete(k);
   toDraw.reverse().forEach(draw => draw());          // les lointains d'abord, les proches par-dessus
 }
 // ---- Obstacles vus par la caméra -----------------------------------------------------------------------------
@@ -694,11 +740,13 @@ function frame() {
     if (noCamera) drawGrid(cam, v.here, heading);
     if (ribbonA > 0.02 && !s.st.arrived) {
       ctx.save(); ctx.globalAlpha = ribbonA;
-      if (v.join) drawJoin(cam, v.here, v.join);
       drawPath(cam, s, v.here, v.pos);
       ctx.restore();
     }
-    drawAnchors(cam, s, v.here);
+    // pointillés vers l'itinéraire : seulement si la position est connue à 8 m près (sinon ils mentiraient)
+    const accNow = precision(s);
+    if (v.join && !s.st.arrived && !recal && compassOk() && (!compass || (accNow !== null && accNow <= 8))) drawJoin(cam, v.here, v.join);
+    drawAnchors(cam, s, observer(s, compass ? null : v.here));
     drawDestination(cam, s, v.here);
     if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); else drawCorridorMarks(); }
   }
@@ -720,8 +768,12 @@ function ribbonTarget(s, compass) {
     else return 0;
   }
   if (!compass) return 1;                                   // ordinateur : pas de GPS de terrain, on montre tout
+  // Le ruban est posé au sol depuis la position sur l'itinéraire : il n'a de sens que si l'on y est vraiment
+  // (pas à l'intérieur, pas à l'écart), avec un GPS précis et une boussole fiable. Sinon : la voix et le plan.
+  const n = s.nav;
+  if (n.phase !== "route" || n.offRoute || n.away || !compassOk()) return 0;
   const acc = precision(s);
-  return acc === null || acc > 25 ? 0 : acc <= 8 ? 1 : 1 - 0.75 * (acc - 8) / 17;
+  return acc === null || acc > 12 ? 0 : acc <= 6 ? 1 : 1 - 0.6 * (acc - 6) / 6;
 }
 // Retour dans l'appli après une pause (écran verrouillé, autre appli) : l'ancien calage est faux. On efface
 // le ruban, on annonce « Recalage en cours », on remet à zéro filtres et suivi, et on relance la caméra.
@@ -730,7 +782,7 @@ function onVisibility() {
   if (document.visibilityState === "hidden") { hiddenAt = performance.now(); return; }
   if (performance.now() - hiddenAt < 1500) return;
   recal = {since: Date.now(), at: performance.now()};
-  ribbonA = 0; view = null; lastUi = "";
+  ribbonA = 0; view = null; lastUi = ""; obs = null; labelSmooth.clear();
   Object.values(F).forEach(f => f.reset());
   tracker.reset(); dets = [];
   api.say?.("Recalage en cours, gardez le téléphone devant vous.", 1);   // niveau CONSIGNE (js/speech.js)
@@ -747,7 +799,7 @@ function viewpoint(s) {
   const n = s.nav, fresh = n.real && Date.now() - n.real.at < 15000;
   const away = !!(fresh && (n.offRoute || n.away));
   const target = away ? {lat: n.real.lat, lon: n.real.lon} : s.posAt(n.pos);
-  const now = performance.now(), k = 1 - Math.exp(-Math.min(1, (now - lastView) / 1000) / 0.8);
+  const now = performance.now(), k = 1 - Math.exp(-Math.min(1, (now - lastView) / 1000) / 1.6);
   lastView = now;
   // Glissement doux, y compris quand on passe de « sur l'itinéraire » à « à l'écart » : plus de saut du tracé
   if (!view || haversineM(view.here.lat, view.here.lon, target.lat, target.lon) > 60) view = {here: {...target}, pos: n.pos};
@@ -785,8 +837,10 @@ function renderUi(s, heading, compass) {
     : turnSoon ? MAN_ICON[next.maneuver] || "arrow-up" : vague ? "navigation" : "arrow-up";
   const away = st.arrived ? "" : approach ? dist(s.nav.approachDist) : joining ? dist(s.nav.gap) : (vague ? "≈ " : "") + dist(st.toManeuver);
   const lowerUp = upcoming.charAt(0).toLowerCase() + upcoming.slice(1);
-  const subText = approach ? "suivez les pointillés jusqu'au trottoir : le trajet commence là"
-    : joining ? `suivez les pointillés jusqu'à l'itinéraire, puis ${lowerUp}`
+  // les pointillés ne sont dessinés que si la position est précise (≤ 8 m) : le texte dit la même chose que l'écran
+  const dots = !compass || (acc !== null && acc <= 8 && compassOk());
+  const subText = approach ? (dots ? "suivez les pointillés jusqu'au trottoir : le trajet commence là" : "le départ du trajet est indiqué sur le plan")
+    : joining ? (dots ? `suivez les pointillés jusqu'à l'itinéraire, puis ${lowerUp}` : `revenez vers l'itinéraire indiqué sur le plan, puis ${lowerUp}`)
     : st.arrived ? sub
     : vague ? `prochain virage : ${lowerUp}, dans environ ${dist(st.toManeuver)}`
     : turnSoon ? sub : `dans ${dist(st.toManeuver)} : ${lowerUp}${next.street ? " · " + next.street : ""}`;
@@ -808,7 +862,8 @@ function renderUi(s, heading, compass) {
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
         ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
         ${!nativeOn && recal && !st.arrived ? `<em class="arrow-note">${icon("locate-fixed")} Recalage en cours : gardez le téléphone devant vous</em>` : ""}
-        ${!nativeOn && !recal && compass && (acc === null || acc > 25) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé masqué, suivez la voix</em>` : ""}
+        ${!nativeOn && !recal && compass && !compassOk() && !st.arrived ? `<em class="arrow-note">${icon("compass")} Boussole à calibrer : décrivez un 8 avec le téléphone</em>` : ""}
+        ${!nativeOn && !recal && compass && compassOk() && (acc === null || acc > 12) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé et repères masqués, suivez la voix</em>` : ""}
         ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
         ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
@@ -988,7 +1043,7 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  view = null; mapFull = false; sheet = null; lastUi = ""; ribbonA = 0; recal = null;
+  view = null; mapFull = false; sheet = null; lastUi = ""; ribbonA = 0; recal = null; obs = null; labelSmooth.clear();
   tracker.reset(); annState = {}; lastMovePos = null;
   Object.values(F).forEach(f => f.reset());
   sensors = {heading: null, pitch: null, roll: 0};
@@ -1062,3 +1117,6 @@ export function closeAR() {
   api?.map.invalidateSize();
 }
 export const arOpen = () => root && !root.hidden;
+// Tests automatiques uniquement (adresse terminée par ?debug) : état des capteurs et des étiquettes
+if (new URLSearchParams(location.search).has("debug"))
+  globalThis.__ar = {get sensors() { return sensors; }, get obs() { return obs; }, get labels() { return [...labelSmooth]; }, compassOk, get ribbonA() { return ribbonA; }};
