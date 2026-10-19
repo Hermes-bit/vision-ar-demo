@@ -187,7 +187,7 @@ const BASEMAPS = {
   ign: {label: "Plan IGN", sub: "Carte officielle française, lisible et sobre",
         url: IGN_WMTS("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png"), maxZoom: 19, attribution: "© IGN · réseau © OpenStreetMap"},
   ortho: {label: "Photos aériennes", sub: "Vue du ciel (IGN), comme le mode satellite",
-          url: IGN_WMTS("ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg"), maxZoom: 19, attribution: "Photos © IGN · réseau © OpenStreetMap"},
+          url: IGN_WMTS("ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&FORMAT=image/jpeg"), maxZoom: 19, attribution: "Photos © IGN · réseau © OpenStreetMap", bg: "#5B6450"},
   // Fonds vectoriels OpenFreeMap : gratuits, sans clé ni limite ; affichés par MapLibre, chargé seulement si choisi
   liberty: {label: "Style Plans", sub: "Clair et coloré, proche de Plans (Apple) et de Google Maps",
             style: "https://tiles.openfreemap.org/styles/liberty", attribution: `<a href="https://openfreemap.org">OpenFreeMap</a> · © OpenMapTiles · ${OSM_ATTR}`},
@@ -237,6 +237,9 @@ async function setBasemap(key) {
   ctl._update?.();
   baseLayer = layer.addTo(map);
   baseLayer.bringToBack?.();
+  // Sous le fond de carte, la couleur du fond de carte : un instant de retard au dessin (zoom, déplacement rapide,
+  // tuile qui arrive) ne laisse plus voir de bande sombre, seulement la teinte de la carte
+  $("map").style.background = b.bg || "#F2EFE9";
 }
 // Le plugin MapLibre agrandit son conteneur quand la carte change de taille, mais pas le dessin lui-même :
 // sans ceci, le fond vectoriel garde la taille du plan réduit (40 % de l'écran) et le reste reste vide.
@@ -553,7 +556,9 @@ function fitRoute() {
   if (size.y < 160 || size.x < 160) return;
   const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
   const bottom = Math.max(24, Math.min(under + 24, size.y - 84 - 120));     // il reste toujours 120 px de carte pour le trajet
-  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, bottom], maxZoom: 18});
+  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, bottom], maxZoom: 18, animate: false});
+  // (sans animation de zoom : pendant l'animation, le fond vectoriel n'était redessiné qu'à la fin et l'on voyait
+  // un rectangle de carte rétréci sur un fond sombre, vidéo du 19/10)
 }
 // Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
 // le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
@@ -1054,7 +1059,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "82";
+const APP_VERSION = "83";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1664,7 +1669,7 @@ function forward() {
 }
 function closeRoutes() {
   Object.assign(S, {dest: null, routes: [], query: "", places: [], message: null, arrival: null});
-  map.setView([S.origin.lat, S.origin.lon], 16);
+  map.setView([S.origin.lat, S.origin.lon], 16, {animate: false});
   render();
 }
 function chooseDest(place) {

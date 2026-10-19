@@ -77,7 +77,7 @@ p { margin: 0; }
 *::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 /* ---- Mise en page : plan en haut, panneau en bas (portrait) --------------------------------- */
-#map { position: fixed; left: 0; right: 0; top: 0; height: 40vh; height: 40dvh; z-index: 0; background: var(--surface-2); }
+#map { position: fixed; left: 0; right: 0; top: 0; height: 40vh; height: 40dvh; z-index: 0; background: #F2EFE9; }   /* teinte des fonds de carte (pas de bande sombre si le dessin a un temps de retard) */
 #panel { position: fixed; left: 0; right: 0; bottom: 0; top: calc(40vh - 20px); top: calc(40dvh - 20px);
   overflow-y: auto; overscroll-behavior: contain; background: var(--panel-bg);
   -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); display: flex; flex-direction: column; gap: 14px;
@@ -292,7 +292,7 @@ input[type=range] { width: 100%; accent-color: var(--primary); height: 32px; }
 }
 
 /* ---- Carte : repères, popups, légende ------------------------------------------------------------ */
-.leaflet-container { font: inherit; background: var(--surface-2); }
+.leaflet-container { font: inherit; background: #F2EFE9; }
 .leaflet-popup-content-wrapper { border-radius: 14px; box-shadow: var(--shadow); }
 .leaflet-popup-content { margin: 12px 14px; }
 .pp { min-width: 190px; font-size: 14px; color: #0F2537; }
