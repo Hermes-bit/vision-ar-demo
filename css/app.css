@@ -832,3 +832,8 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .arrive-card li.bad span { font-weight: 700; }
 .arrive-card li.info .i { color: var(--muted); }
 .arrive-card .fine { margin: 0; }
+
+/* ---- Animation d'entrée (render() : seulement pour un élément dont la clé data-key est nouvelle) ---- */
+.enter { animation: va-enter .28s cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes va-enter { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .enter { animation: none; } }

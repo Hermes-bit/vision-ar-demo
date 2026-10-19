@@ -1049,7 +1049,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "68";
+const APP_VERSION = "69";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1254,7 +1254,7 @@ function favoritesHtml() {
   const list = favorites();
   return `<section class="favs" aria-labelledby="favsTitle"><h3 id="favsTitle">${icon("star")} Mes trajets favoris</h3>
     ${list.length ? `<div class="places">${list.map(f => `<div class="fav-row">
-        <button class="place" data-fav="${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
+        <button class="place" data-fav="${f.id}" data-key="fav-${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
           <span class="place-ic">${icon("route")}</span><span class="grow">${esc(f.dest.label)}<small>depuis ${esc(f.origin.label)}</small></span>
           ${icon("chevron-right")}</button>
         <button class="fav-del" data-unfav="${f.id}" aria-label="Retirer ${esc(f.dest.label)} des favoris">${icon("trash-2")}</button></div>`).join("")}</div>`
@@ -1274,14 +1274,16 @@ function pickPlace(i) {
 function placesHtml() {
   const list = placeList();
   if (!list.length && S.searchFor === "dest" && !S.dest && !S.query.trim()) return favoritesHtml();
-  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}">
+  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}" data-key="place-${esc(p.label)}-${esc(p.sub || "")}">
       <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
       ${icon("chevron-right")}</button>`).join("")}</div>` : "";
 }
 function renderPlaces() {
   const box = $("placesBox");
   if (!box) return;
+  const before = new Set([...box.querySelectorAll("[data-key]")].map(el => el.dataset.key));
   box.innerHTML = placesHtml();
+  for (const k of markEntering(box, before)) shownKeys.add(k);
   bindPlaces(box);
   layoutSheet();
 }
@@ -1292,7 +1294,7 @@ function indoorButton() {
 }
 function arrivalCard(f) {
   if (!f.lines.length) return `<p class="fine arrive-none">${icon("door-open")} Pas encore d'information sur l'accès à ce lieu.</p>`;
-  return `<section class="arrive-card" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
+  return `<section class="arrive-card" data-key="arrive-${esc(f.name)}" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
       <button class="btn soft small" id="arrSpeak">${icon("volume-2")} Écouter</button></div>
     <ul>${f.lines.map(l => `<li class="${l.tone}">${icon(l.ic)}<span>${esc(l.text)}</span></li>`).join("")}</ul>
     <p class="fine">Sources : ${esc(f.sources.join(", "))}.</p></section>`;
@@ -1325,7 +1327,7 @@ function routeCard(r, i) {
       .concat(incomplete ? [`<span class="tag warn">${icon("info")} données à confirmer</span>`] : [])
     : r.blocking_issues.map(w => `<span class="tag danger">${icon("triangle-alert")} ${esc(w)}</span>`);
   const stk = i === 0 && r.accessible ? (!r.steps_count ? "zero-marche" : r.max_slope_pct <= 5 ? "pente-douce" : "") : "";
-  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" role="button" tabindex="0"
+  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" data-key="route-${esc(S.dest?.label || "")}-${esc(r.label)}" role="button" tabindex="0"
       aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}${i === S.selected ? ", sélectionné" : ""}">
     <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge}</div><div class="rc-time"><b>${min}</b> min</div></div>
     <div class="rc-meta">
@@ -1420,6 +1422,20 @@ function renderHud() {
   h.innerHTML = body + `<div class="close">Vue lunettes (le noir est transparent) · toucher : fermer · appui long : contraste</div>`;
 }
 
+// ---- render() et animations ------------------------------------------------------------------------
+// #map et #panel sont créés une fois (index.html) : render() ne remplace que le CONTENU de #panel. Pour que
+// ce remplacement ne rejoue pas les animations : un élément animé à l'entrée porte une clé stable (data-key) et
+// ne reçoit la classe « enter » que si cette clé n'était pas à l'écran au render précédent. Le défilement de
+// #panel est conservé tant qu'on reste sur le même écran ; la position du panneau (--sheet-y, sur #panel) aussi.
+let shownKeys = new Set(), lastScreen = null;
+function markEntering(root, before) {
+  const now = new Set();
+  for (const el of root.querySelectorAll("[data-key]")) {
+    now.add(el.dataset.key);
+    if (!before.has(el.dataset.key)) el.classList.add("enter");
+  }
+  return now;
+}
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
@@ -1427,7 +1443,10 @@ function render() {
   // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
   // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
   const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
-  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
+  const panel = $("panel"), scroll = lastScreen === S.screen ? panel.scrollTop : 0;
+  panel.innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
+  shownKeys = markEntering(panel, lastScreen === S.screen ? shownKeys : new Set());
+  panel.scrollTop = scroll; lastScreen = S.screen;
   for (const img of $("panel").querySelectorAll("img.stk")) {
     const old = keepStk.get(img.className + img.getAttribute("src"));
     if (old) { img.replaceWith(old); keepStk.delete(img.className + img.getAttribute("src")); }
