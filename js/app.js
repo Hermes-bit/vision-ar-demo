@@ -8,8 +8,6 @@ import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
-import {chooseStop, snapDuration, velocity} from "./sheet.js";
-import {markerPosition} from "./navmarker.js";
 import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {arrivalFiche, arrivalSpeech, entranceFor, loadAcces} from "./arrival.js";
@@ -57,7 +55,7 @@ const S = {
   // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
   originMode: "auto", searchFor: "dest", oquery: "",
   // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
-  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), sheet: "mid", audioOnly: store.get("va-audio-only", false),
+  alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), audioOnly: store.get("va-audio-only", false),
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
   logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
@@ -547,15 +545,9 @@ addEventListener("online", () => toast("Connexion retrouvée."));
 function fitRoute() {
   const r = S.routes[S.selected] || S.routes[0];
   if (!r || S.screen !== "route") return;
-  // La carte vient souvent de changer de taille (retour du Profil ou des Paramètres) : on la remet à jour AVANT de
-  // cadrer. Sinon Leaflet cadrait avec son ancienne taille (338 px) et une marge plus grande que la carte : zoom
-  // impossible, carte cassée (vide) et écran à moitié redessiné (boutons Fermer / Paramètres absents).
-  map.invalidateSize({pan: false});
-  const size = map.getSize(), panelTop = $("panel").getBoundingClientRect().top;
-  if (size.y < 160 || size.x < 160) return;
+  const panelTop = $("panel").getBoundingClientRect().top;
   const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
-  const bottom = Math.max(24, Math.min(under + 24, size.y - 84 - 120));     // il reste toujours 120 px de carte pour le trajet
-  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, bottom], maxZoom: 18});
+  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, under + 24]});
 }
 // Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
 // le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
@@ -847,26 +839,7 @@ function startGps() {
   n.gpsStatus = "Recherche de votre position…";
   n.gpsProblem = null;
   n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
-  n.gpsStartedAt = Date.now();
 }
-// Le GPS se tait (iPhone : ouverture de la caméra ou d'une demande d'autorisation, retour d'arrière-plan,
-// passage sous un porche…) : sans nouvelle position depuis 15 s, on relance la recherche, toutes les 15 s au plus.
-function restartGps(reason) {
-  const n = S.nav;
-  if (!n || n.watch === null || !navigator.geolocation || n.arrived) return;
-  navigator.geolocation.clearWatch(n.watch);
-  n.watch = navigator.geolocation.watchPosition(onGps, onGpsError, {enableHighAccuracy: true, maximumAge: 0, timeout: 20000});
-  n.gpsStartedAt = n.gpsRestartAt = Date.now();
-  if (reason) n.gpsInfo = reason;
-  renderNavLive();
-}
-setInterval(() => {
-  const n = S.nav;
-  if (!n || n.watch === null || document.hidden) return;
-  const last = Math.max(n.real?.at || 0, n.gpsStartedAt || 0);
-  if (Date.now() - last > 15000 && Date.now() - (n.gpsRestartAt || 0) > 15000) restartGps("Signal GPS perdu : nouvelle recherche de votre position…");
-  else if (n.real && Date.now() - n.real.at > 15000) renderNavLive();     // icône grisée : position trop ancienne
-}, 5000);
 // Précision du GPS en mots simples (au lieu de « GPS ± 14 m »)
 function accuracyText(acc) {
   const m = Math.max(1, Math.round(acc));
@@ -1076,7 +1049,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "78";
+const APP_VERSION = "68";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1189,8 +1162,8 @@ function screenRoute() {
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
     ${S.dest ? "" : sticker("on-y-va", "stk-sheet")}
-    ${SHEET_DRAG ? `<button class="handle" id="sheetHandle" aria-expanded="${S.sheet === "full"}"
-      aria-label="${S.sheet === "full" ? "Remettre le panneau à sa place" : "Agrandir le panneau"}"></button>` : ""}
+    <button class="handle" id="sheetHandle" aria-expanded="${!sheetCollapsed}"
+      aria-label="${sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
     <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
       <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
   </div>
@@ -1281,7 +1254,7 @@ function favoritesHtml() {
   const list = favorites();
   return `<section class="favs" aria-labelledby="favsTitle"><h3 id="favsTitle">${icon("star")} Mes trajets favoris</h3>
     ${list.length ? `<div class="places">${list.map(f => `<div class="fav-row">
-        <button class="place" data-fav="${f.id}" data-key="fav-${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
+        <button class="place" data-fav="${f.id}" aria-label="Lancer le trajet de ${esc(f.origin.label)} à ${esc(f.dest.label)}">
           <span class="place-ic">${icon("route")}</span><span class="grow">${esc(f.dest.label)}<small>depuis ${esc(f.origin.label)}</small></span>
           ${icon("chevron-right")}</button>
         <button class="fav-del" data-unfav="${f.id}" aria-label="Retirer ${esc(f.dest.label)} des favoris">${icon("trash-2")}</button></div>`).join("")}</div>`
@@ -1301,16 +1274,14 @@ function pickPlace(i) {
 function placesHtml() {
   const list = placeList();
   if (!list.length && S.searchFor === "dest" && !S.dest && !S.query.trim()) return favoritesHtml();
-  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}" data-key="place-${esc(p.label)}-${esc(p.sub || "")}">
+  return list.length ? `<div class="places">${list.map((p, i) => `<button class="place" data-place="${i}">
       <span class="place-ic" ${p.color ? `style="color:${p.color}"` : ""}>${icon(p.icon || (p.type === "poi" ? "map-pin" : "map"))}</span><span class="grow">${esc(p.label)}<small>${esc(p.sub || (p.type === "poi" ? "Lieu" : "Adresse"))}</small></span>
       ${icon("chevron-right")}</button>`).join("")}</div>` : "";
 }
 function renderPlaces() {
   const box = $("placesBox");
   if (!box) return;
-  const before = new Set([...box.querySelectorAll("[data-key]")].map(el => el.dataset.key));
   box.innerHTML = placesHtml();
-  for (const k of markEntering(box, before)) shownKeys.add(k);
   bindPlaces(box);
   layoutSheet();
 }
@@ -1321,7 +1292,7 @@ function indoorButton() {
 }
 function arrivalCard(f) {
   if (!f.lines.length) return `<p class="fine arrive-none">${icon("door-open")} Pas encore d'information sur l'accès à ce lieu.</p>`;
-  return `<section class="arrive-card" data-key="arrive-${esc(f.name)}" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
+  return `<section class="arrive-card" aria-labelledby="arrTitle"><div class="arrive-head"><h3 id="arrTitle">${icon("door-open")} À l'arrivée</h3>
       <button class="btn soft small" id="arrSpeak">${icon("volume-2")} Écouter</button></div>
     <ul>${f.lines.map(l => `<li class="${l.tone}">${icon(l.ic)}<span>${esc(l.text)}</span></li>`).join("")}</ul>
     <p class="fine">Sources : ${esc(f.sources.join(", "))}.</p></section>`;
@@ -1354,7 +1325,7 @@ function routeCard(r, i) {
       .concat(incomplete ? [`<span class="tag warn">${icon("info")} données à confirmer</span>`] : [])
     : r.blocking_issues.map(w => `<span class="tag danger">${icon("triangle-alert")} ${esc(w)}</span>`);
   const stk = i === 0 && r.accessible ? (!r.steps_count ? "zero-marche" : r.max_slope_pct <= 5 ? "pente-douce" : "") : "";
-  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" data-key="route-${esc(S.dest?.label || "")}-${esc(r.label)}" role="button" tabindex="0"
+  return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" role="button" tabindex="0"
       aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}${i === S.selected ? ", sélectionné" : ""}">
     <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge}</div><div class="rc-time"><b>${min}</b> min</div></div>
     <div class="rc-meta">
@@ -1449,43 +1420,14 @@ function renderHud() {
   h.innerHTML = body + `<div class="close">Vue lunettes (le noir est transparent) · toucher : fermer · appui long : contraste</div>`;
 }
 
-// ---- render() et animations ------------------------------------------------------------------------
-// #map et #panel sont créés une fois (index.html) : render() ne remplace que le CONTENU de #panel. Pour que
-// ce remplacement ne rejoue pas les animations : un élément animé à l'entrée porte une clé stable (data-key) et
-// ne reçoit la classe « enter » que si cette clé n'était pas à l'écran au render précédent. Le défilement de
-// #panel est conservé tant qu'on reste sur le même écran ; la position du panneau (S.sheet, transform sur #panel) aussi.
-let shownKeys = new Set(), lastScreen = null;
-function markEntering(root, before) {
-  const now = new Set();
-  for (const el of root.querySelectorAll("[data-key]")) {
-    now.add(el.dataset.key);
-    if (!before.has(el.dataset.key)) el.classList.add("enter");
-  }
-  return now;
-}
-// Changement d'écran : Paramètres, Profil et Zones arrivent en glissant depuis la droite (comme une page qu'on
-// ouvre) ; au retour vers la carte, le panneau réapparaît en fondu. Rien si le téléphone réduit les animations.
-const PAGE_SCREENS = ["settings", "profile", "zones"];
-function pageTransition(panel, prev) {
-  if (!prev || prev === S.screen || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
-  if (PAGE_SCREENS.includes(S.screen))
-    panel.animate([{transform: "translateX(36%)", opacity: 0}, {transform: "translateX(0)", opacity: 1}], {duration: 380, easing});
-  else if (PAGE_SCREENS.includes(prev) && S.screen === "route")
-    panel.animate([{opacity: 0}, {opacity: 1}], {duration: 260, easing: "ease-out"});   // (transform : réservé au panneau du bas)
-}
 function render() {
   const nav = S.screen === "nav";
   const authScreen = AUTH_SCREENS[S.screen];
-  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : SHEET_DRAG ? "sheet sheet-drag" : "sheet";
+  document.body.className = authScreen ? "full auth-screen" : ["profile", "settings", "zones"].includes(S.screen) ? "full" : nav ? "nav-ar" : "sheet";
   // Stickers déjà à l'écran : on garde les mêmes images d'un affichage à l'autre (recréées, elles disparaissaient
   // un instant le temps d'être redécodées : le sticker « clignotait » à chaque choix de profil)
   const keepStk = new Map([...$("panel").querySelectorAll("img.stk")].map(img => [img.className + img.getAttribute("src"), img]));
-  const panel = $("panel"), scroll = lastScreen === S.screen ? panel.scrollTop : 0, prevScreen = lastScreen;
-  panel.innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
-  shownKeys = markEntering(panel, lastScreen === S.screen ? shownKeys : new Set());
-  panel.scrollTop = scroll; lastScreen = S.screen;
-  pageTransition(panel, prevScreen);
+  $("panel").innerHTML = nav ? "" : authScreen ? authScreen() : {profile: screenProfile, route: screenRoute, settings: screenSettings, zones: screenZones}[S.screen]();
   for (const img of $("panel").querySelectorAll("img.stk")) {
     const old = keepStk.get(img.className + img.getAttribute("src"));
     if (old) { img.replaceWith(old); keepStk.delete(img.className + img.getAttribute("src")); }
@@ -1523,180 +1465,64 @@ function render() {
   setTimeout(() => map.invalidateSize(), 0);
 }
 
-// ---- Panneau du bas : 3 points d'arrêt (réduit, moyen, plein) -------------------------------------------
-// Le panneau suit le doigt en temps réel (transform: translateY, posé dans requestAnimationFrame ; jamais
-// height ni top). Au relâcher, il se cale sur un arrêt choisi selon la position ET la vitesse des 80 dernières
-// ms (js/sheet.js), avec element.animate et la courbe --ease-sheet. Au-delà des limites : résistance élastique.
-// La liste ne défile que panneau plein ; tout en haut de la liste, tirer vers le bas fait descendre le panneau.
-// Un voile assombrit la carte (opacité 0 à 0,25) quand le panneau monte. Un nouveau geste reprend depuis la
-// position réelle, même en pleine animation. L'arrêt courant est S.sheet et suit le cycle render normal.
+// ---- Panneau du bas : se réduit d'un geste pour laisser voir le plan ------------------------------
+// Deux positions : ouvert (hauteur de son contenu) ou réduit (titre seul). On le fait glisser par
+// sa poignée ou son titre ; toucher la poignée bascule de l'un à l'autre.
+let sheetCollapsed = false;
 const sideLayout = () => matchMedia("(orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px)").matches;
-// Demande de l'usager : le panneau ne se plie JAMAIS vers le bas. Deux arrêts seulement : « normal » (sa place
-// habituelle : la hauteur de son contenu, au moins la moitié de l'écran) et « plein » (on le tire vers le haut).
-// Depuis « plein », on peut le redescendre jusqu'à « normal », pas plus bas.
-const SHEET_DRAG = true;
-const sheetActive = () => SHEET_DRAG && S.screen === "route" && !sideLayout();
-// Au repos, le panneau a la hauteur de son arrêt (sa liste défile dedans : « Démarrer le guidage » reste
-// accessible) et aucun décalage. Pendant un geste ou un calage, il prend la hauteur « plein » et se déplace par
-// transform (fluide), puis reprend la hauteur de son arrêt une fois posé. « Normal » laisse toujours voir le haut
-// de la carte : avant, une longue liste d'itinéraires recouvrait toute la carte (et le plan, cadré dans la petite
-// bande restante, zoomait jusqu'à ne plus rien montrer).
-let sheetY = null, sheetAnim = null, sheetRaf = 0, drag = null, pull = null, sheetMoving = false;
-function sheetHeights() {
-  const p = $("panel"), full = parseFloat(getComputedStyle(p).maxHeight) || innerHeight - 96;
-  return {full, mid: Math.min(full, Math.round(innerHeight * 0.56))};
+function sheetRange() {
+  const p = $("panel"), head = p.querySelector(".sheet-head");
+  if (!head) return 0;
+  const peek = head.offsetTop + head.offsetHeight + parseFloat(getComputedStyle(p).paddingBottom) + 4;
+  return Math.max(0, p.offsetHeight - peek);             // de combien on peut le descendre
 }
-function sheetStops() {                                    // décalages (translateY) en mode « déplacement »
-  const h = sheetHeights();
-  return {full: 0, mid: Math.max(0, h.full - h.mid)};
-}
-function sheetScrim() {
-  let el = $("sheetScrim");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "sheetScrim"; el.className = "sheet-scrim"; el.setAttribute("aria-hidden", "true");
-    document.body.append(el);
-  }
-  return el;
-}
-function paintSheet(y) {
-  const p = $("panel"), ys = sheetStops(), h = sheetHeights();
-  p.style.transform = y ? `translateY(${y}px)` : "";
-  const visible = sheetMoving ? h.full - y : p.offsetHeight;
-  document.documentElement.style.setProperty("--sheet-h", `${Math.max(0, Math.round(visible))}px`);
-  const fromMid = sheetMoving ? y : (S.sheet === "full" ? 0 : ys.mid);
-  sheetScrim().style.opacity = ys.mid > 0 ? (0.25 * Math.max(0, Math.min(1, 1 - fromMid / ys.mid))).toFixed(3) : "0";
-}
-function setSheetY(y) {                                    // pendant le geste : une pose par image au plus
-  sheetY = y;
-  if (!sheetRaf) sheetRaf = requestAnimationFrame(() => { sheetRaf = 0; paintSheet(sheetY); });
-}
-// Passe en mode « déplacement » sans que rien ne bouge à l'écran : hauteur « plein », décalage équivalent
-function startMoving() {
-  if (sheetMoving) return;
-  const p = $("panel"), h = sheetHeights(), visible = p.offsetHeight;
-  sheetMoving = true;
-  p.style.height = `${h.full}px`;
-  p.style.overflowY = "hidden";
-  sheetY = Math.max(0, h.full - visible);
-  paintSheet(sheetY);
-}
-// Posé sur un arrêt : hauteur de l'arrêt, plus de décalage, la liste défile
-function settle() {
-  const p = $("panel"), h = sheetHeights();
-  sheetMoving = false; sheetY = 0;
-  p.style.height = `${S.sheet === "full" ? h.full : h.mid}px`;
-  p.style.overflowY = "auto";
-  p.style.touchAction = "pan-y";
-  paintSheet(0);
-  const hd = $("sheetHandle");
-  if (hd) {
-    hd.setAttribute("aria-expanded", String(S.sheet === "full"));
-    hd.setAttribute("aria-label", S.sheet === "full" ? "Remettre le panneau à sa place" : "Agrandir le panneau");
+function layoutSheet(offset = null) {
+  const p = $("panel"), root = document.documentElement.style;
+  if (S.screen !== "route" || sideLayout()) { p.style.removeProperty("--sheet-y"); root.setProperty("--sheet-h", "0px"); return; }
+  const max = sheetRange(), y = offset ?? (sheetCollapsed ? max : 0);
+  p.style.setProperty("--sheet-y", `${Math.max(0, Math.min(max, y))}px`);
+  p.classList.toggle("collapsed", offset === null && sheetCollapsed);   // abaissé : seul le titre reste visible
+  root.setProperty("--sheet-h", `${Math.round(p.offsetHeight - Math.max(0, Math.min(max, y)))}px`);
+  const h = $("sheetHandle");
+  if (h) {
+    h.setAttribute("aria-expanded", String(!sheetCollapsed));
+    h.setAttribute("aria-label", sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan");
   }
 }
-function stopSheetAnim() {                                 // interruption : on reprend là où le panneau EST à l'écran
-  if (!sheetAnim) return;
-  const y = new DOMMatrixReadOnly(getComputedStyle($("panel")).transform).m42;
-  sheetAnim.cancel(); sheetAnim = null;
-  sheetY = y; paintSheet(y);
-}
-function snapTo(stop, v = 0, duration = null) {
-  stopSheetAnim();
-  startMoving();
-  S.sheet = stop;
-  const to = sheetStops()[stop], from = sheetY ?? to;
-  sheetY = to; paintSheet(to);                             // position finale posée ; l'animation la recouvre en jouant
-  const done = () => { settle(); if (S.routes.length && stop !== "full") fitRoute(); };
-  if (Math.abs(to - from) < 1 || matchMedia("(prefers-reduced-motion: reduce)").matches) return done();
-  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
-  sheetAnim = $("panel").animate([{transform: `translateY(${from}px)`}, {transform: `translateY(${to}px)`}],
-    {duration: duration ?? snapDuration(to - from, v), easing});
-  sheetAnim.onfinish = () => { sheetAnim = null; done(); };
-}
-const atTop = () => S.sheet === "full";                    // panneau en haut de l'écran
-const listScrolls = () => $("panel").scrollHeight > $("panel").clientHeight + 2;
-function setSheet() { snapTo("mid"); }                   // (appels existants : le panneau ne se plie plus)
-function layoutSheet() {
-  const p = $("panel");
-  if (!sheetActive()) {
-    stopSheetAnim();
-    sheetMoving = false;
-    p.style.transform = p.style.overflowY = p.style.touchAction = p.style.height = "";
-    p.classList.remove("collapsed");
-    // panneau fixe : les commandes de la carte restent au-dessus de lui
-    document.documentElement.style.setProperty("--sheet-h", S.screen === "route" && !sideLayout() ? `${p.offsetHeight}px` : "0px");
-    if ($("sheetScrim")) $("sheetScrim").style.opacity = "0";
-    sheetY = null;
-    return;
-  }
-  if (drag || sheetAnim) return;                           // on ne coupe jamais un geste ou un calage en cours
-  if (!(S.sheet in sheetStops())) S.sheet = "mid";
-  settle();
-}
-function dragStart(y, id, onHandle, onHead) {
-  stopSheetAnim();
-  drag = {y0: y, id, onHandle, onHead, from: S.sheet, live: false, samples: []};
-}
-function dragMove(y, target) {
-  const moved = y - drag.y0;
-  if (!drag.live) {
-    if (Math.abs(moved) < 5) return;
-    drag.live = true;
-    startMoving();
-    drag.start = sheetY;
-    drag.samples.push({t: performance.now(), y: sheetY});
-    document.body.classList.add("dragging");
-    if (drag.id !== "touch") target?.setPointerCapture?.(drag.id);
-  }
-  // entre « plein » et « normal », jamais au-delà (ni bande noire en haut, ni pliage vers le bas)
-  const ys = sheetStops(), next = Math.max(ys.full, Math.min(ys.mid, drag.start + moved));
-  drag.samples.push({t: performance.now(), y: next});
-  if (drag.samples.length > 12) drag.samples.shift();
-  setSheetY(next);
-}
-function dragEnd() {
-  const d = drag;
-  drag = null;
+function setSheet(collapsed) {
+  sheetCollapsed = collapsed;
   document.body.classList.remove("dragging");
-  if (!d.live) {                                           // simple toucher : la poignée bascule
-    if (d.onHandle) snapTo(S.sheet === "full" ? "mid" : "full");
+  layoutSheet();
+  if (S.routes.length) setTimeout(fitRoute, 320);          // recadrer une fois le panneau en place
+}
+let drag = null;
+$("panel").addEventListener("pointerdown", e => {
+  const head = e.target.closest(".sheet-head");
+  if (!head || S.screen !== "route" || sideLayout() || (e.target.closest("button") && !e.target.closest("#sheetHandle"))) return;
+  drag = {y: e.clientY, start: sheetCollapsed ? sheetRange() : 0, moved: 0, t: performance.now(), id: e.pointerId,
+          onHandle: !!e.target.closest("#sheetHandle")};
+  head.setPointerCapture?.(e.pointerId);
+});
+$("panel").addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.moved = e.clientY - drag.y;
+  if (Math.abs(drag.moved) < 4) return;
+  document.body.classList.add("dragging");
+  layoutSheet(drag.start + drag.moved);
+});
+const endDrag = e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const {moved, start, t, onHandle} = drag, max = sheetRange();
+  drag = null;
+  if (Math.abs(moved) < 6) {                              // simple toucher : la poignée bascule, le titre rouvre
+    setSheet(onHandle ? !sheetCollapsed : false);
     return;
   }
-  const v = velocity(d.samples);
-  snapTo(chooseStop(sheetY, v, sheetStops(), d.from), v);
-}
-// Le panneau se tire par son titre ; ailleurs aussi tant que sa liste ne défile pas (sinon, c'est la liste)
-$("panel").addEventListener("pointerdown", e => {
-  if (!sheetActive() || drag || e.button > 0) return;
-  if (e.target.closest("input, textarea, select")) return;
-  const onHead = !!e.target.closest(".sheet-head");
-  if (!onHead && (atTop() || listScrolls())) return;
-  dragStart(e.clientY, e.pointerId, !!e.target.closest("#sheetHandle"), onHead);
-});
-$("panel").addEventListener("pointermove", e => { if (drag && e.pointerId === drag.id) dragMove(e.clientY, e.target); });
-const endPointer = e => { if (drag && e.pointerId === drag.id) dragEnd(); };
-$("panel").addEventListener("pointerup", endPointer);
-$("panel").addEventListener("pointercancel", endPointer);
-// Panneau plein, liste tout en haut : tirer vers le bas le ramène à sa place (au lieu de faire « rebondir » la liste)
-$("panel").addEventListener("touchstart", e => {
-  pull = sheetActive() && atTop() && !e.target.closest(".sheet-head") ? {y: e.touches[0].clientY} : null;
-}, {passive: true});
-$("panel").addEventListener("touchmove", e => {
-  if (!pull) return;
-  const y = e.touches[0].clientY, p = $("panel");
-  if (!drag) {
-    if (p.scrollTop > 0 || y <= pull.y) { if (y < pull.y) pull = null; return; }   // vers le haut : la liste défile
-    e.preventDefault();                                    // vers le bas, en haut de la liste : c'est le panneau
-    if (y - pull.y < 5) return;
-    dragStart(pull.y, "touch", false, false);
-  }
-  e.preventDefault();
-  dragMove(y);
-}, {passive: false});
-const endTouch = () => { pull = null; if (drag?.id === "touch") dragEnd(); };
-$("panel").addEventListener("touchend", endTouch);
-$("panel").addEventListener("touchcancel", endTouch);
+  const speed = moved / Math.max(1, performance.now() - t);       // px/ms : un geste vif suffit
+  setSheet(speed > 0.25 ? true : speed < -0.25 ? false : start + moved > max / 2);
+};
+$("panel").addEventListener("pointerup", endDrag);
+$("panel").addEventListener("pointercancel", endDrag);
 addEventListener("resize", () => layoutSheet());
 // ---- Authentification (js/auth.js) ----------------------------------------------------------------
 const AUTH_SCREENS = {welcome: screenWelcome, login: screenLogin, signup: screenSignup};
@@ -1720,10 +1546,8 @@ function renderNavLive() {
   renderHud();
   const n = S.nav;
   if (!n) return;
-  // Règles de l'icône « ma position » : js/navmarker.js (sur le tracé quand on suit l'itinéraire, testées)
-  const shown = markerPosition(n, posAt);
+  const shown = (n.phase === "approach" || n.away || n.offRoute) && n.real ? n.real : n.here;   // N°15 : pas accroché pendant l'approche
   n.marker?.setLatLng([shown.lat, shown.lon]);
-  n.marker?.getElement()?.querySelector(".puck")?.classList.toggle("stale", shown.stale);
   if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); refreshTransit(); announceStops(); }
 }
 // N°16 : le tracé s'allume sur 30 m devant soi ; déjà parcouru = gris ; la suite reste visible, atténuée
@@ -1807,7 +1631,7 @@ function closeRoutes() {
   render();
 }
 function chooseDest(place) {
-  if (S.sheet !== "full") S.sheet = "mid";               // les itinéraires doivent se voir
+  sheetCollapsed = false;                                 // les itinéraires doivent se voir
   // « Jusqu'à la bonne porte » : on vise l'entrée accessible du lieu quand elle est connue (js/arrival.js)
   const {entrance: ent, note} = net && !place.gps ? entranceFor(net, place) : {entrance: null, note: ""};
   const viaEntrance = ent && ent.d > 8;
@@ -1922,8 +1746,8 @@ function bind() {
   // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
   on("qClear", "onmousedown", e => e.preventDefault());
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
-  on("q", "onfocus", () => { if (sheetActive() && S.sheet !== "full") snapTo("full"); });   // clavier : place aux suggestions
-  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); snapTo(S.sheet === "full" ? "mid" : "full"); } });
+  on("q", "onfocus", () => { if (sheetCollapsed) setSheet(false); });
+  on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
   bindPlaces(document);
   on("favToggle", "onclick", toggleFavorite);
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
@@ -1995,11 +1819,7 @@ $("hud").addEventListener("pointerdown", () => { pressTimer = setTimeout(() => {
 $("hud").addEventListener("pointerup", () => { if (pressTimer) { clearTimeout(pressTimer); S.hud = false; renderHud(); } });
 
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; if (S.screen === "profile") render(); });
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" || !S.nav) return;
-  requestWakeLock();
-  restartGps();                                           // iPhone : le suivi GPS ne reprend pas toujours seul
-});
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.nav) requestWakeLock(); });
 if ("serviceWorker" in navigator) {
   // Une nouvelle version prend la main : on recharge une fois pour l'afficher (sauf pendant un guidage)
   const hadController = !!navigator.serviceWorker.controller;
@@ -2015,29 +1835,7 @@ const loaderStart = performance.now();
 function hideLoader() {
   const l = $("loader");
   if (!l) return;
-  setTimeout(() => { l.classList.add("done"); appIntro(); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
-}
-// Ouverture de l'appli, pendant que l'écran de chargement s'efface : la carte se pose (léger zoom arrière), le
-// panneau monte du bas jusqu'à sa place, puis son contenu apparaît élément par élément. Rien si le téléphone
-// demande de réduire les animations.
-function appIntro() {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
-  const panel = $("panel");
-  if (getComputedStyle($("map")).visibility !== "hidden")
-    $("map").animate([{opacity: 0.2, transform: "scale(1.08)"}, {opacity: 1, transform: "scale(1)"}], {duration: 1100, easing});
-  if (sheetActive()) {
-    startMoving();
-    sheetY = panel.offsetHeight;                           // part de sous l'écran…
-    paintSheet(sheetY);
-    snapTo(S.sheet, 0, 750);                               // …et monte jusqu'à son point d'arrêt
-  } else panel.animate([{opacity: S.screen === "route" ? 1 : 0, transform: S.screen === "route" ? "translateY(100%)" : "translateY(40px)"},
-                        {opacity: 1, transform: "none"}], {duration: S.screen === "route" ? 750 : 650, easing});
-  [...panel.children].slice(0, 8).forEach((el, i) => el.animate(
-    [{opacity: 0, transform: "translateY(16px)"}, {opacity: 1, transform: "none"}],
-    {duration: 520, delay: 220 + i * 80, easing, fill: "backwards"}));
-  for (const b of [$("mapSettings"), $("mapClose")]) b?.animate([{opacity: 0, transform: "scale(.6)"}, {opacity: 1, transform: "none"}],
-    {duration: 450, delay: 500, easing, fill: "backwards"});
+  setTimeout(() => { l.classList.add("done"); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
 }
 fetch(ZONE.data).then(r => r.json()).then(data => {
   net = loadNetwork(data);
