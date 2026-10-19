@@ -9,6 +9,7 @@ import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, 
 import {icon} from "./icons.js";
 import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
 import {chooseStop, snapDuration, velocity} from "./sheet.js";
+import {markerPosition} from "./navmarker.js";
 import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {arrivalFiche, arrivalSpeech, entranceFor, loadAcces} from "./arrival.js";
@@ -1075,7 +1076,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "77";
+const APP_VERSION = "78";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1719,14 +1720,10 @@ function renderNavLive() {
   renderHud();
   const n = S.nav;
   if (!n) return;
-  // L'icône suit la VRAIE position GPS. Sur l'itinéraire, à quelques mètres du tracé, elle se pose sur le tracé
-  // au point le plus proche (et non sur la progression, qui ne fait qu'avancer : l'icône restait bloquée quand
-  // on s'arrêtait, reculait ou que le GPS hésitait). Sans position récente : grisée, à la dernière place connue.
-  const fresh = n.real && Date.now() - n.real.at < 15000;
-  const onLine = n.phase === "route" && !n.away && !n.offRoute && n.gap <= Math.max(6, Math.min(12, n.real?.acc ?? 0));
-  const shown = !fresh ? (n.real || n.here) : onLine ? posAt(n.gapAlong ?? n.pos) : n.real;
+  // Règles de l'icône « ma position » : js/navmarker.js (sur le tracé quand on suit l'itinéraire, testées)
+  const shown = markerPosition(n, posAt);
   n.marker?.setLatLng([shown.lat, shown.lon]);
-  n.marker?.getElement()?.querySelector(".puck")?.classList.toggle("stale", !fresh);
+  n.marker?.getElement()?.querySelector(".puck")?.classList.toggle("stale", shown.stale);
   if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); refreshTransit(); announceStops(); }
 }
 // N°16 : le tracé s'allume sur 30 m devant soi ; déjà parcouru = gris ; la suite reste visible, atténuée
