@@ -1050,7 +1050,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "71";
+const APP_VERSION = "72";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1549,7 +1549,7 @@ function sheetState() {                                    // ce qui dépend de 
     h.setAttribute("aria-label", S.sheet === "collapsed" ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan");
   }
 }
-function snapTo(stop, v = 0) {
+function snapTo(stop, v = 0, duration = null) {
   stopSheetAnim();
   S.sheet = stop;
   sheetState();
@@ -1559,7 +1559,7 @@ function snapTo(stop, v = 0) {
   if (Math.abs(to - from) < 1 || matchMedia("(prefers-reduced-motion: reduce)").matches) return done();
   const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
   sheetAnim = $("panel").animate([{transform: `translateY(${from}px)`}, {transform: `translateY(${to}px)`}],
-    {duration: snapDuration(to - from, v), easing});
+    {duration: duration ?? snapDuration(to - from, v), easing});
   sheetAnim.onfinish = () => { sheetAnim = null; done(); };
 }
 function setSheet(collapsed) { snapTo(collapsed ? "collapsed" : "mid"); }   // (appels existants)
@@ -1593,7 +1593,8 @@ function dragMove(y, target) {
     $("panel").classList.remove("collapsed");              // le contenu apparaît dès qu'on tire
     if (drag.id !== "touch") target?.setPointerCapture?.(drag.id);
   }
-  const ys = sheetStops(), next = rubber(drag.start + moved, ys.full, ys.collapsed);
+  // jamais au-dessus de « plein » (on voyait une bande noire sous le panneau) ; élastique seulement vers le bas
+  const ys = sheetStops(), next = Math.max(ys.full, rubber(drag.start + moved, ys.full, ys.collapsed));
   drag.samples.push({t: performance.now(), y: next});
   if (drag.samples.length > 12) drag.samples.shift();
   setSheetY(next);
@@ -1953,7 +1954,27 @@ const loaderStart = performance.now();
 function hideLoader() {
   const l = $("loader");
   if (!l) return;
-  setTimeout(() => { l.classList.add("done"); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
+  setTimeout(() => { l.classList.add("done"); appIntro(); setTimeout(() => l.remove(), 500); }, Math.max(0, 1200 - (performance.now() - loaderStart)));
+}
+// Ouverture de l'appli, pendant que l'écran de chargement s'efface : la carte se pose (léger zoom arrière), le
+// panneau monte du bas jusqu'à sa place, puis son contenu apparaît élément par élément. Rien si le téléphone
+// demande de réduire les animations.
+function appIntro() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const easing = getComputedStyle(document.documentElement).getPropertyValue("--ease-sheet").trim() || "cubic-bezier(.22, 1, .36, 1)";
+  const panel = $("panel");
+  if (getComputedStyle($("map")).display !== "none")
+    $("map").animate([{opacity: 0.2, transform: "scale(1.08)"}, {opacity: 1, transform: "scale(1)"}], {duration: 1100, easing});
+  if (sheetActive()) {
+    sheetY = panel.offsetHeight;                           // part de sous l'écran…
+    paintSheet(sheetY);
+    snapTo(S.sheet, 0, 750);                               // …et monte jusqu'à son point d'arrêt
+  } else panel.animate([{opacity: 0, transform: "translateY(40px)"}, {opacity: 1, transform: "none"}], {duration: 650, easing});
+  [...panel.children].slice(0, 8).forEach((el, i) => el.animate(
+    [{opacity: 0, transform: "translateY(16px)"}, {opacity: 1, transform: "none"}],
+    {duration: 520, delay: 220 + i * 80, easing, fill: "backwards"}));
+  for (const b of [$("mapSettings"), $("mapClose")]) b?.animate([{opacity: 0, transform: "scale(.6)"}, {opacity: 1, transform: "none"}],
+    {duration: 450, delay: 500, easing, fill: "backwards"});
 }
 fetch(ZONE.data).then(r => r.json()).then(data => {
   net = loadNetwork(data);
