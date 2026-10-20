@@ -893,4 +893,20 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .door-card .btn.small { width: auto; flex: none; min-height: 38px; padding: 0 12px; font-size: 14px; }
 body.picking-door #map { cursor: crosshair; }
 body.picking-door #panel { opacity: .55; pointer-events: none; }
-.pin-erp-ok { background: #1C7A4D; }
+
+/* Repères de la carte : équipements d'accessibilité (carré bleu PMR) et établissements (rond de couleur) */
+.mk { position: relative; width: 30px; height: 30px; display: grid; place-items: center; color: #fff; border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(15, 37, 55, .35); box-sizing: border-box; }
+.mk > .i { width: 16px; height: 16px; stroke-width: 2.2; }
+.mk-erp { border-radius: 50%; background: var(--c); }
+.mk-infra { border-radius: 8px; background: #1D5FAF; }
+.mk-mini { width: 22px; height: 22px; border-radius: 6px; border-width: 1.5px; }
+.mk-mini > .i { width: 12px; height: 12px; }
+.mk-acc { position: absolute; right: -6px; bottom: -6px; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff;
+  display: grid; place-items: center; color: #fff; font: 900 10px/1 system-ui, sans-serif; box-sizing: border-box; }
+.mk-acc .i { width: 9px; height: 9px; stroke-width: 4; }
+.mk-acc.ok { background: #0E9F5B; }
+.mk-acc.steps { background: #B42318; }
+.mk-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--c); border: 2px solid #fff; box-sizing: border-box;
+  box-shadow: 0 1px 3px rgba(15, 37, 55, .45); }
+.mk-transit { border-radius: 50%; background: var(--c); }

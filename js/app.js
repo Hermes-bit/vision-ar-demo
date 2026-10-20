@@ -11,6 +11,7 @@ import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
 import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {arrivalFiche, arrivalSpeech, entranceFor, erpList, loadAcces} from "./arrival.js";
+import {entranceAccess, erpCategory} from "./categories.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -299,42 +300,104 @@ const layers = {progress: L.layerGroup().addTo(map), transit: L.layerGroup().add
 
 const pin = (ic, cls) => L.divIcon({className: "", html: `<div class="pin ${cls}">${icon(ic)}</div>`,
   iconSize: [34, 42], iconAnchor: [17, 40], popupAnchor: [0, -36]});
-// Établissements recevant du public (Acceslibre) : repère « porte » avec leur accessibilité et « M'y guider »
+// ---- Repères de la carte : équipements d'accessibilité et établissements -----------------------------------
+// Équipements (entrées accessibles, toilettes, ascenseurs, places PMR…) : carré bleu, comme la signalétique PMR.
+// Établissements (Acceslibre) : rond à la couleur de leur famille, pictogramme de leur activité (js/categories.js)
+// et pastille d'accessibilité de l'entrée (✓ plain-pied, ! marches). Pour rester lisible :
+//  - zoom 16 : les établissements sont de simples points de couleur ; zoom 17 et plus : leurs pictogrammes ;
+//  - deux repères qui se chevauchent : le moins important devient un point (il reprend sa place en zoomant) ;
+//  - itinéraire affiché : la carte se met au service du trajet. Établissements masqués, seuls les équipements
+//    à moins de 30 m du trajet restent (en petit), et seulement les arrêts sur le trajet ou à ses extrémités.
+const poiItems = [];                                         // {m, lat, lon, kind: "infra" | "erp", rank, mode, icons}
+const mkIcon = (html, size) => L.divIcon({className: "", html, iconSize: [size, size], iconAnchor: [size / 2, size / 2], popupAnchor: [0, -size / 2 - 2]});
+function addPoi(m, lat, lon, kind, rank, icons) {
+  poiItems.push({m, lat, lon, kind, rank, icons, mode: null});
+  poiItems.sort((x, y) => x.rank - y.rank);
+}
 function drawErps() {
   const list = erpList();
   if (!list.length) return setTimeout(drawErps, 1500);        // fiches pas encore chargées
-  for (const e of list) {
-    const [name, , lat, lon, f = {}] = e;
-    const ok = f.entree_plain_pied || f.cheminement_ext_plain_pied;
-    const info = [ok ? "Entrée de plain-pied" : f.entree_plain_pied === false ? "Entrée avec marche(s)" : "",
-      f.entree_largeur_mini ? `Porte de ${Math.round(f.entree_largeur_mini)} cm` : "", f.sanitaires_adaptes ? "Toilettes adaptées" : ""].filter(Boolean);
-    L.marker([lat, lon], {icon: pin("door-open", ok ? "pin-poi pin-erp-ok" : "pin-poi pin-erp"), title: name})
-      .bindPopup(() => { const fr = whereAmI(); return guidePopup(name, `<div class="pp-type">${icon("accessibility")} Établissement (Acceslibre)</div>${
-        info.length ? `<div class="pp-src">${esc(info.join(" · "))}</div>` : ""}`, fr ? haversineM(fr.lat, fr.lon, lat, lon) : null); }, {maxWidth: 290})
-      .on("popupopen", ev => { ev.popup.getElement().querySelector(".pp-guide").onclick = () => guideToPoint(name, lat, lon); })
-      .addTo(layers.pois);
+  for (const [name, activity, lat, lon, f = {}] of list) {
+    const c = erpCategory(activity), acc = entranceAccess(f);
+    const info = [acc === "ok" ? "Entrée de plain-pied" : acc === "steps" ? "Entrée avec marche(s)" : "Accès de l'entrée non renseigné",
+      f.entree_largeur_mini ? `porte de ${Math.round(f.entree_largeur_mini)} cm` : "", f.sanitaires_adaptes ? "toilettes adaptées" : ""].filter(Boolean);
+    const badge = acc ? `<b class="mk-acc ${acc}">${acc === "ok" ? icon("check") : "!"}</b>` : "";
+    const icons = {full: mkIcon(`<div class="mk mk-erp" style="--c:${c.color}">${icon(c.icon)}${badge}</div>`, 30),
+      dot: mkIcon(`<div class="mk-dot" style="--c:${c.color}"></div>`, 12)};
+    const m = L.marker([lat, lon], {icon: icons.full, title: `${name} · ${activity}`, riseOnHover: true})
+      .bindPopup(() => { const fr = whereAmI(); return guidePopup(name, `<div class="pp-type" style="color:${c.color}">${icon(c.icon)} ${esc(activity)}</div>
+        <div class="pp-src">${esc(info.join(" · "))}</div>`, fr ? haversineM(fr.lat, fr.lon, lat, lon) : null); }, {maxWidth: 290})
+      .on("popupopen", ev => { ev.popup.getElement().querySelector(".pp-guide").onclick = () => guideToPoint(name, lat, lon); });
+    addPoi(m, lat, lon, "erp", acc === "ok" ? 1 : 2, icons);
+  }
+  schedulePoi();
+}
+// Le trajet passe-t-il à moins de maxM mètres de ce point ? (réponse gardée tant que le trajet ne change pas)
+const nearCache = new WeakMap();
+function nearRoute(route, key, lat, lon, maxM) {
+  let c = nearCache.get(route);
+  if (!c) nearCache.set(route, c = new Map());
+  if (!c.has(key)) {
+    const g = route.geometry, k = Math.cos(lat * Math.PI / 180) * 111320;
+    let best = Infinity;
+    for (let i = 1; i < g.length && best > maxM; i++) {
+      const ax = (g[i - 1].lon - lon) * k, ay = (g[i - 1].lat - lat) * 111320, bx = (g[i].lon - lon) * k, by = (g[i].lat - lat) * 111320;
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy, t = L2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / L2)) : 0;
+      best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+    }
+    c.set(key, best <= maxM);
+  }
+  return c.get(key);
+}
+const shownRoute = () => S.screen === "route" && S.dest && S.routes.length ? S.routes[S.selected] || S.routes[0] : null;
+let poiFrame = 0;
+function schedulePoi() { cancelAnimationFrame(poiFrame); poiFrame = requestAnimationFrame(updatePoiMarkers); }
+function updatePoiMarkers() {
+  // (itinéraire affiché : les équipements du trajet restent visibles dès le zoom 14, la vue d'ensemble du trajet)
+  const z = map.getZoom(), route = shownRoute(), show = z >= (route ? 14 : 16) && S.screen !== "nav";
+  document.body.classList.toggle("zoomed-out", !show);
+  if (!show) { layers.pois.remove(); return; }
+  layers.pois.addTo(map);
+  const view = map.getBounds().pad(0.15), taken = [];
+  for (const p of poiItems) {
+    let mode = "hidden";
+    if (route) mode = p.kind === "infra" && nearRoute(route, p, p.lat, p.lon, 30) ? "mini" : "hidden";
+    else if (view.contains([p.lat, p.lon])) {
+      if (p.kind === "erp" && z < 17) mode = "dot";
+      else {
+        const pt = map.latLngToContainerPoint([p.lat, p.lon]);
+        if (taken.some(q => Math.abs(q.x - pt.x) < 28 && Math.abs(q.y - pt.y) < 28)) mode = p.kind === "erp" ? "dot" : "full";
+        else { mode = "full"; taken.push(pt); }
+      }
+    }
+    if (p.mode === mode) continue;
+    if (mode === "hidden") layers.pois.removeLayer(p.m);
+    else {
+      p.m.setIcon(p.icons[mode]);
+      p.m.setZIndexOffset(mode === "dot" ? -200 : p.kind === "infra" ? 300 : 100);
+      if (!p.mode || p.mode === "hidden") layers.pois.addLayer(p.m);
+    }
+    p.mode = mode;
   }
 }
+map.on("zoomend moveend", () => schedulePoi());
 function drawNetwork() {
   // Le réseau piéton et ses pentes servent au calcul des itinéraires (base de données) : ils ne sont plus dessinés
   for (const [kind, lat, lon, name, status] of net.pois) {
     if (!POI[kind]) continue;
     const label = name ? `${POI[kind][1]} · ${name}` : POI[kind][1];
-    L.marker([lat, lon], {icon: pin(POI[kind][0], "pin-poi"), title: POI[kind][1]})
-      .bindPopup(() => { const f = whereAmI(); return guidePopup(POI[kind][1], `${name ? esc(name) : ""}${
+    const icons = {full: mkIcon(`<div class="mk mk-infra">${icon(POI[kind][0])}</div>`, 30),
+      mini: mkIcon(`<div class="mk mk-infra mk-mini">${icon(POI[kind][0])}</div>`, 22)};
+    const m = L.marker([lat, lon], {icon: icons.full, title: label, riseOnHover: true})
+      .bindPopup(() => { const f = whereAmI(); return guidePopup(POI[kind][1], `<div class="pp-type" style="color:#1D5FAF">${icon(POI[kind][0])} Équipement d'accessibilité</div>${name ? esc(name) : ""}${
         kind === "elevator" ? `<div class="pp-src">État : ${{ok: "en service", out_of_order: "en panne"}[status] || "inconnu"}</div>` : ""}`,
         f ? haversineM(f.lat, f.lon, lat, lon) : null); }, {maxWidth: 290})
-      .on("popupopen", e => { e.popup.getElement().querySelector(".pp-guide").onclick = () => guideToPoint(label, lat, lon); })
-      .addTo(layers.pois);
+      .on("popupopen", e => { e.popup.getElement().querySelector(".pp-guide").onclick = () => guideToPoint(label, lat, lon); });
+    addPoi(m, lat, lon, "infra", 0, icons);
   }
   drawErps();
   L.geoJSON(net.zone.boundary, {style: {color: C.primary, weight: 2, fill: false, dashArray: "6 8", opacity: .7}, interactive: false}).addTo(map);
-  syncLayers = () => {
-    const show = map.getZoom() >= 16 && S.screen !== "nav";
-    show ? layers.pois.addTo(map) : layers.pois.remove();
-    document.body.classList.toggle("zoomed-out", !show);
-  };
-  map.on("zoomend", syncLayers);
+  syncLayers = schedulePoi;                                // (appelé à chaque affichage : écran, itinéraire)
   syncLayers();
 }
 // L'obstacle n'est plus là (ou signalé par erreur) : on le retire, et l'itinéraire est recalculé sans lui
@@ -345,6 +408,11 @@ const transitIcon = mode => {
   const m = MODE[mode] || MODE.bus;
   return L.divIcon({className: "", html: `<div class="pin pin-transit" style="background:${m.color}">${icon(m.icon)}</div>${m.badge ? `<b class="pin-badge" style="background:${m.color}">${m.badge}</b>` : ""}`,
     iconSize: [34, 42], iconAnchor: [17, 40], popupAnchor: [0, -36]});
+};
+const transitMini = mode => {
+  const m = MODE[mode] || MODE.bus;
+  return L.divIcon({className: "", html: `<div class="mk mk-mini mk-transit" style="--c:${m.color}">${icon(m.icon)}</div>`,
+    iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -13]});
 };
 const chipInk = hex => {                                   // texte lisible sur la couleur de la ligne
   const c = /^#?([0-9a-f]{6})$/i.exec(hex || "");
@@ -388,12 +456,17 @@ function refreshTransit(force = false) {
     list = transit.map(st => [st, haversineM(c.lat, c.lon, st.lat, st.lon)]).filter(([, d]) => d <= 200);
     list.sort((a, b) => a[1] - b[1]); list = list.slice(0, 8);
   } else if (S.screen === "route" && map.getZoom() >= 15) {
-    const b = map.getBounds(), c = map.getCenter();
-    list = transit.filter(st => b.contains([st.lat, st.lon])).map(st => [st, haversineM(c.lat, c.lng, st.lat, st.lon)]);
+    // itinéraire affiché : seulement les arrêts sur le trajet (30 m) ou près du départ et de l'arrivée (150 m)
+    const b = map.getBounds(), c = map.getCenter(), route = shownRoute();
+    const useful = st => !route || nearRoute(route, st, st.lat, st.lon, 30) ||
+      haversineM(st.lat, st.lon, S.origin.lat, S.origin.lon) < 150 || haversineM(st.lat, st.lon, S.dest.lat, S.dest.lon) < 150;
+    list = transit.filter(st => b.contains([st.lat, st.lon]) && useful(st)).map(st => [st, haversineM(c.lat, c.lng, st.lat, st.lon)]);
     list.sort((a, b2) => a[1] - b2[1]); list = list.slice(0, 30);
   }
+  // itinéraire affiché : arrêts en petites pastilles rondes, pour ne pas masquer le tracé
+  const small = S.screen === "route" && !!shownRoute();
   for (const [st] of list)
-    L.marker([st.lat, st.lon], {icon: transitIcon(st.mode), title: `${(MODE[st.mode] || MODE.bus).label} ${st.name}`, keyboard: true})
+    L.marker([st.lat, st.lon], {icon: small ? transitMini(st.mode) : transitIcon(st.mode), title: `${(MODE[st.mode] || MODE.bus).label} ${st.name}`, keyboard: true})
       .bindPopup(() => transitPopup(st), {maxWidth: 290})
       .on("popupopen", e => { e.popup.getElement().querySelector(".pp-guide").onclick = () => guideToStop(st); })
       .addTo(layers.transit);
@@ -441,6 +514,7 @@ function drawReports() {
   }
 }
 function drawRoutes() {
+  schedulePoi();
   drawRealPosition();
   layers.routes.clearLayers();
   layers.marks.clearLayers();
@@ -1157,7 +1231,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "87";
+const APP_VERSION = "88";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
