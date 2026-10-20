@@ -748,6 +748,7 @@ function frame() {
     }
     // pointillés vers l'itinéraire : seulement si la position est connue à 8 m près (sinon ils mentiraient)
     const accNow = precision(s);
+    if (s.st.final && s.dest && !recal && compassOk()) drawJoin(cam, v.here, s.dest);   // pointillés jusqu'à la porte
     if (v.join && !s.st.arrived && !recal && compassOk() && (!compass || (accNow !== null && accNow <= 15))) drawJoin(cam, v.here, v.join);
     drawAnchors(cam, s, observer(s, compass ? null : v.here));
     drawDestination(cam, s, v.here);
@@ -836,17 +837,18 @@ function renderUi(s, heading, compass) {
   // le virage à venir est annoncé dessous ; à 25 m : « Tournez à gauche ».
   const turnSoon = st.toManeuver <= 25 && !vague;
   const upcoming = (TITLE[next.maneuver] || "Continuez tout droit");
-  const title = st.arrived ? "Vous êtes arrivé" : approach ? "Rejoignez l'itinéraire" : joining ? "Rejoignez l'itinéraire"
+  const title = st.arrived ? "Vous êtes arrivé" : st.final ? "Continuez jusqu'à l'adresse" : approach ? "Rejoignez l'itinéraire" : joining ? "Rejoignez l'itinéraire"
     : vague ? "Position approximative" : turnSoon || next.maneuver === "straight" ? upcoming : "Continuez tout droit";
   const manIcon = approach || joining ? "footprints" : st.arrived ? MAN_ICON.arrive
     : turnSoon ? MAN_ICON[next.maneuver] || "arrow-up" : vague ? "navigation" : "arrow-up";
-  const away = st.arrived ? "" : approach ? dist(s.nav.approachDist) : joining ? dist(s.nav.gap) : (vague ? "≈ " : "") + dist(st.toManeuver);
+  const away = st.arrived ? "" : st.final ? dist(st.toDest) : approach ? dist(s.nav.approachDist) : joining ? dist(s.nav.gap) : (vague ? "≈ " : "") + dist(st.toManeuver);
   const lowerUp = upcoming.charAt(0).toLowerCase() + upcoming.slice(1);
   // les pointillés ne sont dessinés que si la position est précise (≤ 8 m) : le texte dit la même chose que l'écran
   const dots = !compass || (acc !== null && acc <= 8 && compassOk());
   const subText = approach ? (dots ? "suivez les pointillés jusqu'au trottoir : le trajet commence là" : "le départ du trajet est indiqué sur le plan")
     : joining ? (dots ? `suivez les pointillés jusqu'à l'itinéraire, puis ${lowerUp}` : `revenez vers l'itinéraire indiqué sur le plan, puis ${lowerUp}`)
     : st.arrived ? sub
+    : st.final ? "suivez les pointillés jusqu'à la porte"
     : vague ? `prochain virage : ${lowerUp}, dans environ ${dist(st.toManeuver)}`
     : turnSoon ? sub : `dans ${dist(st.toManeuver)} : ${lowerUp}${next.street ? " · " + next.street : ""}`;
   // N°8 : « Données à confirmer » ne s'affiche plus pendant le guidage (il reste sur la fiche de l'itinéraire)
@@ -889,6 +891,7 @@ function renderUi(s, heading, compass) {
       <button class="pill stop" data-act="ask-stop" aria-label="Arrêter le guidage">${icon("x")}<span>Arrêter</span></button>
       <button class="round" data-act="voice" aria-label="${s.voice ? "Couper la voix" : "Activer la voix"}">${icon(s.voice ? "volume-2" : "volume-x")}<span aria-hidden="true">${s.voice ? "Son" : "Muet"}</span></button>
     </nav>
+    ${st.arrived && s.nav.arrivedAt && !s.nav.stayed && !sheet ? arrivalPanel(s) : ""}
     ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : sheet === "stop" ? stopSheet() : reportSheet()}</section>` : ""}`;
   const ui = root.querySelector(".ar-ui");
   if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
@@ -900,6 +903,17 @@ function renderUi(s, heading, compass) {
   // carte agrandie : elle s'arrête sous la consigne, pour que la poignée reste visible et attrapable
   const topH = `${Math.round(root.querySelector(".top").getBoundingClientRect().bottom)}px`;
   if (root.style.getPropertyValue("--top-h") !== topH) root.style.setProperty("--top-h", topH);
+}
+// Écran de fin de trajet : destination, durée et distance, puis Terminer (sortie en douceur) ou Rester
+function arrivalPanel(s) {
+  const n = s.nav, mins = Math.max(1, Math.round((n.arrivedAt - (n.startedAt || n.arrivedAt)) / 60000));
+  return `<section class="arrive-panel" role="dialog" aria-labelledby="arrT">
+    <div class="arrive-flag">${icon("flag")}</div>
+    <h3 id="arrT">Vous êtes arrivé</h3>
+    <p class="arrive-dest">${esc(s.dest?.label || "")}</p>
+    <p class="arrive-sum">${n.startedAt ? `${mins} min · ` : ""}${dist(n.total)} parcourus</p>
+    <div class="arrive-actions"><button class="btn soft" data-act="arr-stay">Rester ici</button>
+      <button class="btn dark" data-act="arr-end">${icon("check")} Terminer</button></div></section>`;
 }
 // Bord du dôme : une seule ellipse sert à découper la carte, à tracer l'anneau et à placer le « N »
 function domeEdgeY(x) {
@@ -1021,6 +1035,8 @@ function onAction(e) {
   else if (act === "report") { sheet = "report"; sheetMessage = null; }
   else if (act === "close-sheet") sheet = null;
   else if (act === "map") setMapFull(!mapFull);
+  else if (act === "arr-end") { api.endSoftly?.(); return; }
+  else if (act === "arr-stay") { api.stay?.(); lastUi = ""; return; }
   else if (act === "gps-help") { api.locationHelp?.(); return; }
   else if (act === "hud") { sheet = null; api.openHud(); }
   else if (act === "voice") api.toggleVoice();

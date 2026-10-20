@@ -444,8 +444,12 @@ function drawRoutes() {
     L.polyline(ll, {color: C.routeCase, weight: nav ? 10 : 11, opacity: nav ? .35 : .9, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
     if (nav) gradientLine(ll).forEach(l => l.addTo(layers.routes));
     else L.polyline(ll, {color: C.route, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
+    // fin du trajet -> porte : pointillés, comme Google Maps
+    const e = sel.geometry.at(-1);
+    if (S.dest && haversineM(e.lat, e.lon, S.dest.lat, S.dest.lon) > 12)
+      L.polyline([[e.lat, e.lon], [S.dest.lat, S.dest.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.routes);
   }
-  if (!S.nav) L.marker([S.origin.lat, S.origin.lon], {icon: L.divIcon({className: "", html: '<div class="start-dot"></div>', iconSize: [24, 24]}),
+  if (!S.nav && !(S.origin.gps && hereMarker)) L.marker([S.origin.lat, S.origin.lon], {icon: L.divIcon({className: "", html: '<div class="start-dot"></div>', iconSize: [24, 24]}),
     title: "Départ"}).addTo(layers.marks);
   if (S.dest) L.marker([S.dest.lat, S.dest.lon], {icon: pin("flag", "pin-dest"), title: "Arrivée"}).addTo(layers.marks);
   if (S.nav) {
@@ -582,6 +586,43 @@ function showOrigin() {
   b.setAttribute("aria-label", `Départ : ${S.origin.label}. Toucher pour changer`);
 }
 // Départ = « Ma position ». quiet : sans message d'attente, et sans écraser un départ choisi entre-temps
+// Point bleu « vous êtes ici » sur la carte de recherche et d'itinéraires, mis à jour en continu, avec un
+// cercle de précision. Seulement si la localisation est déjà autorisée (aucune demande surprise) ; arrêté
+// pendant le guidage (qui a son propre point) et quand l'appli passe en arrière-plan.
+let hereWatch = null, hereMarker = null, hereCircle = null, hereCentered = false;
+function centerAbovePanel(ll, zoom = 17) {
+  map.invalidateSize({pan: false});
+  const top = $("panel").getBoundingClientRect().top, visible = sideLayout() || top <= 0 ? innerHeight : top;
+  // point placé au milieu de la zone visible (au-dessus du panneau), et non au milieu de l'écran (caché dessous)
+  const shift = (innerHeight - visible) / 2;
+  const p = map.project(L.latLng(ll), zoom).add([0, shift]);
+  map.setView(map.unproject(p, zoom), zoom, {animate: false});
+}
+function syncHereDot() {
+  const want = S.screen === "route" && !S.nav && !document.hidden && !!navigator.geolocation;
+  if (!want) {
+    if (hereWatch !== null) { navigator.geolocation.clearWatch(hereWatch); hereWatch = null; }
+    hereMarker?.remove(); hereCircle?.remove(); hereMarker = hereCircle = null;
+    return;
+  }
+  if (hereWatch !== null) return;
+  const start = () => {
+    if (hereWatch !== null || S.screen !== "route" || S.nav) return;
+    hereWatch = navigator.geolocation.watchPosition(pos => {
+      const ll = [pos.coords.latitude, pos.coords.longitude], acc = Math.min(80, pos.coords.accuracy);
+      if (!hereMarker) {
+        hereCircle = L.circle(ll, {radius: acc, color: "#2F80ED", weight: 1, opacity: .4, fillColor: "#2F80ED", fillOpacity: .12, interactive: false}).addTo(map);
+        hereMarker = L.marker(ll, {icon: L.divIcon({className: "", html: '<div class="here-dot"></div>', iconSize: [22, 22]}),
+          interactive: false, keyboard: false, zIndexOffset: 900}).addTo(map);
+      } else { hereMarker.setLatLng(ll); hereCircle.setLatLng(ll).setRadius(acc); }
+      // première position, sans destination : la carte se centre sur vous, dans la partie visible au-dessus du panneau
+      if (!hereCentered && !S.dest && S.screen === "route") { hereCentered = true; centerAbovePanel(ll); }
+    }, () => {}, {enableHighAccuracy: true, maximumAge: 3000, timeout: 20000});
+  };
+  if (navigator.permissions?.query) navigator.permissions.query({name: "geolocation"}).then(p => { if (p.state === "granted") start(); }).catch(() => {});
+  if (S.originMode === "gps") start();                     // déjà autorisée (départ « Ma position » localisé)
+}
+document.addEventListener("visibilitychange", () => syncHereDot());
 function locateOrigin(quiet = false) {
   if (!navigator.geolocation) { if (!quiet) toast("La localisation n'est pas disponible sur cet appareil."); return; }
   if (!quiet) toast("Recherche de votre position…");
@@ -596,6 +637,7 @@ function locateOrigin(quiet = false) {
                    "Touchez « Départ » pour en choisir un autre.", 6000);
     }
     S.origin = p; S.originMode = "gps";
+    syncHereDot();
     if (S.screen === "route") S.dest ? computeRoute() : showOrigin();
   }, err => { if (quiet) return; if (err?.code === 1) locationHelp(); else toast("Position indisponible : touchez « Départ » pour choisir une adresse."); },
   {enableHighAccuracy: true, timeout: 15000, maximumAge: 20000});
@@ -663,7 +705,7 @@ function startNav(route, keepGps = false) {
            gpsInfo: prev?.gpsInfo || "", gpsStatus: prev?.gpsStatus || "", lastReroute: prev?.lastReroute || 0,
            said: new Set(), off: 0, back: 0, dHist: [], offRoute: false, away: false, gap: 0, gapAlong: 0, arrived: false,
            // N°15 : « approach » tant que le point de départ n'est pas atteint ; « route » ensuite
-           phase: "approach", approachDist: 0, quietStart: keepGps};
+           phase: "approach", approachDist: 0, quietStart: keepGps, startedAt: prev?.startedAt || Date.now()};
   S.nav.hazards = hazardsOn(S.nav);
   requestWakeLock();
 }
@@ -790,13 +832,20 @@ function navState() {
   for (let i = 0; i < steps.length - 1; i++) if (n.pos >= n.stepAt[i] - 0.5) idx = i;
   // Arrivée : fin de l'itinéraire ET vraie position proche de la fin (sinon un GPS en avance déclenchait trop tôt)
   const r = n.real, fresh = r && Date.now() - r.at < 15000, end = n.route.geometry.at(-1);
-  const near = !fresh || haversineM(r.lat, r.lon, end.lat, end.lon) <= Math.max(10, Math.min(r.acc, 25));
+  // Dernier bout à pied (comme Google Maps) : le réseau s'arrête souvent avant la porte (adresse au milieu d'un
+  // bâtiment, cour, allée non cartographiée). On ne dit « arrivé » qu'une fois près de l'ADRESSE ; entre la fin
+  // du tracé et la porte, des pointillés et « Continuez jusqu'à l'adresse ».
+  const dest = S.dest, lastLeg = dest ? haversineM(end.lat, end.lon, dest.lat, dest.lon) : 0, target = lastLeg > 12 ? dest : end;
+  const toDest = fresh && dest ? haversineM(r.lat, r.lon, dest.lat, dest.lon) : lastLeg;
+  const near = !fresh || haversineM(r.lat, r.lon, target.lat, target.lon) <= Math.max(10, Math.min(r.acc, lastLeg > 12 ? 20 : 25));
   const arrived = n.arrived || (n.phase !== "approach" && n.pos >= n.total - 3 && near);
+  const final = !arrived && lastLeg > 12 && n.phase !== "approach" && n.pos >= n.total - 3;
   const next = arrived ? steps.at(-1) : steps[idx + 1];
   const toManeuver = arrived ? 0 : Math.max(0, n.stepAt[idx + 1] - n.pos);
   const lower = next.text.charAt(0).toLowerCase() + next.text.slice(1);
   const spoken = arrived ? "Vous êtes arrivé" : toManeuver < 15 ? next.text : `Dans ${short(toManeuver)}, ${lower}`;
-  return {idx, next, toManeuver, remaining: Math.max(0, n.total - n.pos) + (n.phase === "approach" ? n.approachDist : 0), arrived, spoken};
+  return {idx, next, toManeuver, arrived, spoken, final, toDest, lastLeg,
+    remaining: Math.max(0, n.total - n.pos) + (n.phase === "approach" ? n.approachDist : 0) + (final ? toDest : lastLeg > 12 && !arrived ? lastLeg : 0)};
 }
 function announce() {
   const n = S.nav, st = navState();
@@ -816,6 +865,10 @@ function announce() {
     return;
   }
   if (n.phase === "approach") return;
+  if (st.final) {
+    if (!n.said.has("final")) { n.said.add("final"); say(`L'adresse est à ${Math.round(st.toDest)} mètres. Suivez les pointillés jusqu'à la porte.`, true); buzz("tick"); }
+    return;
+  }
   // « Données à confirmer » n'est pas un danger : pas dit à voix haute (il reste sur la fiche de l'itinéraire)
   const spokenAlerts = st.next.alerts.filter(a => a !== "Données à confirmer");
   const i = st.idx + 1, alerts = spokenAlerts.length ? `. Attention : ${spokenAlerts.join(", ")}` : "";
@@ -956,6 +1009,13 @@ function onGps(pos, precise = false) {
     }
     return renderNavLive();
   }
+  // Dernier bout à pied, de la fin du tracé jusqu'à la porte : on n'est pas « hors itinéraire » (pas de recalcul,
+  // qui repartait de l'adresse elle-même) ; on suit simplement la distance jusqu'à l'adresse.
+  const endPt = g.at(-1), legLen = S.dest ? haversineM(endPt.lat, endPt.lon, S.dest.lat, S.dest.lon) : 0;
+  if (legLen > 12 && n.pos >= n.total - 3 && haversineM(p.lat, p.lon, S.dest.lat, S.dest.lon) <= legLen + Math.max(25, acc)) {
+    Object.assign(n, {gap: 0, gapAlong: n.total, away: false, offRoute: false, off: 0});
+    announce(); return renderNavLive();
+  }
   n.gap = best?.d ?? 0;
   n.gapAlong = best?.along ?? n.pos;
   // « À l'écart de l'itinéraire » (intérieur, cour) seulement si l'écart dépasse nettement l'erreur du GPS,
@@ -1076,7 +1136,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "85";
+const APP_VERSION = "86";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1385,12 +1445,29 @@ const navApi = {
   setTheme,
   report: (kind, blocking) => doReport(kind, blocking),
   stop: () => stopGuidance(),
+  endSoftly: () => endGuidanceSoftly(),
+  stay: () => { if (S.nav) S.nav.stayed = true; },
 };
+// Arrivée (terrain du 20/10 : la sortie était brutale) : écran « Vous êtes arrivé » avec le résumé du trajet,
+// boutons Terminer / Rester. Sans action, il se ferme seul au bout de 20 s (après la lecture de la fiche),
+// en fondu, et la carte se pose doucement sur la destination.
 function finishAtEntrance(fiche) {
   stopNav();
   try { wakeLock?.release?.(); } catch { /* déjà libéré */ }
   const nav = S.nav;
-  setTimeout(() => { if (S.nav === nav && S.screen === "nav") stopGuidance(true); }, fiche ? 4000 + fiche.length * 90 : 6000);
+  nav.arrivedAt = Date.now();
+  nav.autoEndAt = Date.now() + Math.max(20000, fiche ? 6000 + fiche.length * 90 : 0);
+  const t = setInterval(() => {
+    if (S.nav !== nav || S.screen !== "nav" || nav.stayed) return clearInterval(t);
+    if (Date.now() >= nav.autoEndAt) { clearInterval(t); endGuidanceSoftly(); }
+  }, 500);
+}
+function endGuidanceSoftly() {
+  const ar = $("ar"), dest = S.dest;
+  if (ar && !ar.hidden && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    ar.classList.add("leaving");                           // fondu de la vue caméra (css : #ar.leaving)
+    setTimeout(() => { stopGuidance(true); if (dest) setTimeout(() => map.flyTo([dest.lat, dest.lon], 18, {duration: 1.2}), 150); }, 450);
+  } else { stopGuidance(true); if (dest) map.setView([dest.lat, dest.lon], 18); }
 }
 function stopGuidance(keepVoice = false) {
   for (const step of [() => stopNav(), () => { S.nav = null; }, () => { if (!keepVoice) speech.clear(); },
@@ -1521,6 +1598,7 @@ function render() {
     }
   } else ms?.remove();
   syncGuard();
+  syncHereDot();
   layoutSheet();
   setTimeout(() => map.invalidateSize(), 0);
 }
@@ -1629,6 +1707,9 @@ function drawProgress(force = false) {
   if (lit < n.total) L.polyline(routeSlice(lit, n.total), {color: C.route, weight: 5, opacity: .35, lineCap: "round", interactive: false}).addTo(layers.progress);
   L.polyline(routeSlice(n.pos, lit), {color: C.routeCase, weight: 11, opacity: .9, lineCap: "round", interactive: false}).addTo(layers.progress);
   L.polyline(routeSlice(n.pos, lit), {color: C.route, weight: 7, opacity: 1, lineCap: "round", interactive: false}).addTo(layers.progress);
+  const endPt = n.route.geometry.at(-1);
+  if (S.dest && haversineM(endPt.lat, endPt.lon, S.dest.lat, S.dest.lon) > 12)   // dernier bout à pied jusqu'à l'adresse
+    L.polyline([[endPt.lat, endPt.lon], [S.dest.lat, S.dest.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.progress);
   if ((n.phase === "approach" || n.away) && n.real) {                // pointillés jusqu'au point de départ / à l'itinéraire
     const t = posAt(n.gapAlong ?? 0);
     L.polyline([[n.real.lat, n.real.lon], [t.lat, t.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.progress);
