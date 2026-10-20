@@ -12,6 +12,8 @@ const ENTRANCE_M = 50, ERP_M = 60, AROUND_M = 100;
 let acces = [], accesSource = "", common = new Set();
 const norm = t => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+// Établissements Acceslibre (ERP) : [nom, …, lat, lon, fiche] — affichés sur la carte avec « M'y guider »
+export const erpList = () => acces;
 export async function loadAcces(zoneId) {
   try {
     const d = await fetch(`data/${zoneId}.acces.json`).then(r => r.ok ? r.json() : null);

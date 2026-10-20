@@ -10,7 +10,7 @@ import {icon} from "./icons.js";
 import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
 import {FEATURES} from "./features.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {arrivalFiche, arrivalSpeech, entranceFor, loadAcces} from "./arrival.js";
+import {arrivalFiche, arrivalSpeech, entranceFor, erpList, loadAcces} from "./arrival.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -299,15 +299,35 @@ const layers = {progress: L.layerGroup().addTo(map), transit: L.layerGroup().add
 
 const pin = (ic, cls) => L.divIcon({className: "", html: `<div class="pin ${cls}">${icon(ic)}</div>`,
   iconSize: [34, 42], iconAnchor: [17, 40], popupAnchor: [0, -36]});
+// Établissements recevant du public (Acceslibre) : repère « porte » avec leur accessibilité et « M'y guider »
+function drawErps() {
+  const list = erpList();
+  if (!list.length) return setTimeout(drawErps, 1500);        // fiches pas encore chargées
+  for (const e of list) {
+    const [name, , lat, lon, f = {}] = e;
+    const ok = f.entree_plain_pied || f.cheminement_ext_plain_pied;
+    const info = [ok ? "Entrée de plain-pied" : f.entree_plain_pied === false ? "Entrée avec marche(s)" : "",
+      f.entree_largeur_mini ? `Porte de ${Math.round(f.entree_largeur_mini)} cm` : "", f.sanitaires_adaptes ? "Toilettes adaptées" : ""].filter(Boolean);
+    L.marker([lat, lon], {icon: pin("door-open", ok ? "pin-poi pin-erp-ok" : "pin-poi pin-erp"), title: name})
+      .bindPopup(() => { const fr = whereAmI(); return guidePopup(name, `<div class="pp-type">${icon("accessibility")} Établissement (Acceslibre)</div>${
+        info.length ? `<div class="pp-src">${esc(info.join(" · "))}</div>` : ""}`, fr ? haversineM(fr.lat, fr.lon, lat, lon) : null); }, {maxWidth: 290})
+      .on("popupopen", ev => { ev.popup.getElement().querySelector(".pp-guide").onclick = () => guideToPoint(name, lat, lon); })
+      .addTo(layers.pois);
+  }
+}
 function drawNetwork() {
   // Le réseau piéton et ses pentes servent au calcul des itinéraires (base de données) : ils ne sont plus dessinés
   for (const [kind, lat, lon, name, status] of net.pois) {
     if (!POI[kind]) continue;
+    const label = name ? `${POI[kind][1]} · ${name}` : POI[kind][1];
     L.marker([lat, lon], {icon: pin(POI[kind][0], "pin-poi"), title: POI[kind][1]})
-      .bindPopup(`<div class="pp"><div class="pp-title">${POI[kind][1]}</div>${name ? esc(name) : ""}${
-        kind === "elevator" ? `<div class="pp-src">État : ${{ok: "en service", out_of_order: "en panne"}[status] || "inconnu"}</div>` : ""}</div>`)
+      .bindPopup(() => { const f = whereAmI(); return guidePopup(POI[kind][1], `${name ? esc(name) : ""}${
+        kind === "elevator" ? `<div class="pp-src">État : ${{ok: "en service", out_of_order: "en panne"}[status] || "inconnu"}</div>` : ""}`,
+        f ? haversineM(f.lat, f.lon, lat, lon) : null); }, {maxWidth: 290})
+      .on("popupopen", e => { e.popup.getElement().querySelector(".pp-guide").onclick = () => guideToPoint(label, lat, lon); })
       .addTo(layers.pois);
   }
+  drawErps();
   L.geoJSON(net.zone.boundary, {style: {color: C.primary, weight: 2, fill: false, dashArray: "6 8", opacity: .7}, interactive: false}).addTo(map);
   syncLayers = () => {
     const show = map.getZoom() >= 16 && S.screen !== "nav";
@@ -665,7 +685,8 @@ function search(q) {
         const type = ZONE.france ? p._type : (p.name && p.osm_key !== "highway" && p.osm_key !== "place" ? "poi" : "address");
         const label = ZONE.france ? p.label || [p.toponym, (p.city || [])[0]].filter(Boolean).join(", ")
           : [p.name || [p.housenumber, p.street].filter(Boolean).join(" "), p.district || p.city].filter(Boolean).join(", ");
-        return {label, lat, lon, type, sub: `${type === "poi" ? "Lieu" : "Adresse"} · ${short(haversineM(S.origin.lat, S.origin.lon, lat, lon))}`};
+        return {label, lat, lon, type, banId: ZONE.france && p._type === "address" ? p.id : null,
+          sub: `${type === "poi" ? "Lieu" : "Adresse"} · ${short(haversineM(S.origin.lat, S.origin.lon, lat, lon))}`};
       }).filter(a => a.label).filter(a => haversineM(S.origin.lat, S.origin.lon, a.lat, a.lon) < 15000);   // pas de « Calmels-et-le-Viala » à 550 km
       S.places = [...local, ...addr].filter((p, i, all) => all.findIndex(o => norm2(o.label) === norm2(p.label) && haversineM(o.lat, o.lon, p.lat, p.lon) < 150) === i).slice(0, 10);
     } catch {
@@ -1136,7 +1157,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "86";
+const APP_VERSION = "87";
 // Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
 const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
 function screenSettings() {
@@ -1276,7 +1297,7 @@ function screenRoute() {
       ${icon("star")} ${currentFavIndex() >= 0 ? "Enregistré" : "Enregistrer"}</button></div>` : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
-  ${S.dest && S.arrival ? arrivalCard(S.arrival) : ""}${indoorButton()}
+  ${doorCard()}${S.dest && S.arrival ? arrivalCard(S.arrival) : ""}${indoorButton()}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
 }
 // Liste des résultats de recherche : mise à jour seule pendant la frappe (le champ n'est jamais reconstruit,
@@ -1772,18 +1793,85 @@ function closeRoutes() {
   map.setView([S.origin.lat, S.origin.lon], 16, {animate: false});
   render();
 }
+// Portes indiquées par l'usager (« Indiquer l'entrée ») : gardées sur ce téléphone, par adresse
+const DOORS_KEY = "va-doors";
+const doorKey = p => norm2(p.label || "").replace(/\s+/g, " ").trim();
+const savedDoor = p => store.get(DOORS_KEY, {})[doorKey(p)] || null;
 function chooseDest(place) {
   sheetCollapsed = false;                                 // les itinéraires doivent se voir
-  // « Jusqu'à la bonne porte » : on vise l'entrée accessible du lieu quand elle est connue (js/arrival.js)
-  const {entrance: ent, note} = net && !place.gps ? entranceFor(net, place) : {entrance: null, note: ""};
-  const viaEntrance = ent && ent.d > 8;
+  place = {...place, addrLat: place.addrLat ?? place.lat, addrLon: place.addrLon ?? place.lon};
+  // 1) porte indiquée par l'usager pour cette adresse : prioritaire
+  const door = !place.gps && savedDoor(place);
+  // 2) « Jusqu'à la bonne porte » : entrée accessible du bâtiment, pour les profils qui en ont besoin
+  //    (fauteuil, canne) ; les autres vont à l'entrée de l'adresse (js/arrival.js)
+  const needsStepFree = ["manual_wheelchair", "electric_wheelchair", "cane_or_walker"].some(m => S.mobilities.has(m));
+  const {entrance: ent, note} = net && !place.gps && !door ? entranceFor(net, place) : {entrance: null, note: ""};
+  const viaEntrance = needsStepFree && ent && ent.d > 8;
   // incohérence entrée / adresse : notée seulement en mode test (sinon chaque bâtiment voisin en produirait une)
   S.arrival = net ? arrivalFiche(net, place, viaEntrance ? ent : null, S.detectDebug ? note : "") : null;
-  S.dest = viaEntrance ? {...place, lat: ent.lat, lon: ent.lon, viaEntrance: true} : place;
+  S.dest = door ? {...place, lat: door.lat, lon: door.lon, userDoor: true}
+    : viaEntrance ? {...place, lat: ent.lat, lon: ent.lon, viaEntrance: true} : place;
+  // 3) adresse française : position « entrée » de la Base Adresse Nationale (certifiée par la commune), si elle
+  //    diffère du point renvoyé par la recherche
+  if (!door && !viaEntrance && place.banId && navigator.onLine) banEntrance(place);
   S.query = place.label; S.places = [];
   computeRoute();                                         // tout de suite avec le départ actuel…
   if (S.originMode === "auto") locateOrigin(true);       // …puis depuis « Ma position » dès qu'elle est connue
 }
+async function banEntrance(place) {
+  try {
+    const d = await fetch(`https://plateforme.adresse.data.gouv.fr/lookup/${encodeURIComponent(place.banId)}`).then(r => r.ok ? r.json() : null);
+    const pos = (d?.positions || []).find(p => p.positionType === "entrée")?.position?.coordinates;
+    if (!pos || S.dest?.banId !== place.banId || S.dest.userDoor) return;
+    const [lon, lat] = pos;
+    if (haversineM(lat, lon, S.dest.lat, S.dest.lon) < 5) { S.dest = {...S.dest, banEntrance: true}; return render(); }
+    S.dest = {...S.dest, lat, lon, banEntrance: true};
+    computeRoute();
+  } catch { /* hors ligne : on garde le point de la recherche */ }
+}
+// « La porte n'est pas là ? » : l'usager touche la carte à l'endroit de la porte ; elle est gardée sur ce
+// téléphone pour cette adresse et l'itinéraire est recalculé jusqu'à elle
+let pickingDoor = false;
+function pickDoor() {
+  if (!S.dest || pickingDoor) return;
+  pickingDoor = true;
+  document.body.classList.add("picking-door");
+  toast("Touchez la carte à l'endroit exact de la porte d'entrée.", 6000);
+  map.once("click", e => {
+    pickingDoor = false;
+    document.body.classList.remove("picking-door");
+    const doors = store.get(DOORS_KEY, {});
+    doors[doorKey(S.dest)] = {lat: e.latlng.lat, lon: e.latlng.lng};
+    store.set(DOORS_KEY, doors);
+    S.dest = {...S.dest, lat: e.latlng.lat, lon: e.latlng.lng, userDoor: true, viaEntrance: false, banEntrance: false};
+    toast("Entrée enregistrée : l'itinéraire vous y mène, et vous y mènera la prochaine fois.");
+    computeRoute();
+  });
+}
+function resetDoor() {
+  const doors = store.get(DOORS_KEY, {});
+  delete doors[doorKey(S.dest)];
+  store.set(DOORS_KEY, doors);
+  chooseDest({label: S.dest.label, lat: S.dest.addrLat, lon: S.dest.addrLon, type: S.dest.type, banId: S.dest.banId, addrLat: S.dest.addrLat, addrLon: S.dest.addrLon});
+}
+function doorCard() {
+  if (!S.dest || S.dest.gps) return "";
+  const where = S.dest.userDoor ? "Entrée indiquée par vous" : S.dest.viaEntrance ? "Entrée accessible du bâtiment"
+    : S.dest.banEntrance ? "Entrée officielle de l'adresse" : "Point de l'adresse";
+  return `<div class="door-card">${icon("door-open")}<span class="grow"><b>${where}</b><small>${S.dest.userDoor ? "gardée sur ce téléphone" : "la porte n'est pas là ?"}</small></span>
+    ${S.dest.userDoor ? `<button class="btn soft small" id="resetDoor">Réinitialiser</button>` : ""}
+    <button class="btn soft small" id="pickDoor">${icon("map-pin")} ${S.dest.userDoor ? "Déplacer" : "Indiquer l'entrée"}</button></div>`;
+}
+// Guidage vers un repère de la carte (entrée accessible, ERP, toilettes, ascenseur…), comme pour les arrêts
+function guideToPoint(label, lat, lon) {
+  const from = whereAmI(), dest = {label, lat, lon, type: "poi", addrLat: lat, addrLon: lon};
+  map.closePopup();
+  if (S.screen === "nav" && S.nav) { S.dest = dest; return reroute({lat: from.lat, lon: from.lon}, `Vers ${label}`, true); }
+  if (S.screen !== "route") go("route");
+  chooseDest(dest);
+}
+const guidePopup = (title, body, d) => `<div class="pp"><div class="pp-title">${esc(title)}</div>${body}
+  <div class="pp-src">${d !== null ? short(d) : ""}</div><button class="pp-guide" type="button">${icon("navigation")} M'y guider</button></div>`;
 function chooseOrigin(place) {
   S.searchFor = "dest"; S.oquery = ""; S.places = [];
   if (place.type === "gps") { S.originMode = "gps"; render(); return locateOrigin(); }
@@ -1929,6 +2017,8 @@ function bind() {
   on("favToggle", "onclick", toggleFavorite);
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
+  on("pickDoor", "onclick", pickDoor);
+  on("resetDoor", "onclick", resetDoor);
   all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
   on("start", "onclick", startGuidance);
   // Paramètres
