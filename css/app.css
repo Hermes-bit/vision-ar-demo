@@ -910,3 +910,9 @@ body.picking-door #panel { opacity: .55; pointer-events: none; }
 .mk-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--c); border: 2px solid #fff; box-sizing: border-box;
   box-shadow: 0 1px 3px rgba(15, 37, 55, .45); }
 .mk-transit { border-radius: 50%; background: var(--c); }
+
+/* Attente d'une position sûre avant de calculer le trajet */
+.msg.locating { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 16px; background: var(--surface-2); }
+.msg.locating > .i { color: #2F80ED; flex: none; animation: loc-pulse 1.4s ease-in-out infinite; }
+@keyframes loc-pulse { 50% { opacity: .35; transform: scale(.9); } }
+@media (prefers-reduced-motion: reduce) { .msg.locating > .i { animation: none; } }
