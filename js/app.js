@@ -1336,7 +1336,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "90";
+const APP_VERSION = "91";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1471,9 +1471,9 @@ function screenRoute() {
   <div id="placesBox" class="places-box">${placesHtml()}</div>
   ${PRESENTATION && !S.dest && S.searchFor === "dest" ? `<section class="tour-card">
     <h3>${icon("play")} Visite de démonstration</h3>
-    <ol><li>Cherchez une destination à Gennevilliers (« Picard », « Pharmacie », « Mairie »…) ou touchez un repère sur la carte.</li>
-      <li>Comparez les itinéraires : le plus accessible pour votre profil est proposé en premier.</li>
-      <li>Touchez « Démarrer le guidage » : le trajet défile tout seul, avec la voix et les alertes.</li></ol>
+    <ol><li>Cherchez une destination à Gennevilliers («&nbsp;Picard&nbsp;», «&nbsp;Pharmacie&nbsp;», «&nbsp;Mairie&nbsp;»…) ou touchez un repère sur la carte.</li>
+      <li>Comparez les itinéraires&nbsp;: le plus accessible pour votre profil est proposé en premier.</li>
+      <li>Touchez «&nbsp;Démarrer le guidage&nbsp;»&nbsp;: le trajet défile tout seul, avec la voix et les alertes.</li></ol>
     <button class="btn soft small" id="tourGo">${icon("navigation")} Essayer avec un exemple</button></section>` : ""}
   ${S.searchFor === "origin" ? "" : `
   ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
