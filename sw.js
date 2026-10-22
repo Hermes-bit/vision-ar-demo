@@ -1,11 +1,11 @@
 // Service worker : l'appli et le plan de Gennevilliers fonctionnent hors ligne.
 // Changer VERSION à chaque publication (le cache hors ligne est alors renouvelé).
-// Deux sites partagent l'adresse hermes-bit.github.io (donc le même stockage sur un téléphone) : la version de
-// TEST (/vision-ar-demo/) et la version STABLE (/vision-ar/, scripts/publier_stable.py). Chacun a ses propres
-// caches et n'efface que les siens.
+// Trois sites partagent l'adresse hermes-bit.github.io (donc le même stockage sur un téléphone) : la version de
+// TEST (/vision-ar-demo/), la version STABLE (/vision-ar/) et la version de PRÉSENTATION pour les recruteurs
+// (/vision-ar-presentation/), publiées par scripts/publier_stable.py. Chacun a ses propres caches et n'efface que les siens.
 const SITE = new URL(self.location.href).pathname.split("/")[1] || "";
-const PREFIX = SITE === "vision-ar" ? "va-stable-" : "vision-ar-";
-const VERSION = PREFIX + "v89";
+const PREFIX = {"vision-ar": "va-stable-", "vision-ar-presentation": "va-pres-"}[SITE] || "vision-ar-";
+const VERSION = PREFIX + "v90";
 // Cartes et bibliothèques gardées pour le hors-ligne : un cache à part, qui SURVIT aux mises à jour de l'appli
 // (avant, chaque nouvelle version effaçait les cartes déjà téléchargées)
 const MAP_CACHE = PREFIX + "cartes", MAX_MAP = 4000;

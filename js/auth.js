@@ -16,7 +16,14 @@ const store = {
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 
 export const currentSession = () => store.get(SESSION, null);
+export const isGuest = () => !!currentSession()?.guest;
 export function logout() { store.del(SESSION); }
+// Connexion sans compte (invité) : aucune adresse e-mail, aucun mot de passe ; profil, favoris et réglages restent
+// sur ce téléphone comme pour un compte. On peut créer un compte plus tard (Déconnexion, puis Inscription).
+function guestLogin() { store.set(SESSION, {guest: true, name: "Invité", since: Date.now()}); }
+// Version de présentation (recruteurs) : l'accueil met la découverte sans compte en premier
+let OPTS = {presentation: false};
+export function configureAuth(o) { OPTS = {...OPTS, ...o}; }
 
 // ---- Mots de passe : jamais en clair ------------------------------------------------------------
 const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -88,8 +95,13 @@ export function screenWelcome() {
       ${sticker("salut", "stk-welcome")}</div>
     <h1>Bienvenue</h1>
     <p class="lead">Vision AR vous guide à pied, en fauteuil ou avec une canne, par les trajets les plus accessibles.</p>
-    <button class="btn ink" data-auth="start">Commencer ${icon("chevron-right")}</button>
-    <p class="switch-auth">Déjà inscrit ? <button class="link" data-auth="to-login">Se connecter</button></p>
+    ${OPTS.presentation ? `<p class="pres-note">${icon("info")} Version de présentation : découvrez l'application sans créer de compte.
+      Le guidage est simulé, inutile de vous déplacer.</p>
+    <button class="btn ink" data-auth="guest">Découvrir l'application ${icon("chevron-right")}</button>
+    <p class="switch-auth">Déjà un compte ? <button class="link" data-auth="to-login">Se connecter</button></p>`
+    : `<button class="btn ink" data-auth="start">Commencer ${icon("chevron-right")}</button>
+    <button class="btn guest-btn" data-auth="guest">${icon("user-round")} Continuer sans compte</button>
+    <p class="switch-auth">Déjà inscrit ? <button class="link" data-auth="to-login">Se connecter</button></p>`}
   </div>`;
 }
 export function screenLogin() {
@@ -102,6 +114,7 @@ export function screenLogin() {
       <button class="btn primary" type="submit" ${F.busy ? "disabled" : ""}>${icon("log-in")} ${F.busy ? "Connexion…" : "Se connecter"}</button>
     </form>
     <p class="switch-auth">Pas encore de compte ? <button class="link strong" data-auth="to-signup">S'inscrire</button></p>
+    <p class="switch-auth">ou <button class="link strong" data-auth="guest">continuer sans compte</button></p>
     ${demoNote}
   </div>`;
 }
@@ -121,6 +134,7 @@ export function screenSignup() {
         <button class="social-btn apple" data-auth="social" data-v="Apple" aria-label="Continuer avec Apple">${APPLE}</button>
       </div></div>
     <p class="switch-auth">Déjà un compte ? <button class="link strong" data-auth="to-login">Se connecter</button></p>
+    <p class="switch-auth">ou <button class="link strong" data-auth="guest">continuer sans compte</button></p>
     ${demoNote}
   </div>`;
 }
@@ -153,6 +167,7 @@ export function bindAuth(root, ctx) {
     else if (a === "toggle-pwd") { F.showPwd = !F.showPwd; ctx.rerender(); root.querySelector(".field-eye")?.focus(); }
     else if (a === "forgot") ctx.toast("Mode démonstration : le compte est sur ce téléphone, il n'y a pas d'e-mail de récupération. Créez un nouveau compte si besoin.");
     else if (a === "social") ctx.toast(`Connexion avec ${b.dataset.v} : bientôt disponible. Utilisez l'e-mail en attendant.`);
+    else if (a === "guest") { guestLogin(); resetForm(); ctx.done(); }
   });
   const form = root.querySelector("form[data-form]");
   if (!form) return;

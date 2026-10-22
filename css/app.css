@@ -916,3 +916,48 @@ body.picking-door #panel { opacity: .55; pointer-events: none; }
 .msg.locating > .i { color: #2F80ED; flex: none; animation: loc-pulse 1.4s ease-in-out infinite; }
 @keyframes loc-pulse { 50% { opacity: .35; transform: scale(.9); } }
 @media (prefers-reduced-motion: reduce) { .msg.locating > .i { animation: none; } }
+
+/* ---- Ordinateur et tablette (mise en page côte à côte) : panneau en verre qui flotte AU-DESSUS de la carte ----
+   La carte occupe tout l'écran, le panneau se pose dessus avec une marge et des coins arrondis : sa transparence
+   (flou de la carte derrière) est la même que sur téléphone. Le bouton Paramètres passe à côté du panneau
+   (il cachait le titre), les mentions de la carte en bas à droite. */
+@media (orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px) {
+  :root { --side: clamp(340px, 30vw, 440px); --float: 16px; }
+  body.sheet #map, body.nav #map { left: 0; right: 0; top: 0; height: 100vh; height: 100dvh; }
+  body.sheet #panel, body.sheet:not(.typing) #panel, body.nav #panel {
+    top: calc(var(--float) + var(--safe-top)); bottom: auto; left: calc(var(--float) + var(--safe-left)); right: auto;
+    width: var(--side); height: auto; min-height: 0;
+    max-height: calc(100vh - 2 * var(--float) - var(--safe-top)); max-height: calc(100dvh - 2 * var(--float) - var(--safe-top));
+    border-radius: 24px; box-shadow: 0 18px 50px rgba(6, 20, 32, .28); outline: 1px solid var(--glass-border); outline-offset: -1px;
+    padding-top: var(--gutter); padding-bottom: var(--gutter); transform: none !important; }
+  .map-settings { left: calc(var(--side) + 2 * var(--float) + var(--safe-left)); top: calc(var(--float) + var(--safe-top)); }
+  .map-close { top: calc(var(--float) + var(--safe-top)); right: calc(var(--float) + var(--safe-right)); }
+  .map-credits { left: auto; right: 0; border-radius: 10px 0 0 0; padding: 3px 10px; }
+  body.sheet::after { display: none; }
+}
+@media (orientation: landscape) and (max-height: 600px) {
+  :root { --float: 8px; --side: clamp(300px, 42vw, 400px); }
+}
+/* très grands écrans : panneau un peu plus large, texte un peu plus grand */
+@media (min-width: 1800px) and (min-height: 900px) {
+  :root { --side: 460px; }
+  body.sheet #panel { font-size: 17px; }
+}
+
+/* Vue de guidage sur grand écran : consigne et commandes en colonne centrée (elles s'étiraient sur 1 900 px) */
+@media (min-width: 900px) and (min-height: 601px) {
+  #ar .top { left: 50%; right: auto; width: min(640px, calc(100% - 20px)); transform: translateX(-50%); }
+  #ar .dock { left: 50%; right: auto; width: min(640px, calc(100% - 16px)); transform: translateX(-50%); }
+}
+/* Connexion sans compte */
+.btn.guest-btn { background: transparent; color: var(--primary); border: 2px solid var(--primary); border-radius: 999px; width: auto;
+  align-self: center; padding: 0 24px; min-height: 50px; font-size: 16px; display: inline-flex; align-items: center; gap: 8px; }
+.pres-note { display: flex; gap: 8px; align-items: flex-start; max-width: 340px; padding: 10px 12px; border-radius: 14px;
+  background: var(--primary-soft); color: var(--on-primary-soft); font-size: 14px; line-height: 1.4; text-align: left; }
+.pres-note .i { flex: none; margin-top: 2px; }
+/* Version de présentation : mode d'emploi de la visite */
+.tour-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: var(--radius); background: var(--surface);
+  outline: 1px solid var(--glass-border); outline-offset: -1px; box-shadow: var(--shadow); }
+.tour-card h3 { color: var(--primary); display: flex; align-items: center; gap: 8px; }
+.tour-card ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.4; }
+.tour-card .btn { align-self: flex-start; width: auto; }

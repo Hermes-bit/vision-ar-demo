@@ -5,7 +5,7 @@ import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
 import {MODE, linesText, loadTransit, makeStreetFinder, searchPlaces, stopTarget, wheelText} from "./transit.js";
 import {clearSamples, exportZip, listSamples} from "./obstacles.js";
 import {ZONES, zoneLabel} from "./zones.js";
-import {bindAuth, currentSession, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
+import {bindAuth, configureAuth, currentSession, isGuest, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
 import {CONSIGNE, DANGER, INFO, makeSpeech} from "./speech.js";
 import {FEATURES} from "./features.js";
@@ -33,6 +33,11 @@ const KIND_LABEL = {sidewalk: "Trottoir", crossing: "Passage piéton", footway: 
 // Pentes sur la carte : teintes distinguables par les daltoniens, contraste >= 3:1 sur le fond OSM
 const C = {route: "#00AECC", routeCase: "#00495A", alt: "#6B7C8F", primary: "#007489", unknown: "#5C6B7A", step: "#0F2537"};
 // Ville / quartier choisi dans les Paramètres (js/zones.js)
+// Site : test (/vision-ar-demo/ et ordinateur), stable (/vision-ar/) ou présentation pour les recruteurs
+// (/vision-ar-presentation/ : découverte sans compte, départ à la Mairie sans GPS, guidage simulé)
+const APP_CHANNEL = {"vision-ar": "stable", "vision-ar-presentation": "presentation"}[location.pathname.split("/")[1]] || "test";
+const PRESENTATION = APP_CHANNEL === "presentation";
+configureAuth({presentation: PRESENTATION});
 const ZONE_ID = (() => { try { const z = JSON.parse(localStorage.getItem("va-zone")); return ZONES[z] ? z : "gennevilliers"; } catch { return "gennevilliers"; } })();
 const ZONE = ZONES[ZONE_ID];
 const MAIRIE = ZONE.start;                                   // point de départ par défaut de la zone
@@ -55,7 +60,9 @@ const S = {
   voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, query: "", places: [],
   // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
-  originMode: "auto", searchFor: "dest", oquery: "",
+  // (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
+  originMode: PRESENTATION ? "manual" : "auto", searchFor: "dest", oquery: "",
+  simulate: store.get("va-simulate", PRESENTATION),
   // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
   alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), audioOnly: store.get("va-audio-only", false),
   routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
@@ -659,7 +666,9 @@ function fitRoute() {
   if (size.y < 160 || size.x < 160) return;
   const under = !sideLayout() && panelTop > 0 && panelTop < innerHeight ? innerHeight - panelTop : 0;
   const bottom = Math.max(24, Math.min(under + 24, size.y - 84 - 120));     // il reste toujours 120 px de carte pour le trajet
-  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [24, 84], paddingBottomRight: [24, bottom], maxZoom: 18, animate: false});
+  // ordinateur : le panneau flotte à gauche, au-dessus de la carte -> le trajet se cadre à sa droite
+  const left = sideLayout() ? Math.max(24, Math.min($("panel").getBoundingClientRect().right + 24, size.x - 200)) : 24;
+  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [left, 84], paddingBottomRight: [24, bottom], maxZoom: 18, animate: false});
   // (sans animation de zoom : pendant l'animation, le fond vectoriel n'était redessiné qu'à la fin et l'on voyait
   // un rectangle de carte rétréci sur un fond sombre, vidéo du 19/10)
 }
@@ -702,10 +711,11 @@ const gpsOriginActive = () => S.originMode === "gps" || (S.originMode === "auto"
 const originPending = () => gpsOriginActive() && !!S.originNeedsFix;
 function centerAbovePanel(ll, zoom = 17) {
   map.invalidateSize({pan: false});
-  const top = $("panel").getBoundingClientRect().top, visible = sideLayout() || top <= 0 ? innerHeight : top;
-  // point placé au milieu de la zone visible (au-dessus du panneau), et non au milieu de l'écran (caché dessous)
-  const shift = (innerHeight - visible) / 2;
-  const p = map.project(L.latLng(ll), zoom).add([0, shift]);
+  const box = $("panel").getBoundingClientRect(), visible = sideLayout() || box.top <= 0 ? innerHeight : box.top;
+  // point placé au milieu de la zone visible (au-dessus du panneau sur téléphone, à sa droite sur ordinateur),
+  // et non au milieu de l'écran (caché dessous)
+  const shift = (innerHeight - visible) / 2, side = sideLayout() ? Math.min(box.right, innerWidth - 200) / 2 : 0;
+  const p = map.project(L.latLng(ll), zoom).add([-side, shift]);
   map.setView(map.unproject(p, zoom), zoom, {animate: false});
 }
 function startHereWatch() {
@@ -790,7 +800,7 @@ setInterval(() => {
 function updateHereLink() {
   hereLink?.remove(); hereLink = null;
   const r = S.screen === "route" && !S.nav ? S.routes[S.selected] : null;
-  if (!r || !liveFix || !hereMarker || Date.now() - liveFix.at > 15000) return;
+  if (!r || !S.origin.gps || !liveFix || !hereMarker || Date.now() - liveFix.at > 15000) return;   // (départ choisi ailleurs : pas de lien)
   const g0 = r.geometry[0];
   if (haversineM(liveFix.lat, liveFix.lon, g0.lat, g0.lon) < 6 || haversineM(liveFix.lat, liveFix.lon, g0.lat, g0.lon) > 400) return;
   hereLink = L.polyline([[liveFix.lat, liveFix.lon], [g0.lat, g0.lon]], {color: C.route, weight: 4, dashArray: "2 9",
@@ -1299,7 +1309,7 @@ function screenProfile() {
     <div class="brand">${profileReturn || store.get("va-profile", null) ? `<button class="icon-btn" id="profileBack" aria-label="Retour">${icon("arrow-left")}</button>` : ""}
       <img src="${logoDir()}icon-192.png" alt="" width="40" height="40"><span class="grow">Vision AR</span>
       <button class="btn soft small" id="logout" aria-label="Se déconnecter">${icon("log-out")} Déconnexion</button></div>
-    ${currentSession() ? `<p class="hello">Bonjour ${esc(currentSession().name.split(" ")[0])}&nbsp;!</p>` : ""}
+    ${currentSession() ? `<p class="hello">${isGuest() ? "Bienvenue&nbsp;!" : `Bonjour ${esc(currentSession().name.split(" ")[0])}&nbsp;!`}</p>` : ""}
     <h1>Comment vous déplacez-vous&nbsp;?</h1>
     <p class="lead">Choisissez un ou plusieurs profils : l'itinéraire s'adapte à vos besoins.</p>
     ${sticker("je-te-guide", "stk-corner stk-profile")}</header>
@@ -1326,9 +1336,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "89";
-// Site stable (/vision-ar/) ou site de test (/vision-ar-demo/, ordinateur) : affiché dans les Paramètres
-const APP_CHANNEL = location.pathname.split("/")[1] === "vision-ar" ? "stable" : "test";
+const APP_VERSION = "90";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1344,7 +1352,7 @@ function screenSettings() {
       <span class="grow">Paramètres</span></div></header>
   <section class="card">
     ${row("setZone", "map-pin", "Ville", esc(zoneLabel(ZONE)))}
-    ${sess ? `<div class="set-row static">${icon("user-round")}<span class="grow">Compte</span><span class="set-val">Bonjour ${esc(sess.name.split(" ")[0])}&nbsp;!</span></div>` : ""}
+    ${sess ? `<div class="set-row static">${icon("user-round")}<span class="grow">Compte</span><span class="set-val">${sess.guest ? "Invité, sans compte" : `Bonjour ${esc(sess.name.split(" ")[0])}&nbsp;!`}</span></div>` : ""}
     ${row("setProfile", mob?.[2] || "accessibility", "Mon profil de mobilité", esc(mob?.[1] || ""))}
   </section>
   <section class="card stk-host">${sticker(S.voice ? "ca-vibre" : "lis-sans-son", "stk-card")}<h3>${icon("navigation")} Guidage</h3>
@@ -1360,6 +1368,7 @@ function screenSettings() {
       <div class="scale"><span>20 m</span><span>130 m</span></div></div>
     ${sw("setEco", "battery", "Économie de batterie pendant le guidage", S.eco)}
     ${sw("setAudioOnly", "volume-2", "Mode audio seul : caméra éteinte, guidage à la voix et sur le plan (batterie)", S.audioOnly)}
+    ${sw("setSimulate", "play", "Démonstration : le trajet défile tout seul, sans GPS ni caméra (pour présenter l'appli)", S.simulate)}
     ${hapticsNote() ? `<p class="fine">${icon("info")} ${esc(hapticsNote())}</p>` : ""}
   </section>
   <section class="card"><h3>${icon("glasses")} Apparence</h3><div class="themes">${themeCards("data-theme-pick")}</div></section>
@@ -1419,7 +1428,7 @@ function screenSettings() {
       (licence SIL OFL).</p>`)}
   </section>
   ${sticker("merci", "stk-footer")}
-  <p class="fine set-version">Vision AR version ${APP_VERSION}${APP_CHANNEL === "test" ? " (test)" : ""} · Geomessen Burkina Faso</p>`;
+  <p class="fine set-version">Vision AR version ${APP_VERSION}${APP_CHANNEL === "test" ? " (test)" : PRESENTATION ? " · version de présentation" : ""} · Geomessen Burkina Faso</p>`;
 }
 function screenZones() {
   const byCountry = {};
@@ -1460,6 +1469,12 @@ function screenRoute() {
         <button type="button" class="search-clear" id="qClear" aria-label="Effacer la saisie" ${S.query ? "" : "hidden"}>${icon("x")}</button></label></div>
   </div>
   <div id="placesBox" class="places-box">${placesHtml()}</div>
+  ${PRESENTATION && !S.dest && S.searchFor === "dest" ? `<section class="tour-card">
+    <h3>${icon("play")} Visite de démonstration</h3>
+    <ol><li>Cherchez une destination à Gennevilliers (« Picard », « Pharmacie », « Mairie »…) ou touchez un repère sur la carte.</li>
+      <li>Comparez les itinéraires : le plus accessible pour votre profil est proposé en premier.</li>
+      <li>Touchez « Démarrer le guidage » : le trajet défile tout seul, avec la voix et les alertes.</li></ol>
+    <button class="btn soft small" id="tourGo">${icon("navigation")} Essayer avec un exemple</button></section>` : ""}
   ${S.searchFor === "origin" ? "" : `
   ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
     <button class="btn soft small fav-toggle ${currentFavIndex() >= 0 ? "on" : ""}" id="favToggle" aria-pressed="${currentFavIndex() >= 0}">
@@ -1624,7 +1639,7 @@ const navApi = {
     mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
     detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsDenied: S.nav.gpsDenied, gpsStatus: S.nav.gpsStatus,
-    placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly},
+    placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly, simulated: !!S.nav.simulated},
   reroute: () => manualReroute(),
   setOption: (key, value) => { S[key] = value; store.set(OPTION_KEYS[key], value); },
   locationHelp: () => locationHelp(),
@@ -1661,7 +1676,32 @@ function endGuidanceSoftly() {
     setTimeout(() => { stopGuidance(true); if (dest) setTimeout(() => map.flyTo([dest.lat, dest.lon], 18, {duration: 1.2}), 150); }, 450);
   } else { stopGuidance(true); if (dest) map.setView([dest.lat, dest.lon], 18); }
 }
+// ---- Démonstration : le trajet défile tout seul ----------------------------------------------------------
+// Pour présenter l'appli sans être sur place (recruteurs, salons) : positions simulées le long de l'itinéraire,
+// à 4 fois la vitesse de marche du profil, puis le dernier bout à pied jusqu'à la porte. Ni GPS ni caméra (vue au
+// sol quadrillée) ; consignes, voix, vibrations, alertes et écran d'arrivée fonctionnent comme sur le terrain.
+const SIM_FACTOR = 4, SIM_STEP_S = 0.5;
+let simTimer = null;
+function startSimulation() {
+  stopSimulation();
+  const n = S.nav;
+  if (!n) return;
+  let d = 0, leg = 0;
+  const feed = p => onGps({coords: {latitude: p.lat, longitude: p.lon, accuracy: 4}, timestamp: Date.now()});
+  feed(n.route.geometry[0]);
+  simTimer = setInterval(() => {
+    if (S.nav !== n || n.arrived) return stopSimulation();
+    const step = speed() * SIM_FACTOR * SIM_STEP_S;
+    if (d < n.total) { d = Math.min(n.total, d + step); return feed(posAt(d)); }
+    const end = n.route.geometry.at(-1), dest = S.dest, len = dest ? haversineM(end.lat, end.lon, dest.lat, dest.lon) : 0;
+    if (len < 1) return feed(end);
+    leg = Math.min(len, leg + step);
+    feed({lat: end.lat + (dest.lat - end.lat) * leg / len, lon: end.lon + (dest.lon - end.lon) * leg / len});
+  }, SIM_STEP_S * 1000);
+}
+function stopSimulation() { clearInterval(simTimer); simTimer = null; }
 function stopGuidance(keepVoice = false) {
+  stopSimulation();
   // départ « Ma position » : le prochain trajet repartira d'où vous êtes (dernière position du guidage si récente)
   const real = S.nav?.real;
   if (real && Date.now() - real.at <= ORIGIN_RULES.maxAgeMs) liveFix = {lat: real.lat, lon: real.lon, acc: real.acc, at: real.at};
@@ -1874,7 +1914,7 @@ const authCtx = {
     const next = store.get("va-profile", null) ? "route" : "profile";
     go(next);
     if (next === "route") computeRoute();
-    toast(`Bienvenue ${currentSession()?.name.split(" ")[0] || ""} !`);
+    toast(isGuest() ? "Bienvenue ! Vous découvrez Vision AR sans compte." : `Bienvenue ${currentSession()?.name.split(" ")[0] || ""} !`);
   },
 };
 function renderNavLive() {
@@ -2072,10 +2112,17 @@ function startGuidance() {
   hazardAlerted.clear();                                  // nouveau trajet : tous les obstacles seront annoncés
   startNav(S.routes[S.selected]);
   prepareOffline(S.routes[S.selected], true);           // carte du trajet gardée : le guidage tient sans réseau
-  say("Guidage lancé. Recherche de votre position.", true);
   stickerPop("je-te-guide");
-  startGps();
-  go("nav");
+  if (S.simulate) {                                       // démonstration : positions simulées le long du trajet
+    S.nav.simulated = true;
+    say("Démonstration : le trajet défile tout seul, comme si vous marchiez.", true);
+    go("nav");
+    startSimulation();
+  } else {
+    say("Guidage lancé. Recherche de votre position.", true);
+    startGps();
+    go("nav");
+  }
   map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
 }
 // Confirmation avant de quitter un guidage par un geste (on ne l'arrête jamais par mégarde)
@@ -2206,6 +2253,7 @@ function bind() {
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
   on("pickDoor", "onclick", pickDoor);
+  on("tourGo", "onclick", () => chooseDest({label: "Picard (surgelés), Allées Maria Casarès", lat: 48.925767, lon: 2.295317, type: "poi"}));
   on("resetDoor", "onclick", resetDoor);
   all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
   on("start", "onclick", startGuidance);
@@ -2218,6 +2266,7 @@ function bind() {
   on("setPlacesRange", "oninput", e => { S.placesRange = +e.target.value; store.set("va-places-range", S.placesRange); $("placesRangeLbl").textContent = `${S.placesRange} m`; });
   on("setEco", "onchange", e => { S.eco = e.target.checked; store.set("va-eco", S.eco); });
   on("setAudioOnly", "onchange", e => { S.audioOnly = e.target.checked; store.set("va-audio-only", S.audioOnly); });
+  on("setSimulate", "onchange", e => { S.simulate = e.target.checked; store.set("va-simulate", S.simulate); });
   on("setZone", "onclick", () => go("zones"));
   on("zonesBack", "onclick", () => go("settings"));
   all("[data-zone]", b => b.onclick = () => {

@@ -17,12 +17,14 @@
 <link rel="stylesheet" href="vendor/leaflet/leaflet.min.css">
 <link rel="stylesheet" href="css/app.css">
 <script>
-// Version stable (/vision-ar/) : son propre stockage sur le téléphone (compte, profil, favoris, réglages),
-// séparé de la version de test (/vision-ar-demo/) qui partage la même adresse hermes-bit.github.io.
+// Versions stable (/vision-ar/) et de présentation (/vision-ar-presentation/) : chacune son propre stockage sur
+// le téléphone (compte, profil, favoris, réglages), séparé de la version de test (/vision-ar-demo/) : les trois
+// sites partagent la même adresse hermes-bit.github.io.
 (() => {
-  if (location.pathname.split("/")[1] !== "vision-ar") return;
+  const P = {"vision-ar": "stable:", "vision-ar-presentation": "pres:"}[location.pathname.split("/")[1]];
+  if (!P) return;
   try {
-    const P = "stable:", s = Storage.prototype, get = s.getItem, set = s.setItem, del = s.removeItem;
+    const s = Storage.prototype, get = s.getItem, set = s.setItem, del = s.removeItem;
     const key = (st, k) => st === window.localStorage ? P + k : k;
     s.getItem = function (k) { return get.call(this, key(this, k)); };
     s.setItem = function (k, v) { return set.call(this, key(this, k), v); };

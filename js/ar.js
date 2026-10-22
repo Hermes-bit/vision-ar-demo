@@ -730,7 +730,8 @@ function frame() {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   ctx.clearRect(0, 0, w, h);
   if (nativeOn) syncNative(s);
-  const now = performance.now(), nh = nativeHeading(), compass = nh !== null || sensors.heading !== null;
+  // démonstration : la vue suit le sens du trajet (pas la boussole du téléphone, qui n'est pas dans la rue simulée)
+  const now = performance.now(), nh = nativeHeading(), compass = !s.simulated && (nh !== null || sensors.heading !== null);
   const heading = F.heading.filter(nh ?? (compass ? sensors.heading : routeBearing(s)), now);
   document.documentElement.style.setProperty("--heading", `${heading.toFixed(1)}deg`);
   const pitch = F.pitch.filter(Math.max(-30, Math.min(80, sensors.pitch ?? 10)), now);   // sans capteur : téléphone presque droit
@@ -872,6 +873,7 @@ function renderUi(s, heading, compass) {
         ${!nativeOn && recal && !st.arrived ? `<em class="arrow-note">${icon("locate-fixed")} Recalage en cours : gardez le téléphone devant vous</em>` : ""}
         ${!nativeOn && !recal && compass && !compassOk() && !st.arrived ? `<em class="arrow-note">${icon("compass")} Boussole à calibrer : décrivez un 8 avec le téléphone</em>` : ""}
         ${!nativeOn && !recal && compass && compassOk() && (acc === null || acc > 25) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé et repères masqués, suivez la voix</em>` : ""}
+        ${s.simulated && !st.arrived ? `<em class="arrow-note">${icon("play")} Démonstration : le trajet défile tout seul</em>` : ""}
         ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
         ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
@@ -1063,7 +1065,7 @@ function lockMap(on) {
 function setMapFull(on) {
   mapFull = on;
   lockMap(!on);
-  if (!on && !stream && !nativeOn && !noCamera) startCamera();   // sortie du mode audio seul
+  if (!on && !stream && !nativeOn && !noCamera && !api.state()?.simulated) startCamera();   // sortie du mode audio seul
   root.classList.toggle("map-full", on);
   const grip = root.querySelector(".dome-grip");
   grip.setAttribute("aria-label", on ? "Réduire la carte" : "Agrandir la carte");
@@ -1118,6 +1120,8 @@ export async function openAR(options) {
   // Mode audio seul (batterie) : pas de caméra ni de détection ; le plan en grand, la voix guide.
   // Le bouton « Caméra » l'allume quand même à la demande.
   if (api.state().audioOnly) { root.classList.add("audio-only"); setMapFull(true); return; }
+  // Démonstration : pas de caméra (la personne n'est pas dans la rue) ; sol quadrillé et ruban, vus en marchant
+  if (api.state().simulated) { noCamera = true; root.classList.add("no-camera", "simulated"); return; }
   await startCamera();
 }
 // 960 × 540 suffit à l'écran et au détecteur (qui analyse en 320 à 640 px) : moins de batterie qu'en 1280 × 720
