@@ -30,7 +30,7 @@ export function makeSpeech(engine, now = () => Date.now()) {
   function start(m) {
     current = m;
     const id = m.id;
-    engine.speak(m.text, () => { if (current?.id === id) next(); });
+    engine.speak(m.text, () => { if (current?.id === id) next(); }, m.level);   // (niveau : la voix naturelle cède vite la place en cas de danger)
   }
   return {
     say(text, level = INFO) {

@@ -1013,6 +1013,19 @@ body.heading-up .route-tag-host { display: none; }
 .mchip.on { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .mchip.on .i { color: var(--on-primary); }
 
+/* ---- Voix du guidage : Hermès, Séléna ou la voix du téléphone ---------------------------------------------- */
+.set-sub { margin: 10px 0 2px; font-size: 15px; color: var(--primary); display: flex; align-items: center; gap: 6px; }
+.voice-pick { display: flex; flex-direction: column; gap: 8px; }
+.voice-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 4px; border-radius: 14px; border: 2px solid transparent; background: var(--surface-2); }
+.voice-row.on { border-color: var(--primary); background: var(--primary-soft); }
+.voice-main { flex: 1; display: flex; align-items: center; gap: 10px; min-height: 52px; border: 0; background: none; color: var(--ink); font: inherit;
+  text-align: left; cursor: pointer; padding: 4px; }
+.voice-main b { display: block; font-size: 16px; }
+.voice-main small { display: block; color: var(--muted); font-size: 13px; }
+.voice-dot { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 2px solid var(--primary); display: grid; place-items: center; color: var(--on-primary); }
+.voice-row.on .voice-dot { background: var(--primary); }
+.voice-dot .i { width: 16px; height: 16px; }
+
 /* ---- Guidage réduit (comme Citymapper) : pastille « Trajet en cours » et panneau du guidage ---------------- */
 .trip-pill { position: fixed; z-index: 525; top: calc(12px + var(--safe-top)); right: calc(12px + var(--safe-right));
   max-width: calc(100% - 92px - var(--safe-left) - var(--safe-right)); height: 52px; padding: 0 12px 0 16px; border-radius: 999px;

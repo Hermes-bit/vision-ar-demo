@@ -218,6 +218,28 @@ const SCENARIOS = [
       check("Fin du guidage, retour au plan", !!(await waitFor(() => !va().S.nav && va().S.screen === "route", 6000)));
     }
   }],
+  ["voix", "Voix Hermès (et Séléna en écoute)", async () => {
+    await backToSearch();
+    const before = va().S.voiceName;
+    await tap("#mapSettings", "Paramètres");
+    check("Choix des voix dans les Paramètres", !!(await waitFor(() => el('[data-voice-pick="hermes"]') && el('[data-voice-pick="selena"]'), 6000)));
+    const sample = await fetch(new URL("voices/selena.wav", win().location.href)).then(r => r.ok && r.headers.get("content-type")?.includes("audio")).catch(() => false);
+    check("Séléna s'écoute avant tout téléchargement (échantillon)", !!sample);
+    await tap('[data-voice-pick="hermes"]', "Hermès");
+    step("Téléchargement d'Hermès (95 Mo la première fois, ensuite gardé sur le téléphone)");
+    const ready = await waitFor(() => va().voice.isReady("hermes"), 240000);
+    check("Hermès est prêt", !!ready, text("#voiceSt-hermes"));
+    check("« prête, marche sans internet »", !!(await waitFor(() => text("#voiceSt-hermes").includes("prête"), 5000)), text("#voiceSt-hermes"));
+    await tap("#settingsBack", "Retour");
+    // une consigne de guidage dite par Hermès
+    const said = new Promise(res => win().addEventListener("va-say", e => res(e.detail), {once: true}));
+    va().say("Dans 50 mètres, tournez à droite sur l'avenue Claude Debussy.", true);
+    const d = await Promise.race([said, sleep(4000).then(() => null)]);
+    check("La consigne est dite par Hermès", d?.voice === "Hermès", d?.voice || "rien");
+    const t0 = performance.now(), r = await va().voice.synthesize("hermes", "Tournez à gauche, rue Joséphine Baker.");
+    check(`Phrase calculée sur le téléphone en ${((performance.now() - t0) / 1000).toFixed(1)} s pour ${(r.pcm.length / r.rate).toFixed(1)} s de voix`, r.pcm.length > 0);
+    if (before !== "hermes") { va().chooseVoice(before); step(`Voix remise comme avant (${before === "systeme" ? "voix du téléphone" : before})`); }
+  }],
   ["refus", "Localisation refusée", async () => {
     if (C.sim.walking) C.toggleWalk();
     C.setPermission("denied", true);

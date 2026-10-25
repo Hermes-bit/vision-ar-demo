@@ -15,6 +15,7 @@ import {entranceAccess, erpCategory} from "./categories.js";
 import {ORIGIN_RULES, decideOrigin, distM, originValid} from "./origin.js";
 import {labelPoints, minutes, walkingChoices} from "./compare.js";
 import {startCompass} from "./compass.js";
+import {SAMPLE_TEXT, VOICES, VOICE_DOWNLOAD_MB, makeVoiceEngine} from "./voices.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -62,7 +63,7 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
+  voice: store.get("va-voice", true), voiceName: VOICES[store.get("va-voice-name", "")] ? store.get("va-voice-name", "") : "systeme", haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: PRESENTATION ? {...MAIRIE} : NO_ORIGIN(), dest: null, query: "", places: [],
   // départ : la position actuelle, demandée dès l'ouverture de la recherche ; searchFor « origin » quand on modifie
   // le départ (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
@@ -127,19 +128,90 @@ function addReport(kind, blocking, at) {
 // ---- Voix et vibrations ---------------------------------------------------------------
 // Annonces par ordre d'urgence (js/speech.js) : un danger coupe une info, une consigne attend la fin d'un
 // danger, rien n'est répété ni rattrapé en retard. `level` : DANGER, CONSIGNE, INFO (true = CONSIGNE, false = INFO).
+// Voix : Hermès ou Séléna (voix naturelles, js/voices.js) si elle est choisie et prête, sinon celle du téléphone.
+// Une alerte de danger ne doit jamais attendre : si la voix naturelle n'a pas commencé à parler en 0,7 s (phrase
+// pas encore calculée), la voix du téléphone la dit tout de suite.
+const voiceEngine = makeVoiceEngine();
+const voiceState = {};                                    // voix -> {downloaded, pct, error}
+function systemSpeak(text, fin) {
+  setTimeout(fin, 1500 + text.length * 90);              // filet : sur iPhone, la fin de lecture n'est pas toujours signalée
+  if (window.VisionARNative) { window.VisionARNative.speak(text, true); return; }   // appli Android : voix du téléphone
+  if (!("speechSynthesis" in window)) return fin();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "fr-FR"; u.onend = fin; u.onerror = fin;
+  speechSynthesis.speak(u);
+}
 const speech = makeSpeech({
-  speak(text, onEnd) {
-    let done = false;
+  speak(text, onEnd, level) {
+    let done = false, fellBack = false;
     const fin = () => { if (!done) { done = true; onEnd(); } };
-    setTimeout(fin, 1500 + text.length * 90);              // filet : sur iPhone, la fin de lecture n'est pas toujours signalée
-    if (window.VisionARNative) { window.VisionARNative.speak(text, true); return; }   // appli Android : voix du téléphone
-    if (!("speechSynthesis" in window)) return fin();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "fr-FR"; u.onend = fin; u.onerror = fin;
-    speechSynthesis.speak(u);
+    const key = S.voiceName, natural = VOICES[key] && voiceEngine.isReady(key) && !window.VisionARNative;
+    dispatchEvent(new CustomEvent("va-say", {detail: {text, voice: natural ? VOICES[key].name : "téléphone"}}));   // (téléphone virtuel)
+    if (!natural) return systemSpeak(text, fin);
+    const fallback = () => { if (done || fellBack) return; fellBack = true; job.cancel(); systemSpeak(text, fin); };
+    const job = voiceEngine.speak(key, text);
+    const safety = setTimeout(fin, 5000 + text.length * 120);   // filet : calcul + lecture
+    job.done.then(() => { clearTimeout(safety); if (!fellBack) fin(); }, () => { clearTimeout(safety); fallback(); });
+    if (level === DANGER) Promise.race([job.started.then(() => true), new Promise(r => setTimeout(r, 700, false))])
+      .then(ok => { if (!ok) fallback(); });
   },
-  cancel() { if (!window.VisionARNative) window.speechSynthesis?.cancel(); },
+  cancel() { voiceEngine.stop(); if (!window.VisionARNative) window.speechSynthesis?.cancel(); },
 });
+// Voix naturelle choisie et déjà téléchargée : préparée en arrière-plan au lancement (prête pour le guidage)
+function warmVoice() {
+  const key = S.voiceName;
+  if (!VOICES[key]) return;
+  voiceEngine.downloaded(key).then(d => {
+    voiceState[key] = {...voiceState[key], downloaded: d};
+    if (d) voiceEngine.prepare(key).then(() => updateVoiceRow(key)).catch(() => {});
+  });
+}
+setTimeout(warmVoice, 2500);
+function chooseVoice(key) {
+  S.voiceName = key;
+  store.set("va-voice-name", key);
+  if (VOICES[key] && !voiceEngine.isReady(key)) {
+    voiceState[key] = {pct: 0};
+    voiceEngine.prepare(key, pct => { voiceState[key] = {pct}; updateVoiceRow(key); })
+      .then(() => {
+        voiceState[key] = {downloaded: true};
+        if (S.voiceName === key) { toast(`${VOICES[key].name} est prêt : la voix marche maintenant sans internet.`); hearVoice(key); }
+        render();
+      })
+      .catch(e => { voiceState[key] = {error: e.message}; toast(`Téléchargement de la voix impossible (${e.message}). La voix du téléphone reste utilisée.`, 6000); render(); });
+  }
+  render();
+}
+function hearVoice(key) {
+  unlockVoice();
+  speech.clear?.();
+  if (key === "systeme") return systemSpeak(SAMPLE_TEXT, () => {});
+  if (voiceEngine.isReady(key)) return voiceEngine.speak(key, SAMPLE_TEXT);
+  voiceEngine.playSample(key).catch(() => {});             // pas encore téléchargée : échantillon enregistré
+}
+function voiceStatus(key) {
+  if (key === "systeme") return "voix de synthèse du téléphone, sans téléchargement";
+  const st = voiceState[key] || {};
+  if (voiceEngine.isReady(key) || st.downloaded) return "prête, marche sans internet";
+  if (st.pct != null) return `téléchargement… ${st.pct} %`;
+  if (st.error) return `échec du téléchargement (${st.error})`;
+  return `à télécharger une fois (${VOICE_DOWNLOAD_MB} Mo, Wi-Fi conseillé)`;
+}
+function updateVoiceRow(key) {
+  const el = $(`voiceSt-${key}`);
+  if (el) el.textContent = voiceStatus(key);
+}
+function voiceChoiceHtml() {
+  const opts = [...Object.entries(VOICES).map(([k, v]) => [k, v.name, v.desc]), ["systeme", "Voix du téléphone", ""]];
+  return `<div class="voice-pick" role="radiogroup" aria-label="Voix du guidage">${opts.map(([k, name, desc]) => {
+    const on = S.voiceName === k;
+    return `<div class="voice-row ${on ? "on" : ""}">
+      <button class="voice-main" role="radio" aria-checked="${on}" data-voice-pick="${k}"><span class="voice-dot">${on ? icon("check") : ""}</span>
+        <span class="grow"><b>${name}</b>${desc ? `<small>${desc}</small>` : ""}<small id="voiceSt-${k}">${voiceStatus(k)}</small></span></button>
+      <button class="btn soft small" data-voice-hear="${k}" aria-label="Écouter ${name}">${icon("volume-2")} Écouter</button></div>`;
+  }).join("")}</div>
+  <p class="fine">${icon("info")} Hermès : ${VOICES.hermes.credit}. Séléna : ${VOICES.selena.credit}. Moteur Piper, prononciation eSpeak NG.</p>`;
+}
 // iPhone : Safari ne parle qu'après une première lecture lancée PENDANT un appui de l'usager. Appelé dans
 // le geste « Démarrer le guidage » : une phrase vide et muette débloque la voix pour tout le trajet.
 function unlockVoice() {
@@ -151,6 +223,7 @@ function unlockVoice() {
     speechSynthesis.speak(u);
     speechSynthesis.getVoices();                          // charge la liste des voix (française) en avance
   } catch { /* pas de synthèse vocale : l'écran et les vibrations restent */ }
+  voiceEngine.unlock();                                   // voix naturelle (lecture audio) : débloquée dans le même geste
 }
 function say(text, level = false) {
   if (!S.voice) return;
@@ -1164,6 +1237,12 @@ function navState() {
 }
 function announce() {
   const n = S.nav, st = navState();
+  // voix Hermès / Séléna : la consigne du prochain virage est calculée dès le début de l'étape, pour partir sans
+  // délai au moment de tourner
+  if (n.prefetched !== st.idx && !st.arrived && S.voice && VOICES[S.voiceName]) {
+    n.prefetched = st.idx;
+    voiceEngine.prefetch(S.voiceName, st.next.text);
+  }
   if (st.arrived) {
     if (!n.said.has("arrive")) {
       n.said.add("arrive"); n.arrived = true;
@@ -1455,7 +1534,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "99";
+const APP_VERSION = "100";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1476,6 +1555,8 @@ function screenSettings() {
   </section>
   <section class="card stk-host">${sticker(S.voice ? "ca-vibre" : "lis-sans-son", "stk-card")}<h3>${icon("navigation")} Guidage</h3>
     ${sw("setVoice", "volume-2", "Consignes à la voix", S.voice)}
+    <h4 class="set-sub">${icon("user-round")} Voix du guidage</h4>
+    ${voiceChoiceHtml()}
     ${sw("setHaptics", "vibrate", "Vibrations de direction", S.haptics)}
     ${row("testHaptics", "vibrate", "Tester la vibration", "", false)}
     ${sw("setStopsVoice", "bus", "Annoncer les arrêts de transport proches", S.stopsVoice)}
@@ -2519,6 +2600,8 @@ function bind() {
   on("settingsBack", "onclick", () => go("route"));
   on("setProfile", "onclick", () => go("profile"));
   on("setVoice", "onchange", e => { S.voice = e.target.checked; store.set("va-voice", S.voice); });
+  all("[data-voice-pick]", b => b.onclick = () => chooseVoice(b.dataset.voicePick));
+  all("[data-voice-hear]", b => b.onclick = () => hearVoice(b.dataset.voiceHear));
   on("setHaptics", "onchange", e => { navApi.setHaptics(e.target.checked); render(); });
   on("setAlertDist", "oninput", e => { S.alertDist = +e.target.value; store.set("va-alert-dist", S.alertDist); $("alertDistLbl").textContent = `${S.alertDist} m`; });
   on("setPlacesRange", "oninput", e => { S.placesRange = +e.target.value; store.set("va-places-range", S.placesRange); $("placesRangeLbl").textContent = `${S.placesRange} m`; });
@@ -2633,6 +2716,7 @@ fetch(ZONE.data).then(r => r.json()).then(data => {
 // Accès pour les tests automatiques uniquement (adresse terminée par ?debug)
 if (new URLSearchParams(location.search).has("debug"))
   window.__va = {S, posAt, navState, moveTo, chooseDest, get net() { return net; }, get transit() { return transit; }, addReport, reports, navApi,
+    voice: voiceEngine, chooseVoice: k => chooseVoice(k), say: (t, l) => say(t, l),
     useFavorite, stopGuidance, minimize: () => minimizeGuidance(), resume: () => resumeGuidance(), recenter: () => recenter(),
     heading: on => setHeadingMode(on), get follow() { return follow; }, get headingMode() { return headingMode; },
     get liveFix() { return liveFix; }, get geoPermission() { return geoPermission; },

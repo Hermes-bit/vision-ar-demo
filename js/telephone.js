@@ -74,16 +74,19 @@ window.__vaSim = w => {
   // Vibrations : l'iPhone n'en a pas dans Safari ; Android les écrit dans le journal
   if (sim.os === "ios") { try { Object.defineProperty(nav, "vibrate", {value: undefined, configurable: true}); } catch { /* */ } }
   else nav.vibrate = p => { log(`📳 Vibration ${JSON.stringify(p)}`); return true; };
-  // Voix : écrite dans le journal (et dite par l'ordinateur si la case est cochée)
+  // Voix : chaque phrase de l'appli est écrite dans le journal, avec la voix qui la dit (Hermès, Séléna ou celle du
+  // téléphone) ; l'ordinateur la dit aussi si la case est cochée
+  w.addEventListener("va-say", e => log(`🔊 ${e.detail.voice === "téléphone" ? "" : `[${e.detail.voice}] `}${e.detail.text}`));
   const sp = w.speechSynthesis;
   if (sp) {
     const speak = sp.speak.bind(sp);
     sp.speak = u => {
-      log(`🔊 ${u.text}`);
       if (sim.voice) return speak(u);
       setTimeout(() => u.onend?.({}), 400 + u.text.length * 45);
     };
   }
+  const play = w.HTMLMediaElement.prototype.play;                       // voix Hermès / Séléna (lecture audio)
+  w.HTMLMediaElement.prototype.play = function () { this.muted = !sim.voice; return play.call(this); };
   const st = w.document.createElement("style");
   st.id = "va-sim-safe";
   w.document.head.append(st);
