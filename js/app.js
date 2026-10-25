@@ -1455,7 +1455,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "96";
+const APP_VERSION = "97";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1547,7 +1547,8 @@ function screenSettings() {
       (licence SIL OFL).</p>`)}
   </section>
   ${sticker("merci", "stk-footer")}
-  <p class="fine set-version">Vision AR version ${APP_VERSION}${APP_CHANNEL === "test" ? " (test)" : PRESENTATION ? " · version de présentation" : ""} · Geomessen Burkina Faso</p>`;
+  <p class="fine set-version">Vision AR version ${APP_VERSION}${APP_CHANNEL === "test" ? " (test)" : PRESENTATION ? " · version de présentation" : ""} · Geomessen Burkina Faso</p>
+  ${APP_CHANNEL === "test" ? `<p class="fine set-version">Affichage : écran ${Math.max(screen.width, screen.height)} pt · appli ${Math.round(Math.max(innerWidth, innerHeight))} pt${navigator.standalone ? " · écran d’accueil" : ""}</p>` : ""}`;
 }
 function screenZones() {
   const byCountry = {};
