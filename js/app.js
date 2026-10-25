@@ -879,6 +879,9 @@ function onHereError(err) {
   if (S.screen === "route") S.dest ? computeRoute() : showOrigin();
 }
 function applyOriginFix(fix) {
+  // plan pas encore chargé (connexion lente) : la position est gardée (liveFix) et appliquée dès qu'il l'est
+  // (autoOrigin -> locateOrigin). Sans cela, « hors de la zone couverte » à tort (vu au téléphone virtuel, 25/10)
+  if (!net) return;
   const now = Date.now(), cur = S.origin.gps ? S.origin : null;
   const r = decideOrigin({origin: S.originNeedsFix ? null : cur, searchSince: originState.searchSince ?? now,
     best: originState.best, lastUseAt: originState.lastUseAt}, fix, now);
@@ -1452,7 +1455,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "94";
+const APP_VERSION = "95";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Téléphone virtuel</title>
+<!-- Outil de test sur ordinateur (comme le simulateur d'iPhone du Mac) : Vision AR dans un téléphone simulé,
+     avec GPS, boussole, inclinaison et caméra pilotés depuis le panneau. Pas publié sur les sites stable et
+     présentation (scripts/publier_stable.py). -->
+<link rel="icon" type="image/png" href="icons/favicon-32.png?v=3">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.min.css">
+<link rel="stylesheet" href="css/telephone.css">
+</head>
+<body>
+<main class="sim">
+  <section class="stage" aria-label="Téléphone virtuel">
+    <div class="device" id="device">
+      <div class="screen">
+        <div class="statusbar" aria-hidden="true"><span id="clock">9:41</span><i class="island"></i><span class="sb-icons">●●● 5G ▮</span></div>
+        <iframe id="phone" title="Vision AR dans le téléphone virtuel" allow="geolocation; camera; autoplay; fullscreen"></iframe>
+        <i class="home-bar" aria-hidden="true"></i>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <header class="ph">
+      <img src="img/vision-ar-logo.png" alt="" width="40" height="40">
+      <div><h1>Téléphone virtuel</h1><p id="link" class="link off">Connexion à l'appli…</p></div>
+    </header>
+
+    <section class="card">
+      <div class="row3">
+        <label>Appareil<select id="device-pick"></select></label>
+        <label>Système<select id="os-pick"><option value="ios">iPhone (iOS)</option><option value="android">Android</option></select></label>
+        <label>Site<select id="site-pick"></select></label>
+      </div>
+      <button class="btn" id="reload">↻ Recharger l'appli</button>
+    </section>
+
+    <section class="card">
+      <h2>Position GPS</h2>
+      <div id="map" class="minimap"></div>
+      <p class="hint">Cliquez sur la carte (ou déplacez le téléphone bleu) pour changer de position.</p>
+      <label class="slider">Précision du GPS <output id="acc-out">6 m</output><input type="range" id="acc" min="3" max="60" value="6"></label>
+      <div class="walk">
+        <button class="btn primary" id="walk">▶ Marcher le long du trajet</button>
+        <label class="slider">Vitesse <output id="speed-out">1,2 m/s</output><input type="range" id="speed" min="0.4" max="2.5" step="0.1" value="1.2"></label>
+        <label class="check"><input type="checkbox" id="fast"> Accéléré ×5</label>
+      </div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="gps-noise"> Position qui saute (bruit du GPS)</label>
+        <label class="check"><input type="checkbox" id="gps-off"> GPS coupé (à l'intérieur)</label>
+        <label class="check"><input type="checkbox" id="gps-denied"> Localisation refusée</label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Orientation du téléphone</h2>
+      <div class="orient">
+        <svg id="dial" viewBox="-80 -80 160 160" role="slider" aria-label="Cap du téléphone" tabindex="0">
+          <circle r="74" class="dial-bg"/>
+          <g class="dial-ticks"></g>
+          <text y="-56" class="dial-n">N</text><text x="58" y="5" class="dial-l">E</text><text y="66" class="dial-l">S</text><text x="-58" y="5" class="dial-l">O</text>
+          <g id="needle"><path d="M0 -50 L9 6 L0 0 L-9 6 Z" class="needle"/><circle r="6" class="needle-c"/></g>
+        </svg>
+        <div class="orient-side">
+          <p class="big"><output id="heading-out">90°</output><small>cap</small></p>
+          <div class="turns"><button class="btn" id="turn-l">↺ 45°</button><button class="btn" id="turn-r">↻ 45°</button></div>
+          <label class="check"><input type="checkbox" id="follow" checked> Regarder dans le sens de la marche</label>
+        </div>
+      </div>
+      <label class="slider">Inclinaison vers le sol <output id="tilt-out">20°</output><input type="range" id="tilt" min="0" max="70" value="20"></label>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="compass-noise"> Boussole qui tremble</label>
+        <button class="btn small" id="disturb">Perturbation magnétique (2 s)</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Caméra</h2>
+      <div class="seg" role="radiogroup" aria-label="Image de la caméra">
+        <label><input type="radio" name="cam" value="street" checked> Rue virtuelle</label>
+        <label><input type="radio" name="cam" value="webcam"> Webcam du PC</label>
+        <label><input type="radio" name="cam" value="refused"> Refusée</label>
+      </div>
+      <p class="hint">La rue virtuelle est dessinée d'après les vrais trottoirs : en tournant ou en penchant le téléphone,
+        le ruban doit rester posé dessus. (Rouvrez le guidage après avoir changé de caméra.)</p>
+    </section>
+
+    <section class="card">
+      <h2>Journal <label class="check inline"><input type="checkbox" id="voice" checked> Voix sur l'ordinateur</label></h2>
+      <ol id="log" class="log"></ol>
+    </section>
+  </aside>
+</main>
+<script src="vendor/leaflet/leaflet.min.js"></script>
+<script type="module" src="js/telephone.js"></script>
+</body>
+</html>

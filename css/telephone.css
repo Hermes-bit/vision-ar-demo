@@ -1,0 +1,82 @@
+/* Téléphone virtuel (outil de test sur ordinateur) — couleurs et police de Vision AR */
+@font-face { font-family: "Atkinson Hyperlegible"; font-weight: 400; font-display: swap; src: url("../fonts/atkinson-hyperlegible-400.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-weight: 700; font-display: swap; src: url("../fonts/atkinson-hyperlegible-700.woff2") format("woff2"); }
+:root { --ink: #0F2537; --muted: #4B5E70; --primary: #007489; --brand: #00AECC; --soft: #DCF3F8; --line: rgba(15, 37, 55, .12);
+  --bg: linear-gradient(160deg, #EEF7FA 0%, #DDEFF4 60%, #D3E9EF 100%); }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 15px/1.4 "Atkinson Hyperlegible", system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+.sim { display: flex; gap: 24px; height: 100vh; padding: 16px; }
+.stage { flex: 1; display: grid; place-items: center; min-width: 0; overflow: hidden; }
+
+/* Le téléphone : écran à la taille réelle (points CSS), réduit pour tenir dans la fenêtre */
+.device { --w: 393px; --h: 852px; --status: 54px; --radius: 55px; position: relative; flex: none;
+  width: calc(var(--w) + 24px); height: calc(var(--h) + 24px); padding: 12px; border-radius: calc(var(--radius) + 12px);
+  background: #10161C; box-shadow: 0 0 0 2px #3A4652, 0 30px 70px rgba(6, 20, 32, .35); transform-origin: center; }
+.screen { position: relative; width: var(--w); height: var(--h); border-radius: var(--radius); overflow: hidden; background: #fff;
+  display: flex; flex-direction: column; }
+.statusbar { flex: none; height: var(--status); display: flex; align-items: center; justify-content: space-between; padding: 0 30px;
+  font: 700 15px system-ui, sans-serif; color: #0F2537; background: #E8F4F8; position: relative; }
+.statusbar .island { position: absolute; left: 50%; top: 11px; width: 120px; height: 34px; margin-left: -60px; border-radius: 20px; background: #000; }
+.device.flat .statusbar .island { display: none; }
+.sb-icons { font-size: 11px; letter-spacing: 1px; }
+.screen iframe { flex: 1; width: 100%; border: 0; display: block; background: #E8F4F8; }
+.home-bar { position: absolute; left: 50%; bottom: 8px; width: 134px; height: 5px; margin-left: -67px; border-radius: 3px; background: rgba(15, 37, 55, .55);
+  pointer-events: none; }
+.device.flat .home-bar { display: none; }
+
+/* Panneau de commandes */
+.panel { width: 400px; flex: none; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+.ph { display: flex; align-items: center; gap: 12px; }
+.ph img { border-radius: 10px; }
+h1 { margin: 0; font-size: 21px; }
+h2 { margin: 0 0 8px; font-size: 16px; color: var(--primary); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.link { margin: 0; font-size: 13px; font-weight: 700; color: #1C7A4D; }
+.link.off { color: #7A4B00; }
+.card { background: rgba(255, 255, 255, .72); border: 1px solid rgba(255, 255, 255, .9); border-radius: 18px; padding: 14px;
+  box-shadow: 0 1px 2px rgba(15, 37, 55, .06), 0 8px 22px rgba(15, 37, 55, .1); display: flex; flex-direction: column; gap: 10px; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+label { font-size: 13px; font-weight: 700; color: var(--muted); }
+select { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font: inherit; color: var(--ink); }
+.btn { font: 700 14px inherit; font-family: inherit; padding: 9px 14px; border-radius: 999px; border: 0; background: var(--soft); color: #00505F; cursor: pointer; }
+.btn:hover { filter: brightness(.97); }
+.btn.primary { background: var(--primary); color: #fff; }
+.btn.small { padding: 6px 12px; font-size: 13px; }
+.minimap { height: 230px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); }
+.hint { margin: 0; font-size: 12.5px; color: var(--muted); }
+.slider { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+.slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--primary); }
+.slider output { color: var(--ink); }
+.walk { display: flex; flex-direction: column; gap: 8px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 400; cursor: pointer; }
+.check input { accent-color: var(--primary); width: 16px; height: 16px; }
+.check.inline { font-size: 12.5px; color: var(--muted); }
+.orient { display: flex; gap: 14px; align-items: center; }
+#dial { width: 150px; height: 150px; flex: none; cursor: grab; touch-action: none; }
+.dial-bg { fill: #fff; stroke: var(--line); stroke-width: 2; }
+.dial-ticks line { stroke: rgba(15, 37, 55, .3); stroke-width: 1.5; }
+.dial-n { font: 700 14px system-ui; fill: #D93025; text-anchor: middle; }
+.dial-l { font: 700 12px system-ui; fill: var(--muted); text-anchor: middle; }
+.needle { fill: var(--primary); }
+.needle-c { fill: #0F2537; }
+.orient-side { display: flex; flex-direction: column; gap: 8px; }
+.big { margin: 0; font-size: 30px; font-weight: 700; color: var(--primary); display: flex; align-items: baseline; gap: 6px; }
+.big small { font-size: 13px; color: var(--muted); }
+.turns { display: flex; gap: 6px; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg label { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: #fff; border: 1px solid var(--line);
+  color: var(--ink); font-weight: 700; cursor: pointer; }
+.seg input { accent-color: var(--primary); }
+.log { margin: 0; padding: 0; list-style: none; max-height: 200px; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.log li { display: flex; gap: 8px; }
+.log time { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+.phone-pin { width: 30px; height: 30px; }
+.phone-pin svg { width: 30px; height: 30px; overflow: visible; }
+
+/* Fenêtre étroite : le panneau passe sous le téléphone */
+@media (max-width: 900px) {
+  .sim { flex-direction: column; height: auto; }
+  .panel { width: 100%; overflow: visible; }
+  .stage { min-height: 70vh; }
+}
