@@ -5,7 +5,7 @@
 // (/vision-ar-presentation/), publiées par scripts/publier_stable.py. Chacun a ses propres caches et n'efface que les siens.
 const SITE = new URL(self.location.href).pathname.split("/")[1] || "";
 const PREFIX = {"vision-ar": "va-stable-", "vision-ar-presentation": "va-pres-"}[SITE] || "vision-ar-";
-const VERSION = PREFIX + "v100";
+const VERSION = PREFIX + "v101";
 // Cartes et bibliothèques gardées pour le hors-ligne : un cache à part, qui SURVIT aux mises à jour de l'appli
 // (avant, chaque nouvelle version effaçait les cartes déjà téléchargées)
 const MAP_CACHE = PREFIX + "cartes", MAX_MAP = 4000;
@@ -67,8 +67,12 @@ self.addEventListener("fetch", e => {
     e.respondWith(fetch(e.request).then(res => { if (res.ok) keepMap(e.request, res.clone()); return res; })
       .catch(() => caches.match(e.request, {cacheName: MAP_CACHE})));
   } else if (STATIC_HOSTS.includes(url.hostname)) {
-    // Bibliothèques à version figée (fond vectoriel, détecteur d'obstacles) : la copie gardée d'abord
-    e.respondWith(caches.match(e.request, {cacheName: MAP_CACHE}).then(hit => hit || fetch(e.request).then(res => {
+    // Bibliothèques à version figée (fond vectoriel, détecteur d'obstacles, voix) : la copie gardée d'abord. Une copie
+    // « opaque » (gardée après un importScripts du détecteur) ne peut pas répondre à une demande CORS : le navigateur
+    // la refuse (« Failed to fetch » au téléchargement d'Hermès après un guidage, 25/10). Dans ce cas : le réseau, et
+    // la copie complète remplace l'opaque (elle convient aussi à l'importScripts).
+    const usable = hit => hit && !(hit.type === "opaque" && e.request.mode === "cors");
+    e.respondWith(caches.match(e.request, {cacheName: MAP_CACHE}).then(hit => usable(hit) ? hit : fetch(e.request).then(res => {
       if (res.ok || res.type === "opaque") keepMap(e.request, res.clone());
       return res;
     })));
