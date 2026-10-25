@@ -163,6 +163,32 @@ const SCENARIOS = [
     }
     C.setFollow(true);
   }],
+  ["virage", "Virage : le ruban reste devant soi et montre le tournant", async () => {
+    if (va()?.S.screen !== "nav") { check("Guidage en cours", false, "lancez « Guidage et marche » avant"); return; }
+    // on marche (vite, mais à une vraie vitesse de marche) jusqu'au premier virage, puis 10 m après
+    C.setFollow(true); C.setFast(false); C.sim.speed = 2.4;
+    if (!C.sim.walking) C.toggleWalk();
+    const st = () => va().navState(), idx0 = st().idx;
+    const turn = st().next;
+    step(`Prochain virage : « ${turn.text} », dans ${Math.round(st().toManeuver)} m`);
+    await waitFor(() => st().toManeuver < 22, 90000);
+    let worst = 0, sawTurn = false, samples = 0;
+    const lat0 = C.sim.lat;
+    const t0 = performance.now();
+    while (performance.now() - t0 < 25000 && !(st().idx > idx0 && va().S.nav.pos > va().S.nav.stepAt[idx0 + 1] + 10)) {
+      const v = ar()?.view;
+      if (v?.here && va().S.nav.phase === "route" && !va().S.nav.away) {
+        const d = Math.hypot((v.here.lat - C.sim.lat) * 111320, (v.here.lon - C.sim.lon) * 111320 * Math.cos(lat0 * Math.PI / 180));
+        worst = Math.max(worst, d); samples++;
+        if (st().idx === idx0 && st().toManeuver < 12 && ar().reach >= st().toManeuver + 5) sawTurn = true;
+      }
+      await sleep(150);
+    }
+    C.sim.speed = 1.2;
+    check(`Le ruban part de sous les pieds, même dans le virage (écart max ${worst.toFixed(1)} m sur ${samples} mesures)`, samples > 20 && worst < 2);
+    check("Le tournant et la rue d'après sont dessinés avant d'arriver au virage", sawTurn);
+    check("Le virage est passé, consigne suivante", st().idx > idx0, `étape ${st().idx}`);
+  }],
   ["reduire", "Réduire et reprendre le guidage", async () => {
     if (va()?.S.screen !== "nav") { check("Guidage en cours", false, "lancez « Guidage et marche » avant"); return; }
     await tap('#ar [data-act="minimize"]', "Réduire");
