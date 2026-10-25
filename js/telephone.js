@@ -4,18 +4,22 @@
 // écrites dans le journal. On peut ainsi tout essayer sans sortir : marcher le long du trajet, tourner et pencher
 // le téléphone, couper ou refuser le GPS, et voir si le ruban reste posé sur la rue virtuelle.
 import {loadNetwork} from "./routing.js";
+import {initTests} from "./telephone-tests.js";
 
 const $ = id => document.getElementById(id);
 const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
 const norm = a => ((a % 360) + 360) % 360, angleDiff = (a, b) => ((a - b + 540) % 360) - 180;
 const store = {get: (k, d) => { try { return JSON.parse(localStorage.getItem(`telephone-${k}`)) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(`telephone-${k}`, JSON.stringify(v)); } catch { /* navigation privée */ } }};
+// Écran en points CSS ; safe : marges de sécurité de l'iPhone (barre d'état et barre d'accueil), données à l'appli
+// comme sur le vrai téléphone (elle passe dessous, plein écran) ; status : hauteur de la barre d'état d'Android (opaque)
 const DEVICES = {
-  iphone15: {label: "iPhone 15", w: 393, h: 852, status: 54, radius: 55},
-  iphone15max: {label: "iPhone 15 Pro Max", w: 430, h: 932, status: 54, radius: 58},
-  iphonese: {label: "iPhone SE", w: 375, h: 667, status: 20, radius: 6, flat: true},
-  pixel8: {label: "Pixel 8", w: 412, h: 915, status: 32, radius: 40, flat: true},
+  iphone15: {label: "iPhone 15", w: 393, h: 852, safe: [59, 34], status: 32, radius: 55},
+  iphone15max: {label: "iPhone 15 Pro Max", w: 430, h: 932, safe: [59, 34], status: 32, radius: 58},
+  iphonese: {label: "iPhone SE", w: 375, h: 667, safe: [20, 0], status: 24, radius: 6, flat: true},
+  pixel8: {label: "Pixel 8", w: 412, h: 915, safe: [24, 0], status: 32, radius: 40, flat: true},
 };
+const device = () => DEVICES[store.get("device", "iphone15")] || DEVICES.iphone15;
 const SITES = {test: ["Test", "index.html"], stable: ["Stable", "../vision-ar/index.html"], presentation: ["Présentation", "../vision-ar-presentation/index.html"]};
 const UA = {
   ios: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
@@ -80,8 +84,20 @@ window.__vaSim = w => {
       setTimeout(() => u.onend?.({}), 400 + u.text.length * 45);
     };
   }
+  const st = w.document.createElement("style");
+  st.id = "va-sim-safe";
+  w.document.head.append(st);
+  applyInsets();
   setLink(true);
 };
+// iPhone : l'appli passe sous la barre d'état (plein écran) ; ses marges de sécurité sont celles de l'appareil.
+// Android : barre d'état opaque au-dessus de l'appli, pas de marge.
+function applyInsets() {
+  const d = device(), ios = sim.os === "ios", [top, bottom] = ios ? d.safe : [0, 0];
+  const st = sim.win?.document?.getElementById("va-sim-safe");
+  if (st) st.textContent = `:root { --safe-top: ${top}px !important; --safe-bottom: ${bottom}px !important; }`;
+  $("device").classList.toggle("overlay", ios);
+}
 function setLink(ok, text) {
   $("link").textContent = text || (ok ? `Appli raccordée : GPS, boussole et caméra simulés (${sim.os === "ios" ? "iPhone" : "Android"})` : "Appli non raccordée");
   $("link").classList.toggle("off", !ok);
@@ -107,11 +123,13 @@ function feed(id, w = sim.watchers.get(id)) {
   try { w.ok(fix()); } catch (e) { console.error(e); }
 }
 setInterval(() => { for (const [id, w] of sim.watchers) feed(id, w); }, 1000);
-function setPermission(p) {
+function setPermission(p, quiet = false) {
   sim.perm = p; sim.denied.clear();
+  $("gps-denied").checked = p === "denied";
   for (const st of sim.permStatuses) { st.state = p; try { st.onchange?.(); } catch { /* */ } }
-  log(p === "denied" ? "📍 Localisation refusée" : "📍 Localisation autorisée (rechargez l'appli si elle l'avait déjà refusée)");
+  if (!quiet) log(p === "denied" ? "📍 Localisation refusée" : "📍 Localisation autorisée (rechargez l'appli si elle l'avait déjà refusée)");
 }
+function setFast(on) { sim.fast = on; $("fast").checked = on; }
 
 // ---- Boussole et inclinaison : 60 fois par seconde, comme les capteurs du téléphone ----------------------------
 const REL0 = 123;                                         // référence quelconque du gyroscope (alpha relatif)
@@ -345,12 +363,14 @@ function syncUi() {
   $("walk").textContent = sim.walking ? "⏸ Arrêter de marcher" : "▶ Marcher le long du trajet";
 }
 function fitDevice() {
-  const d = DEVICES[store.get("device", "iphone15")] || DEVICES.iphone15, el = $("device"), stage = el.parentElement;
+  const d = device(), el = $("device"), stage = el.parentElement;
   el.style.setProperty("--w", `${d.w}px`); el.style.setProperty("--h", `${d.h}px`);
   el.style.setProperty("--status", `${d.status}px`); el.style.setProperty("--radius", `${d.radius}px`);
   el.classList.toggle("flat", !!d.flat);
-  const k = Math.min(1, (stage.clientHeight - 8) / (d.h + 24), (stage.clientWidth - 8) / (d.w + 24));
+  const narrow = innerWidth <= 900, k = Math.min(1.15, (innerHeight - 32) / (d.h + 24), narrow ? (innerWidth - 32) / (d.w + 24) : 9);
   el.style.transform = `scale(${k.toFixed(3)})`;
+  stage.style.width = `${Math.round((d.w + 24) * k)}px`; stage.style.height = `${Math.round((d.h + 24) * k)}px`;
+  applyInsets();
 }
 function loadApp() {
   const [, url] = SITES[store.get("site", "test")] || SITES.test;
@@ -389,3 +409,4 @@ addEventListener("resize", fitDevice);
 setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"}); }, 10000);
 $("clock").textContent = new Date().toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
 syncUi(); fitDevice(); loadApp();
+initTests({sim, loadApp, toggleWalk, turn, setFollow, setPermission, setFast});

@@ -794,7 +794,15 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
 .logo-pick.on { border-color: var(--primary); background: var(--primary-soft); }
 .logo-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
-/* ---- iOS 26, appli de l'écran d'accueil : prolonge jusqu'au vrai bas de l'écran (--vp-gap, voir index.html) ---- */
+/* ---- iOS 26, appli de l'écran d'accueil : jusqu'au vrai bas de l'écran (voir index.html) ----------------------
+   Bogue WebKit 301108 : page sous la barre d'état -> zone d'affichage plus courte que l'écran de la hauteur de cette
+   barre TANT QUE le document est plus court que l'écran ; WebKit ne dessine rien en dessous (bande vide en bas, même
+   pour les éléments fixes : les prolonger, comme l'ancien --vp-gap, ne servait à rien). Un document un peu plus haut
+   suffit pour qu'iOS donne tout l'écran ; min() le limite à l'écran (pas de défilement), y compris quand la barre
+   d'état est opaque (marge du haut à 0). Solution reprise de frappe-ui (#1284) et d'autres applis web installées. */
+@media (display-mode: standalone) {
+  html { min-height: min(100lvh, calc(100% + env(safe-area-inset-top, 0px))); }
+}
 :root { --vp-gap: 0px; }
 #panel, body.sheet::after, .map-credits, #hud, #ar, .confirm, #loader, .stk-pop { bottom: calc(-1 * var(--vp-gap)); }
 body.sheet #map, body.nav #map { height: calc(100vh + var(--vp-gap)); height: calc(100dvh + var(--vp-gap)); }

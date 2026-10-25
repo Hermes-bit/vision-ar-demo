@@ -6,19 +6,23 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { font: 15px/1.4 "Atkinson Hyperlegible", system-ui, sans-serif; color: var(--ink); background: var(--bg); }
-.sim { display: flex; gap: 24px; height: 100vh; padding: 16px; }
-.stage { flex: 1; display: grid; place-items: center; min-width: 0; overflow: hidden; }
+.sim { display: flex; gap: 28px; height: 100vh; padding: 16px; justify-content: center; align-items: center; }
+.stage { flex: none; position: relative; }
 
 /* Le téléphone : écran à la taille réelle (points CSS), réduit pour tenir dans la fenêtre */
 .device { --w: 393px; --h: 852px; --status: 54px; --radius: 55px; position: relative; flex: none;
   width: calc(var(--w) + 24px); height: calc(var(--h) + 24px); padding: 12px; border-radius: calc(var(--radius) + 12px);
-  background: #10161C; box-shadow: 0 0 0 2px #3A4652, 0 30px 70px rgba(6, 20, 32, .35); transform-origin: center; }
+  background: #10161C; box-shadow: 0 0 0 2px #3A4652, 0 30px 70px rgba(6, 20, 32, .35); transform-origin: top left; position: absolute; left: 0; top: 0; }
 .screen { position: relative; width: var(--w); height: var(--h); border-radius: var(--radius); overflow: hidden; background: #fff;
   display: flex; flex-direction: column; }
 .statusbar { flex: none; height: var(--status); display: flex; align-items: center; justify-content: space-between; padding: 0 30px;
   font: 700 15px system-ui, sans-serif; color: #0F2537; background: #E8F4F8; position: relative; }
 .statusbar .island { position: absolute; left: 50%; top: 11px; width: 120px; height: 34px; margin-left: -60px; border-radius: 20px; background: #000; }
 .device.flat .statusbar .island { display: none; }
+/* iPhone : l'appli occupe tout l'écran, la barre d'état (heure, batterie) est dessinée par-dessus, comme sur le vrai */
+.device.overlay .statusbar { position: absolute; z-index: 2; left: 0; right: 0; top: 0; height: 54px; color: #fff; pointer-events: none;
+  background: linear-gradient(rgba(6, 20, 32, .35), rgba(6, 20, 32, 0)); text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.device.overlay.flat .statusbar { height: 24px; font-size: 12px; }
 .sb-icons { font-size: 11px; letter-spacing: 1px; }
 .screen iframe { flex: 1; width: 100%; border: 0; display: block; background: #E8F4F8; }
 .home-bar { position: absolute; left: 50%; bottom: 8px; width: 134px; height: 5px; margin-left: -67px; border-radius: 3px; background: rgba(15, 37, 55, .55);
@@ -26,7 +30,7 @@ body { font: 15px/1.4 "Atkinson Hyperlegible", system-ui, sans-serif; color: var
 .device.flat .home-bar { display: none; }
 
 /* Panneau de commandes */
-.panel { width: 400px; flex: none; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+.panel { width: 400px; flex: none; align-self: stretch; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
 .ph { display: flex; align-items: center; gap: 12px; }
 .ph img { border-radius: 10px; }
 h1 { margin: 0; font-size: 21px; }
@@ -74,9 +78,28 @@ select { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; border-
 .phone-pin { width: 30px; height: 30px; }
 .phone-pin svg { width: 30px; height: 30px; overflow: visible; }
 
+/* Tests en direct */
+.sum { font-size: 12.5px; color: var(--muted); font-weight: 700; }
+.test-actions { display: flex; gap: 8px; }
+.test-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.test-list li { display: flex; align-items: center; gap: 8px; }
+.test-list .btn { padding: 3px 10px; }
+.test-out { margin: 0; padding: 8px 10px; list-style: none; max-height: 240px; overflow-y: auto; border-radius: 12px; background: #0F2537; color: #DCE6EE;
+  font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
+.test-out:empty { display: none; }
+.test-out .head { color: #7FE3F2; font-weight: 700; margin-top: 4px; }
+.test-out .ok { color: #7FD6A6; }
+.test-out .ko { color: #FF9C8F; font-weight: 700; }
+.test-out .step { color: #A7B7C7; }
+/* le doigt du test : un rond qui apparaît là où il touche */
+.finger { position: fixed; z-index: 50; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%; pointer-events: none;
+  background: rgba(255, 194, 75, .45); border: 3px solid #F2A23A; box-shadow: 0 0 0 6px rgba(242, 162, 58, .2); animation: tap .9s ease-out forwards; }
+@keyframes tap { 0% { transform: scale(.4); opacity: 0; } 25% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+body.testing .stage::after { content: "Test en cours"; position: absolute; left: 50%; top: -2px; transform: translate(-50%, -100%); font-size: 12px; font-weight: 700;
+  color: #7A4B00; background: #FFF1D1; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+
 /* Fenêtre étroite : le panneau passe sous le téléphone */
 @media (max-width: 900px) {
   .sim { flex-direction: column; height: auto; }
   .panel { width: 100%; overflow: visible; }
-  .stage { min-height: 70vh; }
 }
