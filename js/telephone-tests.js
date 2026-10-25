@@ -36,7 +36,8 @@ async function tap(sel, label) {
   await sleep(200);
   finger(e);
   await sleep(380);
-  e.click();
+  const now = typeof sel === "string" ? el(sel) : e;      // l'élément à cet endroit au moment du toucher
+  (now?.isConnected ? now : e).click();
   await sleep(450);
 }
 async function type(sel, value) {
@@ -140,6 +141,13 @@ const SCENARIOS = [
     check(`On avance sur l'itinéraire (${moved || 0} m)`, !!moved);
     check("Le ruban est affiché au sol", !!(await waitFor(() => ar()?.ribbonA > 0.5, 6000)), `opacité ${ar()?.ribbonA?.toFixed(2)}`);
     check("Temps restant affiché en haut (« min »)", text("#ar .c-eta").includes("min"), text("#ar .c-eta"));
+    // pendant la marche, la consigne change à chaque mètre ; les boutons, eux, ne doivent pas être recréés (sinon un
+    // toucher qui tombe à ce moment-là est perdu : « Réduire » sans effet, tests du 25/10)
+    const btns = ['[data-act="minimize"]', '[data-act="voice"]', '[data-act="ask-stop"]'].map(q => el(`#ar ${q}`));
+    const pos0 = va().S.nav.pos, info0 = text("#ar .bubble");
+    await waitFor(() => va().S.nav.pos > pos0 + 4 || text("#ar .bubble") !== info0, 10000);
+    check("La consigne s'est mise à jour en marchant", text("#ar .bubble") !== info0 || va().S.nav.pos > pos0 + 4);
+    check("Les boutons restent les mêmes pendant la marche (aucun toucher perdu)", btns.every(b => b?.isConnected));
   }],
   ["tourner", "Tourner le téléphone : le ruban suit sans retard", async () => {
     if (va()?.S.screen !== "nav") { check("Guidage en cours", false, "lancez « Guidage et marche » avant"); return; }

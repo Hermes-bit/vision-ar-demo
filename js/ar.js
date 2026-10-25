@@ -67,7 +67,7 @@ let arrivalCheered = false;
 let api = null, root = null, video = null, canvas = null, ctx = null, stream = null, raf = 0, noCamera = false;
 let sensors = {heading: null, pitch: null, roll: 0}, mapFull = false, sheet = null, domeGeom = null, domeObserver = null;
 let camHeight = PHONE_HEIGHT_M.standing, view = null;     // view : origine et position lissées
-let blocking = true, sheetMessage = null, lastUi = "";
+let blocking = true, sheetMessage = null, lastUi = "", uiParts = {};
 // Détection d'obstacles (N°5, N°17, N°18)
 let dets = [], detsAt = 0, detBusy = false, detState = "", lastPitch = 10, lastAutoSample = 0;
 // Couloir de marche (js/corridor.js) : suivi des obstacles d'une image à l'autre, annonces une seule fois
@@ -886,8 +886,12 @@ function renderUi(s, heading, compass) {
   const alt = s.alt;
   if (st.arrived && !arrivalCheered) { arrivalCheered = true; stickerPop("bien-arrive", 2400); }   // une seule fois par trajet
   if (!st.arrived) arrivalCheered = false;
-  const html = `
-    <div class="top">
+  // L'écran est découpé en parties mises à jour séparément. La consigne et les pastilles changent à chaque mètre ;
+  // les boutons (Réduire, barre du bas, fenêtres) ne sont recréés que si LEUR contenu change. Avant, tout l'écran
+  // était remplacé à chaque changement de texte : un toucher qui tombait à ce moment-là était perdu (« Réduire »
+  // sans effet pendant le chargement du détecteur, tests du 25/10 ; en marchant, à chaque mètre).
+  const parts = {
+    info: `
       <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", st.arrived ? "Arrivée" : `Arrivée ${eta}`, st.arrived ? eta : minsLeft)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
       <div class="bubble"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
@@ -899,27 +903,39 @@ function renderUi(s, heading, compass) {
         ${s.detect && !nativeOn && detState === "loading" ? `<em class="arrow-note">${icon("scan-eye")} Chargement du détecteur d'obstacles…</em>` : ""}
         ${s.detect && !nativeOn && detState === "error" ? `<em>${icon("triangle-alert")} Détecteur d'obstacles indisponible (connexion ?)</em>` : ""}
         ${!st.arrived && !approach && !joining && shownAlerts.length ? `<em>${icon("triangle-alert")} ${esc(shownAlerts.join(" · "))}</em>` : ""}</div>
-        ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}${st.arrived ? sticker("bien-arrive", "stk-arrive") : ""}</div>
-      ${banner}
-    </div>
+        ${away ? `<strong class="bubble-dist">${away}</strong>` : ""}${st.arrived ? sticker("bien-arrive", "stk-arrive") : ""}</div>`,
+    banner,
+    dome: `
     <div class="dome-credit" aria-hidden="true">© OpenStreetMap · OpenFreeMap · OpenMapTiles</div>
     <div class="dome-ui">
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
       <button class="mini" data-act="minimize" aria-label="Réduire : retour au plan, le guidage continue à la voix">${icon("chevron-down")}<span aria-hidden="true">Réduire</span></button>
       <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
         <span class="needle"></span><i>N</i></div>
-    </div>
+    </div>`,
+    dock: `
     <nav class="dock" aria-label="Commandes du guidage">
       <button class="round" data-act="settings" aria-label="Réglages du guidage">${icon("sliders-horizontal")}<span aria-hidden="true">Réglages</span></button>
       <button class="pill" data-act="map">${icon(mapFull ? "camera" : "map")}<span>${mapFull ? "Caméra" : "Plan"}</span></button>
       <button class="center" data-act="report" aria-label="Signaler un obstacle">${icon("triangle-alert")}</button>
       <button class="pill stop" data-act="ask-stop" aria-label="Arrêter le guidage">${icon("x")}<span>Arrêter</span></button>
       <button class="round" data-act="voice" aria-label="${s.voice ? "Couper la voix" : "Activer la voix"}">${icon(s.voice ? "volume-2" : "volume-x")}<span aria-hidden="true">${s.voice ? "Son" : "Muet"}</span></button>
-    </nav>
+    </nav>`,
+    over: `
     ${st.arrived && s.nav.arrivedAt && !s.nav.stayed && !sheet ? arrivalPanel(s) : ""}
-    ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : sheet === "stop" ? stopSheet() : reportSheet()}</section>` : ""}`;
+    ${sheet ? `<div class="scrim" data-act="close-sheet"></div><section class="sheet" role="dialog" aria-modal="true">${sheet === "settings" ? settingsSheet(s) : sheet === "stop" ? stopSheet() : reportSheet()}</section>` : ""}`,
+  };
   const ui = root.querySelector(".ar-ui");
-  if (html !== lastUi) { ui.innerHTML = html; lastUi = html; }
+  if (!ui.querySelector("[data-part]")) {                  // squelette fixe (display: contents : mise en page inchangée)
+    ui.innerHTML = `<div class="top"><div class="ar-part" data-part="info"></div><div class="ar-part" data-part="banner"></div></div>
+      <div class="ar-part" data-part="dome"></div><div class="ar-part" data-part="dock"></div><div class="ar-part" data-part="over"></div>`;
+    uiParts = {};
+  }
+  for (const [k, h] of Object.entries(parts)) if (uiParts[k] !== h) { ui.querySelector(`[data-part="${k}"]`).innerHTML = h; uiParts[k] = h; }
+  lastUi = "affiché";
+  // état du GPS dans la fenêtre Réglages : texte mis à jour seul, sans recréer les interrupteurs à chaque position
+  const gps = ui.querySelector('[data-live="gps"]'), gpsText = s.gpsStatus || "Recherche de votre position…";
+  if (gps && gps.textContent !== gpsText) gps.textContent = gpsText;
   // VoiceOver / TalkBack : la consigne n'est lue que lorsqu'elle CHANGE (avant, la bulle était relue à chaque
   // mètre parcouru). Les dangers passent par le bandeau « alert » et par la voix de l'appli (js/speech.js).
   const live = root.querySelector(".ar-live"), said = `${title}. ${subText}`;
@@ -1001,7 +1017,7 @@ function settingsSheet(s) {
     `<button data-act="${act}" data-v="${v}" class="${cur === v ? "on" : ""}">${ic ? icon(ic) : ""}${l}</button>`).join("")}</div>`;
   return `<div class="sheet-head"><h3>${icon("sliders-horizontal")} Réglages du guidage</h3><button class="x" data-act="close-sheet" aria-label="Fermer">${icon("x")}</button></div>
     <p class="sheet-label">Ma position</p>
-    <div class="gps-state">${icon("locate-fixed")}<span>${esc(s.gpsStatus || "Recherche de votre position…")}</span></div>
+    <div class="gps-state">${icon("locate-fixed")}<span data-live="gps"></span></div>
     <button class="btn soft" data-act="reroute">${icon("rotate-ccw")} Recalculer l'itinéraire</button>
     <p class="sheet-label">Vibrations de direction</p>
     <label class="setting">${icon("vibrate")}<span class="grow">Vibrer pour indiquer la direction</span>

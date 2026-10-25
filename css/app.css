@@ -410,6 +410,7 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 #ar.no-camera { background: linear-gradient(180deg, #d9e5f0 0%, #b9c7d6 44%, #9aa6b3 44%, #7f8b98 100%); }
 [data-theme="neon"] #ar.no-camera { background: linear-gradient(180deg, #0f3242 0%, #071722 44%, #040b12 44%, #02070b 100%); }
 #ar .ar-ui { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+#ar .ar-part { display: contents; }                 /* parties de l'écran mises à jour séparément (js/ar.js) */
 #ar .ar-ui button, #ar .sheet, #ar .scrim { pointer-events: auto; }
 .glass, #ar .chip, #ar .bubble, #ar .dock .pill, #ar .dock .round, #ar .banner, #ar .sheet, #ar .rose {
   background: var(--nav-bg); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter);
