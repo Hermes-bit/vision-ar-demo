@@ -419,9 +419,10 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 /* Haut de l'écran : pastilles, consigne, alerte (empilées : rien ne cache la rue devant soi) */
 #ar .top { position: absolute; left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right)); top: calc(10px + var(--safe-top));
   display: flex; flex-direction: column; gap: 8px; }
-#ar .chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-#ar .chip { border-radius: 999px; padding: 6px 10px 6px 6px; display: flex; align-items: center; gap: 8px; min-width: 0; }
-#ar .chip-ic { width: 38px; height: 38px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface-solid);
+/* pastille du milieu un peu plus large : temps restant + heure d'arrivée (« Arrivée 23:58 / 12 min ») */
+#ar .chips { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1fr); gap: 8px; }
+#ar .chip { border-radius: 999px; padding: 6px 10px 6px 6px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+#ar .chip-ic { width: 34px; height: 34px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface-solid);
   border: 3px solid currentColor; }
 #ar .chip-ic .i { width: 19px; height: 19px; }
 #ar .chip > span:last-child { min-width: 0; display: flex; flex-direction: column; line-height: 1.1; }
@@ -492,8 +493,6 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
   background: linear-gradient(#E5484D 50%, #A7B7C7 50%); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 #ar .rose i { position: absolute; top: 2px; font-style: normal; font-size: 11px; font-weight: 700; }
 #ar .alt-note { display: none; }
-.alt-tag { display: inline-block; white-space: nowrap; transform: translate(-50%, -50%); padding: 4px 10px; border-radius: 999px; font: 700 13px "Atkinson Hyperlegible", sans-serif;
-  color: #fff; background: linear-gradient(135deg, #E8457C, #C2389E); box-shadow: 0 4px 12px rgba(194, 56, 158, .45); }
 .puck { position: relative; width: 90px; height: 90px; }
 .puck .cone { position: absolute; left: 50%; top: 50%; width: 90px; height: 90px; margin: -45px; border-radius: 50%;
   background: conic-gradient(from -30deg, rgba(47, 128, 237, .45) 0deg, rgba(47, 128, 237, 0) 60deg, transparent 60deg);
@@ -540,7 +539,7 @@ html.native-ar-on, html.native-ar-on body { background: transparent !important; 
 #ar .sheet .setting.strong { box-shadow: none; background: var(--surface-2); }
 
 @media (max-width: 380px) {
-  #ar .chip { padding: 5px 8px 5px 5px; gap: 6px; } #ar .chip-ic { width: 32px; height: 32px; } #ar .chip b { font-size: 14px; }
+  #ar .chip { padding: 5px 8px 5px 5px; gap: 6px; } #ar .chip-ic { width: 32px; height: 32px; } #ar .chip b { font-size: 14px; } #ar .chip small { font-size: 11px; }
   #ar .dock .round, #ar .dock .pill { font-size: 11.5px; } #ar .dock .center { width: 56px; height: 56px; } #ar .dock { gap: 4px; } #ar .bubble-dist { font-size: 22px; } #ar .bubble b { font-size: 17px; }
 }
 @media (orientation: landscape) and (max-height: 600px) {
@@ -961,3 +960,91 @@ body.picking-door #panel { opacity: .55; pointer-events: none; }
 .tour-card h3 { color: var(--primary); display: flex; align-items: center; gap: 8px; }
 .tour-card ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.4; }
 .tour-card .btn { align-self: flex-start; width: auto; }
+
+/* ---- Itinéraires comparés (comme Citymapper) : étiquettes sur le plan, différence expliquée ------------------- */
+.route-tag-host { width: 0 !important; height: 0 !important; }
+.route-tag { position: absolute; left: -14px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 6px 11px 7px; border-radius: 10px; background: #fff; color: #0F2537; white-space: nowrap; cursor: pointer;
+  font: 400 13px/1.15 "Atkinson Hyperlegible", system-ui, sans-serif; box-shadow: 0 4px 14px rgba(15, 37, 55, .28); }
+.route-tag b { font-size: 15px; font-weight: 700; }
+.route-tag::after { content: ""; position: absolute; left: 10px; bottom: -6px; width: 12px; height: 12px; background: inherit;
+  transform: rotate(45deg); border-radius: 0 0 3px 0; }
+.route-tag.sel { background: #0F2537; color: #fff; }
+.route-tag.bad b { color: #B42318; }
+body.heading-up .route-tag-host { display: none; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.badges .badge { margin-top: 0; }
+.badge.fast { background: var(--primary-soft); color: var(--on-primary-soft); }
+.rc-note { margin: 0; display: flex; gap: 8px; align-items: flex-start; font-size: 14.5px; line-height: 1.35; color: var(--ink); }
+.rc-note .i { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--primary); }
+.rc-note.fastest .i { color: var(--warn-solid); }
+
+/* Inverser départ et arrivée : bouton à droite, entre les deux lignes */
+.trip.has-swap { padding-right: 58px; }
+.trip-swap { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%;
+  border: 0; display: grid; place-items: center; background: var(--surface-2); color: var(--primary); cursor: pointer; }
+.trip-swap .i { width: 22px; height: 22px; }
+.trip-swap:active { background: var(--primary-soft); }
+
+/* Profil du trajet, sous les itinéraires */
+.mob-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: -2px calc(-1 * var(--gutter)) 0; padding: 2px var(--gutter);
+  -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; touch-action: pan-x; }
+.mob-chips::-webkit-scrollbar { display: none; }
+.mchip { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px 0 11px; border-radius: 999px;
+  border: 1.5px solid var(--hair); background: var(--surface); color: var(--ink); font: 700 14.5px "Atkinson Hyperlegible", system-ui, sans-serif; cursor: pointer; }
+.mchip .i { width: 18px; height: 18px; color: var(--primary); }
+.mchip.on { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.mchip.on .i { color: var(--on-primary); }
+
+/* ---- Guidage réduit (comme Citymapper) : pastille « Trajet en cours » et panneau du guidage ---------------- */
+.trip-pill { position: fixed; z-index: 525; top: calc(12px + var(--safe-top)); right: calc(12px + var(--safe-right));
+  max-width: calc(100% - 92px - var(--safe-left) - var(--safe-right)); height: 52px; padding: 0 12px 0 16px; border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, .85); background: #0F2537; color: #fff; font: 700 16px "Atkinson Hyperlegible", system-ui, sans-serif;
+  display: inline-flex; align-items: center; gap: 10px; box-shadow: 0 8px 24px rgba(6, 20, 32, .45); cursor: pointer; }
+.trip-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip-pill .i { width: 20px; height: 20px; flex: none; }
+body:not(.sheet) .trip-pill { display: none; }
+.live-dot { width: 12px; height: 12px; border-radius: 50%; background: #3DDC97; flex: none; animation: live-pulse 1.6s ease-out infinite; }
+@keyframes live-pulse { 0% { box-shadow: 0 0 0 0 rgba(61, 220, 151, .7); } 70%, 100% { box-shadow: 0 0 0 10px rgba(61, 220, 151, 0); } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+.live-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: var(--radius); background: var(--surface);
+  outline: 1px solid var(--glass-border); outline-offset: -1px; box-shadow: var(--shadow);
+  -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); }
+.live-dest { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.live-dest > .i { color: var(--danger); width: 22px; height: 22px; flex: none; }
+.live-dest small { display: block; color: var(--muted); font-size: 13px; }
+.live-dest b { display: block; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-stats { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 15px; }
+.live-stats b { font-size: 26px; color: var(--primary); }
+.live-next { margin: 0; display: flex; gap: 10px; align-items: center; font-size: 16px; font-weight: 700; color: var(--ink); }
+.live-next .i { width: 26px; height: 26px; flex: none; color: var(--primary); }
+/* Bouton « Réduire » de la vue de guidage : en bas à gauche, en face de la boussole */
+#ar .mini { position: absolute; left: calc(14px + var(--safe-left)); bottom: calc(88px + var(--safe-bottom) + var(--vp-gap)); width: 56px; height: 56px;
+  border-radius: 50%; border: 0; pointer-events: auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--nav-bg); color: var(--nav-ink); font: 700 10.5px "Atkinson Hyperlegible", system-ui, sans-serif; box-shadow: var(--shadow);
+  -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); cursor: pointer; }
+#ar .mini .i { width: 22px; height: 22px; }
+
+/* ---- Boutons du plan : me recentrer, orienter la carte --------------------------------------------------- */
+.map-tools { position: fixed; z-index: 515; right: calc(12px + var(--safe-right)); bottom: calc(var(--sheet-h, 0px) + 14px);
+  display: flex; flex-direction: column; gap: 10px; transition: bottom .3s cubic-bezier(.22, 1, .36, 1); }
+body.dragging .map-tools { transition: none; }
+body:not(.sheet) .map-tools, body.typing .map-tools { display: none; }
+.map-tool { width: 52px; height: 52px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--surface-solid);
+  color: var(--primary); box-shadow: var(--shadow); cursor: pointer; }
+.map-tool .i { width: 24px; height: 24px; }
+.map-tool.on { background: var(--primary); color: var(--on-primary); }
+@media (orientation: landscape) and (max-height: 600px), (min-width: 768px) and (min-height: 601px) {
+  .map-tools { bottom: calc(36px + var(--safe-bottom)); }
+}
+/* Carte orientée dans votre direction : elle tourne autour de vous ; repères, étiquettes et point bleu restent droits */
+body.heading-up #map { rotate: calc(-1 * var(--map-heading, 0deg)); }
+body.heading-up #map .leaflet-marker-icon > * { rotate: var(--map-heading, 0deg); }
+body.heading-up #map .leaflet-popup { rotate: var(--map-heading, 0deg); transform-origin: 50% 100%; }
+body.heading-up #map .leaflet-control-container { display: none; }
+body.heading-up .here-dot { position: relative; }
+body.heading-up .here-dot::before { content: ""; position: absolute; left: 50%; top: 50%; width: 84px; height: 84px; margin: -42px; border-radius: 50%;
+  z-index: -1; background: conic-gradient(from -30deg, rgba(47, 128, 237, .45) 0deg, rgba(47, 128, 237, 0) 60deg, transparent 60deg); }
+/* Point du guidage sur le plan (guidage réduit) : pas de cône, la direction n'y est suivie que carte orientée */
+body.sheet .puck .cone { display: none; }
+body.sheet.heading-up .puck .cone { display: block; transform: none; }

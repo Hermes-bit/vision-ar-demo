@@ -13,6 +13,8 @@ import {sticker, stickerPop} from "./stickers.js";
 import {arrivalFiche, arrivalSpeech, entranceFor, erpList, loadAcces} from "./arrival.js";
 import {entranceAccess, erpCategory} from "./categories.js";
 import {ORIGIN_RULES, decideOrigin, distM, originValid} from "./origin.js";
+import {labelPoints, minutes, walkingChoices} from "./compare.js";
+import {startCompass} from "./compass.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
@@ -65,7 +67,7 @@ const S = {
   simulate: store.get("va-simulate", PRESENTATION),
   // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
   alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), audioOnly: store.get("va-audio-only", false),
-  routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false,
+  routes: [], selected: 0, message: null, loading: false, nav: null, blocking: true, hud: false, hc: false, tripMob: null,
   logo: ["vert", "soleil", "nuit", "pastille"].includes(store.get("va-logo", "vert")) ? store.get("va-logo", "vert") : "vert",
 };
 let net = null, transit = [], streetOf = () => null;
@@ -90,7 +92,14 @@ const themeCards = attr => THEME_CHOICES.map(([v, l, d]) => `<button class="them
 
 // ---- Profil -> requête (core/UserProfile.kt) --------------------------------------
 const primary = () => PRIORITY.find(m => S.mobilities.has(m)) || "pedestrian";
+// Profil du trajet : « Mon profil » (réglé dans Profil) ou, le temps d'une recherche, un autre profil choisi sous
+// les itinéraires (S.tripMob : jamais enregistré, oublié à la fermeture du choix d'itinéraire)
+const TRIP_MOBS = [["pedestrian", "À pied", "footprints"], ["manual_wheelchair", "Fauteuil", "accessibility"],
+  ["cane_or_walker", "Canne", "cane"], ["low_vision", "Malvoyance", "eye-off"]];
+const tripMobility = () => S.tripMob || primary();
+const tripMobilities = () => S.tripMob ? new Set([S.tripMob]) : S.mobilities;
 function profileJson() {
+  if (S.tripMob) return {mobility: S.tripMob};
   const p = {mobility: primary(), steps_allowed: S.steps};
   if (S.maxSlope != null) p.max_slope_pct = S.maxSlope;
   if (S.mobilities.has("low_vision")) p.prefers_sound_signals = true;
@@ -357,7 +366,7 @@ function nearRoute(route, key, lat, lon, maxM) {
   }
   return c.get(key);
 }
-const shownRoute = () => S.screen === "route" && S.dest && S.routes.length ? S.routes[S.selected] || S.routes[0] : null;
+const shownRoute = () => S.screen !== "route" || !S.dest ? null : S.nav ? S.nav.route : S.routes.length ? S.routes[S.selected] || S.routes[0] : null;
 let poiFrame = 0;
 function schedulePoi() { cancelAnimationFrame(poiFrame); poiFrame = requestAnimationFrame(updatePoiMarkers); }
 function updatePoiMarkers() {
@@ -446,7 +455,7 @@ function guideToStop(st) {
   const m = MODE[st.mode] || MODE.bus, from = whereAmI(), t = stopTarget(st, from);
   const dest = {label: `${m.label} ${st.name}${t.entrance?.label ? ` (entrée ${t.entrance.label})` : ""}`, lat: t.lat, lon: t.lon, type: "poi", kind: st.mode};
   map.closePopup();
-  if (S.screen === "nav" && S.nav) {                       // en cours de guidage : nouvel itinéraire vers l'arrêt
+  if (S.nav) {                                             // en cours de guidage (même réduit) : nouvel itinéraire vers l'arrêt
     S.dest = dest;
     return reroute({lat: from.lat, lon: from.lon}, `Vers ${st.name}`, true);
   }
@@ -531,17 +540,19 @@ function drawRoutes() {
   const nav = S.screen === "nav";
   layers.progress.clearLayers();
   if (nav && S.nav) { progressAt = 0; drawProgress(true); }
-  for (const r of S.routes) if (r !== sel && !nav) {
-    const ll = r.geometry.map(p => [p.lat, p.lon]);
-    L.polyline(ll, nav ? {color: "#E8457C", weight: 5, opacity: .9, lineCap: "round"}
-                       : {color: C.alt, weight: 5, opacity: .85, dashArray: "1 9", lineCap: "round"}).addTo(layers.routes);
-    if (nav && sel) {
-      const diff = Math.round((r.duration_s - sel.duration_s) / 60);
-      const label = `${diff >= 0 ? "+" : "−"} ${Math.abs(diff)} min${r.accessible ? "" : " · non accessible"}`;
-      L.marker(ll[Math.floor(ll.length / 2)], {icon: L.divIcon({className: "", html: `<div class="alt-tag">${label}</div>`, iconSize: null}),
-        interactive: false}).addTo(layers.routes);
-    }
-  }
+  const choosing = !nav && !S.nav && S.screen === "route";
+  for (const r of S.routes) if (r !== sel && choosing)
+    L.polyline(r.geometry.map(p => [p.lat, p.lon]), {color: C.alt, weight: 5, opacity: .85, dashArray: "1 9", lineCap: "round"}).addTo(layers.routes);
+  // Étiquettes sur le plan, comme Citymapper (« Rapide 12 min ») : là où les itinéraires se séparent ; toucher
+  // une étiquette choisit l'itinéraire
+  if (choosing && S.routes.length > 1) labelPoints(S.routes.map(r => r.geometry)).forEach((p, i) => {
+    const r = S.routes[i];
+    if (!p) return;
+    L.marker([p.lat, p.lon], {icon: L.divIcon({className: "route-tag-host", iconSize: null, iconAnchor: [0, 0],
+      html: `<div class="route-tag ${i === S.selected ? "sel" : r.accessible ? "" : "bad"}"><b>${esc(r.short)}</b><span>${minutes(r)} min</span></div>`}),
+      title: `${r.label}, ${minutes(r)} minutes${r.accessible ? "" : ", non praticable"}`, zIndexOffset: i === S.selected ? 950 : 940, riseOnHover: true})
+      .on("click", () => { if (S.selected !== i) { S.selected = i; render(); } }).addTo(layers.routes);
+  });
   if (sel && !nav) {
     const ll = sel.geometry.map(p => [p.lat, p.lon]);
     L.polyline(ll, {color: C.routeCase, weight: nav ? 10 : 11, opacity: nav ? .35 : .9, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
@@ -574,12 +585,15 @@ function gradientLine(ll) {
 }
 
 // ---- Itinéraire ---------------------------------------------------------------------------
+// « Le plus accessible » et, s'il fait gagner du temps, « Le plus rapide », avec la différence expliquée (js/compare.js)
+const routeChoices = from => walkingChoices(computeRoutes(net, {origin: from, destination: S.dest, profile: profileJson(),
+  compare_shortest: true}, reports()).routes, net, resolveProfile(profileJson()));
 function computeRoute({keepView = false} = {}) {
   const was = S.routes[S.selected]?.label;
   S.routes = []; S.message = null;
   if (S.dest && !originPending()) {                        // en attente d'une position sûre : pas de trajet faux
     try {
-      S.routes = computeRoutes(net, {origin: S.origin, destination: S.dest, profile: profileJson(), compare_shortest: true}, reports()).routes;
+      S.routes = routeChoices(S.origin);
       const i = keepView ? S.routes.findIndex(r => r.label === was) : -1;
       S.selected = i >= 0 ? i : 0;                         // départ qui bouge : on garde l'itinéraire choisi
     } catch (e) {
@@ -658,6 +672,8 @@ addEventListener("online", () => toast("Connexion retrouvée."));
 function fitRoute() {
   const r = S.routes[S.selected] || S.routes[0];
   if (!r || S.screen !== "route") return;
+  setHeadingMode(false);                                  // le trajet se cadre nord en haut ; la carte ne suit plus le point bleu
+  if (follow) { follow = false; syncMapButtons(); }
   // La carte vient souvent de changer de taille (retour du Profil, choix d'un itinéraire) : on la remet à jour
   // AVANT de cadrer. Sinon Leaflet cadrait avec son ancienne taille et une marge plus grande que la carte : zoom
   // impossible, fond de carte cassé (noir, seuls les repères restaient) et écran à moitié redessiné (vidéo du 19/10).
@@ -668,7 +684,9 @@ function fitRoute() {
   const bottom = Math.max(24, Math.min(under + 24, size.y - 84 - 120));     // il reste toujours 120 px de carte pour le trajet
   // ordinateur : le panneau flotte à gauche, au-dessus de la carte -> le trajet se cadre à sa droite
   const left = sideLayout() ? Math.max(24, Math.min($("panel").getBoundingClientRect().right + 24, size.x - 200)) : 24;
-  map.fitBounds(L.latLngBounds(r.geometry.map(p => [p.lat, p.lon])), {paddingTopLeft: [left, 84], paddingBottomRight: [24, bottom], maxZoom: 18, animate: false});
+  // tous les itinéraires proposés restent visibles, pour les comparer
+  const pts = (S.routes.length > 1 ? S.routes.flatMap(x => x.geometry) : r.geometry).map(p => [p.lat, p.lon]);
+  map.fitBounds(L.latLngBounds(pts), {paddingTopLeft: [left, 84], paddingBottomRight: [24, bottom], maxZoom: 18, animate: false});
   // (sans animation de zoom : pendant l'animation, le fond vectoriel n'était redessiné qu'à la fin et l'on voyait
   // un rectangle de carte rétréci sur un fond sombre, vidéo du 19/10)
 }
@@ -730,9 +748,88 @@ function stopHereWatch() {
 function syncHereDot() {
   const want = S.screen === "route" && !S.nav && !document.hidden && !!navigator.geolocation;
   if (!want) return stopHereWatch();
-  if (geoPermission === "granted" || gpsOriginActive()) startHereWatch();
+  if (geoPermission === "granted" || gpsOriginActive() || wantHere) startHereWatch();
 }
 document.addEventListener("visibilitychange", () => syncHereDot());
+// ---- Boutons du plan, comme Citymapper : me recentrer, orienter la carte dans ma direction ------------------
+// « Me recentrer » : la carte se pose sur vous et vous suit (jusqu'à ce que vous la déplaciez du doigt).
+// « Orienter » : la carte tourne pour que ce qui est devant vous soit en haut (boussole, js/compass.js), comme la
+// petite carte du guidage : carte agrandie pour couvrir les coins, repères gardés droits, déplacement au doigt
+// suspendu. Toucher à nouveau : nord en haut.
+let follow = false, headingMode = false, compassStop = null, wantHere = false;
+const herePoint = () => S.nav ? navPos() : liveFix && Date.now() - liveFix.at < 60000 ? liveFix : null;
+const compassAvailable = () => typeof DeviceOrientationEvent !== "undefined" && matchMedia("(pointer: coarse)").matches;
+const MAP_GESTURES = ["dragging", "touchZoom", "doubleClickZoom", "scrollWheelZoom", "boxZoom", "keyboard"];
+function recenter() {
+  const p = herePoint();
+  follow = true;
+  if (!p) {                                                // pas encore de position : on la demande, la carte s'y posera
+    if (geoPermission === "denied") { follow = false; return locationHelp(); }
+    wantHere = true; syncHereDot(); syncMapButtons();
+    return toast("Recherche de votre position…");
+  }
+  if (headingMode) layoutHeading(); else centerAbovePanel([p.lat, p.lon], Math.max(map.getZoom(), 17));
+  syncMapButtons();
+}
+map.on("dragstart", () => { if (follow) { follow = false; syncMapButtons(); } });
+function setHeadingMode(on) {
+  if (on === headingMode) return;
+  if (on) {
+    const p = herePoint();
+    if (!p) return recenter();                             // la position d'abord
+    headingMode = true; follow = true;
+    document.body.classList.add("heading-up");
+    map.closePopup();
+    for (const h of MAP_GESTURES) map[h]?.disable();
+    layoutHeading();
+    compassStop = startCompass(h => document.documentElement.style.setProperty("--map-heading", `${h.toFixed(1)}deg`),
+      () => { toast("Boussole indisponible : la carte reste le nord en haut."); setHeadingMode(false); });
+  } else {
+    headingMode = false;
+    compassStop?.(); compassStop = null;
+    document.body.classList.remove("heading-up");
+    const el = $("map");
+    for (const k of ["left", "top", "width", "height", "right", "bottom"]) el.style.removeProperty(k);
+    document.documentElement.style.removeProperty("--map-heading");
+    for (const h of MAP_GESTURES) map[h]?.enable();
+    map.invalidateSize({pan: false});
+    const p = herePoint();
+    if (p && S.screen === "route") centerAbovePanel([p.lat, p.lon], map.getZoom());
+  }
+  syncMapButtons();
+}
+// Carte orientée : un carré centré sur la partie visible du plan (au-dessus du panneau), assez grand pour que
+// les coins restent couverts quand il tourne ; vous êtes en son centre, qui est aussi le centre de rotation.
+function layoutHeading() {
+  const p = herePoint();
+  if (!headingMode || !p) return;
+  const box = $("panel").getBoundingClientRect(), side = sideLayout();
+  const left = side ? Math.min(box.right, innerWidth - 200) : 0, bottom = side || box.top <= 0 ? innerHeight : Math.min(innerHeight, box.top);
+  const cx = (left + innerWidth) / 2, cy = bottom / 2;
+  const r = Math.max(...[[left, 0], [innerWidth, 0], [left, bottom], [innerWidth, bottom]].map(([x, y]) => Math.hypot(x - cx, y - cy))) + 8;
+  Object.assign($("map").style, {left: `${cx - r}px`, top: `${cy - r}px`, width: `${2 * r}px`, height: `${2 * r}px`, right: "auto", bottom: "auto"});
+  map.invalidateSize({pan: false});
+  map.setView([p.lat, p.lon], Math.max(map.getZoom(), 17), {animate: false});
+}
+let headingFrame = 0;
+const scheduleHeadingLayout = () => { if (headingMode) { cancelAnimationFrame(headingFrame); headingFrame = requestAnimationFrame(layoutHeading); } };
+function syncMapButtons() {
+  let t = $("mapTools");
+  if (S.screen !== "route") return t?.remove();
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "mapTools"; t.className = "map-tools";
+    t.onclick = e => {
+      const id = e.target.closest("button")?.id;
+      if (id === "toolLocate") recenter();
+      else if (id === "toolCompass") setHeadingMode(!headingMode);
+    };
+    document.body.append(t);
+  }
+  t.innerHTML = `${compassAvailable() ? `<button class="map-tool ${headingMode ? "on" : ""}" id="toolCompass" aria-pressed="${headingMode}"
+      aria-label="${headingMode ? "Remettre le nord en haut" : "Orienter la carte dans ma direction"}">${icon("compass")}</button>` : ""}
+    <button class="map-tool ${follow ? "on" : ""}" id="toolLocate" aria-pressed="${follow}" aria-label="Me recentrer sur ma position">${icon("locate-fixed")}</button>`;
+}
 function onHereFix(pos) {
   const now = Date.now(), t = Number.isFinite(pos.timestamp) && pos.timestamp <= now + 1000 ? pos.timestamp : now;
   const fix = {lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, at: t};
@@ -747,6 +844,10 @@ function onHereFix(pos) {
   } else { hereMarker.setLatLng(ll); hereCircle.setLatLng(ll).setRadius(acc); }
   // première position, sans destination : la carte se centre sur vous, dans la partie visible au-dessus du panneau
   if (!hereCentered && !S.dest && S.screen === "route") { hereCentered = true; centerAbovePanel(ll); }
+  // bouton « Me recentrer » : la carte vous suit ; carte orientée : vous restez au centre de rotation
+  if (headingMode) layoutHeading();
+  else if (follow && S.screen === "route") centerAbovePanel(ll, Math.max(map.getZoom(), 17));
+  if (wantHere) { wantHere = false; syncMapButtons(); }
   if (gpsOriginActive()) applyOriginFix(fix);
   updateHereLink();
 }
@@ -1336,7 +1437,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "92";
+const APP_VERSION = "93";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1445,6 +1546,7 @@ function screenZones() {
   <p class="fine">${icon("info")} D'autres villes et quartiers seront ajoutés au fur et à mesure de la collecte des données.</p>`;
 }
 function screenRoute() {
+  if (S.nav) return screenTripLive();                     // guidage réduit : son panneau, pas la recherche
   const chosen = S.routes[S.selected];
   return `<div class="sheet-head">
     ${S.dest ? "" : sticker("on-y-va", "stk-sheet")}
@@ -1453,7 +1555,7 @@ function screenRoute() {
     <div class="row"><h2 class="grow">Où allez-vous&nbsp;?</h2>
       <button class="icon-btn" id="toProfile" aria-label="Mon profil">${icon(MOB.find(m => m[0] === primary())?.[2] || "user-round")}</button></div>
   </div>
-  <div class="trip">
+  <div class="trip ${canSwap() ? "has-swap" : ""}">
     <div class="trip-row"><span class="trip-dot start" aria-hidden="true"></span>
       ${S.searchFor === "origin"
         ? `<label class="search grow">${icon("search")}<input type="search" id="qo" placeholder="Départ : adresse, lieu, arrêt…"
@@ -1467,6 +1569,7 @@ function screenRoute() {
       <label class="search grow">${icon("search")}<input type="search" id="q" placeholder="Adresse, lieu, station, commerce…"
         value="${esc(S.query)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Destination">
         <button type="button" class="search-clear" id="qClear" aria-label="Effacer la saisie" ${S.query ? "" : "hidden"}>${icon("x")}</button></label></div>
+    ${canSwap() ? `<button class="trip-swap" id="swapTrip" aria-label="Inverser le départ et l'arrivée">${icon("arrow-up-down")}</button>` : ""}
   </div>
   <div id="placesBox" class="places-box">${placesHtml()}</div>
   ${PRESENTATION && !S.dest && S.searchFor === "dest" ? `<section class="tour-card">
@@ -1478,7 +1581,7 @@ function screenRoute() {
   ${S.searchFor === "origin" ? "" : `
   ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
     <button class="btn soft small fav-toggle ${currentFavIndex() >= 0 ? "on" : ""}" id="favToggle" aria-pressed="${currentFavIndex() >= 0}">
-      ${icon("star")} ${currentFavIndex() >= 0 ? "Enregistré" : "Enregistrer"}</button></div>` : ""}
+      ${icon("star")} ${currentFavIndex() >= 0 ? "Enregistré" : "Enregistrer"}</button></div>${tripMobChips()}` : ""}
   ${S.dest && originPending() ? locatingHtml() : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
@@ -1614,7 +1717,8 @@ function routeCard(r, i) {
   const min = Math.ceil(r.duration_s / 60);
   const incomplete = r.warnings.includes("données incomplètes");
   const badge = !r.accessible ? `<span class="badge danger">${icon("ban")} Non praticable</span>`
-    : i === 0 ? `<span class="badge ok">${icon("accessibility")} Recommandé</span>` : "";
+    : i === 0 ? `<span class="badge ok">${icon("accessibility")} Recommandé</span>${r.alsoFastest
+      ? `<span class="badge fast">${icon("zap")} Aussi le plus rapide</span>` : ""}` : "";
   const notes = r.accessible
     ? risksText(routeRisks(r)).map(w => `<span class="tag warn">${icon("triangle-alert")} ${esc(w)}</span>`)
       .concat(r.warnings.filter(w => !["marche", "données incomplètes", "sur la chaussée", "traversée sans feu sonore"].includes(w)).map(w => `<span class="tag">${esc(w)}</span>`))
@@ -1623,20 +1727,21 @@ function routeCard(r, i) {
   const stk = i === 0 && r.accessible ? (!r.steps_count ? "zero-marche" : r.max_slope_pct <= 5 ? "pente-douce" : "") : "";
   return `<div class="rcard ${i === S.selected ? "sel" : ""} ${stk ? "stk-host" : ""}" data-route="${i}" data-key="route-${esc(S.dest?.label || "")}-${esc(r.label)}" role="button" tabindex="0"
       aria-label="${esc(r.label)}, ${min} minutes, ${short(r.length_m)}${r.accessible ? "" : ", non praticable"}${i === S.selected ? ", sélectionné" : ""}">
-    <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge}</div><div class="rc-time"><b>${min}</b> min</div></div>
+    <div class="rc-head"><div class="grow"><b>${esc(r.label)}</b>${badge ? `<span class="badges">${badge}</span>` : ""}</div><div class="rc-time"><b>${min}</b> min</div></div>
     <div class="rc-meta">
       <span>${icon("route")} ${short(r.length_m)}</span>
       <span class="${r.steps_count ? "bad" : "good"}">${icon("stairs")} ${r.steps_count ? r.steps_count + " marche(s)" : "aucune marche"}</span>
       ${net && r.edge_ids.every(id => net.edges[id]?.slope_pct === null)
         ? `<span>${icon("mountain")} pente à vérifier</span>`
         : `<span class="${r.max_slope_pct > 5 ? "bad" : "good"}">${icon("mountain")} pente max ${fmt1(r.max_slope_pct)} %</span>`}</div>
+    ${r.note ? `<p class="rc-note ${r.kind}">${icon(r.kind === "fastest" ? "zap" : "accessibility")}<span>${esc(r.note)}</span></p>` : ""}
     ${notes.length ? `<div class="tags">${notes.join("")}</div>` : ""}${stk ? sticker(stk, "stk-route") : ""}</div>`;
 }
 // Commandes et état exposés à l'écran de guidage en réalité augmentée (js/ar.js)
 const navApi = {
   map,
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
-    mobility: primary(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
+    mobility: tripMobility(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
     detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsDenied: S.nav.gpsDenied, gpsStatus: S.nav.gpsStatus,
     placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly, simulated: !!S.nav.simulated},
@@ -1652,6 +1757,7 @@ const navApi = {
   setTheme,
   report: (kind, blocking) => doReport(kind, blocking),
   stop: () => stopGuidance(),
+  minimize: () => minimizeGuidance(),
   endSoftly: () => endGuidanceSoftly(),
   stay: () => { if (S.nav) S.nav.stayed = true; },
 };
@@ -1721,6 +1827,73 @@ function stopGuidance(keepVoice = false) {
       try { render(); } catch (e) { console.error(e); }
     }
   }, 2000);
+}
+// ---- Guidage réduit, comme Citymapper (« Trajet en cours ») -----------------------------------------------
+// On peut quitter l'écran de guidage (bouton « Réduire », geste retour) sans l'arrêter : la caméra se ferme, le
+// GPS, la voix et les alertes continuent. Sur le plan, une pastille « Trajet en cours » et le panneau du guidage
+// permettent d'y revenir d'un geste ; on ne l'arrête que par « Arrêter » (avec confirmation).
+const tripLive = () => !!S.nav && S.screen !== "nav";
+const navPos = () => { const n = S.nav; return n.real && Date.now() - n.real.at < 15000 && (n.phase === "approach" || n.away || n.offRoute) ? n.real : n.here; };
+function minimizeGuidance() {
+  if (!S.nav || S.screen !== "nav") return;
+  try { closeAR(); } catch (e) { console.error(e); }
+  S.hud = false;
+  sheetCollapsed = false;
+  go("route");
+  const p = navPos();
+  requestAnimationFrame(() => centerAbovePanel([p.lat, p.lon], 16));
+  toast("Le guidage continue à la voix. Touchez « Trajet en cours » pour revenir à l'écran de guidage.", 5000);
+}
+function resumeGuidance() {
+  if (!S.nav) return;
+  unlockVoice();                                          // dans le geste de l'usager (iPhone)
+  setHeadingMode(false); follow = false;
+  go("nav");                                              // render() rouvre la vue caméra (geste de l'usager : caméra et boussole)
+  const p = navPos();
+  map.setView([p.lat, p.lon], 17, {animate: false});
+}
+function tripTimes() {
+  const st = navState(), left = st.remaining / speed();
+  return {st, mins: Math.max(1, Math.ceil(left / 60)),
+    eta: new Date(Date.now() + left * 1000).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"})};
+}
+const pillText = () => { const {st, mins} = tripTimes(); return st.arrived ? "Vous êtes arrivé" : `Trajet en cours · ${mins} min`; };
+function liveStatsHtml() {
+  const {st, mins, eta} = tripTimes();
+  return st.arrived ? `<b>Vous êtes arrivé</b>` : `<b>${mins} min</b><span>arrivée ${eta}</span><span>${short(st.remaining)}</span>`;
+}
+function liveNextHtml() {
+  const {st} = tripTimes();
+  return st.arrived ? `${icon("flag")}<span>${esc(S.dest?.label || "")}</span>` : `${icon(MAN_ICON[st.next.maneuver] || "arrow-up")}<span>${esc(st.spoken)}</span>`;
+}
+// Panneau du bas pendant un guidage réduit (à la place de la recherche : changer de destination demande d'arrêter)
+function screenTripLive() {
+  const arrived = liveArrived = navState().arrived;
+  return `<div class="sheet-head">
+    <button class="handle" id="sheetHandle" aria-expanded="${!sheetCollapsed}"
+      aria-label="${sheetCollapsed ? "Agrandir le panneau" : "Réduire le panneau pour voir le plan"}"></button>
+    <div class="row"><h2 class="grow">${arrived ? "Vous êtes arrivé" : "Guidage en cours"}</h2></div>
+  </div>
+  <section class="live-card">
+    <div class="live-dest">${icon("flag")}<span class="grow"><small>Vers</small><b>${esc(S.dest?.label || "")}</b></span></div>
+    <div class="live-stats" id="liveStats">${liveStatsHtml()}</div>
+    <p class="live-next" id="liveNext">${liveNextHtml()}</p>
+  </section>
+  ${arrived ? `<button class="btn primary" id="endLive">${icon("check")} Terminer</button>
+    <button class="btn soft" id="resumeNav">${icon("navigation")} Revenir à l'écran de guidage</button>`
+    : `<button class="btn primary" id="resumeNav">${icon("navigation")} Reprendre le guidage</button>
+    <button class="btn soft" id="stopLive">${icon("x")} Arrêter le guidage</button>`}`;
+}
+// Mise à jour en direct (à chaque position) sans reconstruire le panneau
+let liveArrived = false;
+function updateTripLive() {
+  if (!tripLive()) return;
+  const arrived = navState().arrived;
+  if (arrived !== liveArrived) { liveArrived = arrived; return render(); }
+  const pill = $("tripPill");
+  if (pill) pill.querySelector("span").textContent = pillText();
+  if ($("liveStats")) $("liveStats").innerHTML = liveStatsHtml();
+  if ($("liveNext")) $("liveNext").innerHTML = liveNextHtml();
 }
 // Signalement : enregistré sur ce téléphone ; s'il bloque, nouvel itinéraire depuis la position
 function doReport(kind, blocking) {
@@ -1813,7 +1986,7 @@ function render() {
   if (nav && !arOpen()) openAR(navApi);                 // dans le geste de l'usager : caméra et boussole autorisées
   refreshTransit(true);
   let mc = $("mapClose");
-  if (S.screen === "route" && S.dest) {
+  if (S.screen === "route" && S.dest && !S.nav) {
     if (!mc) {
       mc = document.createElement("button");
       mc.id = "mapClose"; mc.className = "map-close";
@@ -1834,6 +2007,19 @@ function render() {
       document.body.append(ms);
     }
   } else ms?.remove();
+  let tp = $("tripPill");
+  if (S.screen === "route" && S.nav) {                    // guidage réduit : « Trajet en cours », pour y revenir
+    if (!tp) {
+      tp = document.createElement("button");
+      tp.id = "tripPill"; tp.className = "trip-pill";
+      tp.onclick = resumeGuidance;
+      document.body.append(tp);
+    }
+    tp.innerHTML = `<i class="live-dot" aria-hidden="true"></i><span>${esc(pillText())}</span>${icon("chevron-right")}`;
+    tp.setAttribute("aria-label", `${pillText()}. Toucher pour revenir à l'écran de guidage`);
+  } else tp?.remove();
+  if (headingMode && S.screen !== "route") setHeadingMode(false);
+  syncMapButtons();
   syncGuard();
   syncHereDot();
   layoutSheet();
@@ -1858,6 +2044,7 @@ function layoutSheet(offset = null) {
   p.style.setProperty("--sheet-y", `${Math.max(0, Math.min(max, y))}px`);
   p.classList.toggle("collapsed", offset === null && sheetCollapsed);   // abaissé : seul le titre reste visible
   root.setProperty("--sheet-h", `${Math.round(p.offsetHeight - Math.max(0, Math.min(max, y)))}px`);
+  scheduleHeadingLayout();                                // carte orientée : recentrée sur la partie visible
   const h = $("sheetHandle");
   if (h) {
     h.setAttribute("aria-expanded", String(!sheetCollapsed));
@@ -1925,6 +2112,7 @@ function renderNavLive() {
   realMarker?.setLatLng?.([shown.lat, shown.lon]);         // cercle de précision autour du seul point affiché
   n.marker?.setLatLng([shown.lat, shown.lon]);
   if (S.screen === "nav") { map.panTo([shown.lat, shown.lon], {animate: false}); drawProgress(); refreshTransit(); announceStops(); }
+  else if (tripLive()) { updateTripLive(); if (headingMode) layoutHeading(); else if (follow) centerAbovePanel([shown.lat, shown.lon], map.getZoom()); }
 }
 // N°16 : le tracé s'allume sur 30 m devant soi ; déjà parcouru = gris ; la suite reste visible, atténuée
 function routeSlice(a, b) {
@@ -1957,6 +2145,7 @@ function go(screen) {
   // Profil ouvert depuis la recherche ou les Paramètres : le retour y ramène
   if (screen === "profile" && ["route", "settings"].includes(S.screen)) profileReturn = S.screen;
   else if (screen !== "profile") profileReturn = null;
+  if (screen === "profile" && !S.nav) S.tripMob = null;    // on règle son profil : les trajets repartent de « Mon profil »
   S.screen = screen; S.message = null; render();
 }
 
@@ -1982,7 +2171,8 @@ function stepBack() {
   if (S.screen === "login") { resetForm(); return go("welcome"); }
   if (S.screen === "welcome") return;
   if (S.hud) { S.hud = false; renderHud(); return; }
-  if (S.screen === "nav") return confirmQuit();
+  if (S.screen === "nav") return minimizeGuidance();     // le guidage continue : on y revient par « Trajet en cours »
+  if (S.screen === "route" && S.nav) return resumeGuidance();
   if (S.screen === "route" && S.searchFor === "origin") return cancelOrigin();
   if (S.screen === "route" && S.dest) return closeRoutes();
   if (S.screen === "route") return go("profile");
@@ -2001,11 +2191,12 @@ function forward() {
   if (S.screen === "welcome") { resetForm(); return go("login"); }
   if (S.screen === "login" || S.screen === "signup") return;
   if (S.screen === "profile") { saveProfile(); go("route"); computeRoute(); return; }
+  if (S.screen === "route" && S.nav) return resumeGuidance();
   if (S.screen === "route" && S.routes[S.selected]?.accessible) return startGuidance();
   if (S.screen === "route") toast(S.routes.length ? "Cet itinéraire n'est pas praticable : choisissez-en un autre." : "Choisissez d'abord une destination.");
 }
 function closeRoutes() {
-  Object.assign(S, {dest: null, routes: [], query: "", places: [], message: null, arrival: null});
+  Object.assign(S, {dest: null, destPlace: null, routes: [], query: "", places: [], message: null, arrival: null, tripMob: null});
   map.setView([S.origin.lat, S.origin.lon], 16, {animate: false});
   render();
 }
@@ -2016,15 +2207,16 @@ const savedDoor = p => store.get(DOORS_KEY, {})[doorKey(p)] || null;
 function chooseDest(place) {
   sheetCollapsed = false;                                 // les itinéraires doivent se voir
   place = {...place, addrLat: place.addrLat ?? place.lat, addrLon: place.addrLon ?? place.lon};
+  S.destPlace = place;                                    // lieu tel que choisi (pour changer de profil ou inverser)
   // 1) porte indiquée par l'usager pour cette adresse : prioritaire
   const door = !place.gps && savedDoor(place);
   // 2) « Jusqu'à la bonne porte » : entrée accessible du bâtiment, pour les profils qui en ont besoin
   //    (fauteuil, canne) ; les autres vont à l'entrée de l'adresse (js/arrival.js)
-  const needsStepFree = ["manual_wheelchair", "electric_wheelchair", "cane_or_walker"].some(m => S.mobilities.has(m));
+  const needsStepFree = ["manual_wheelchair", "electric_wheelchair", "cane_or_walker"].some(m => tripMobilities().has(m));
   const {entrance: ent, note} = net && !place.gps && !door ? entranceFor(net, place) : {entrance: null, note: ""};
   const viaEntrance = needsStepFree && ent && ent.d > 8;
   // incohérence entrée / adresse : notée seulement en mode test (sinon chaque bâtiment voisin en produirait une)
-  S.arrival = net ? arrivalFiche(net, place, viaEntrance ? ent : null, S.detectDebug ? note : "") : null;
+  S.arrival = net && !place.gps ? arrivalFiche(net, place, viaEntrance ? ent : null, S.detectDebug ? note : "") : null;
   S.dest = door ? {...place, lat: door.lat, lon: door.lon, userDoor: true}
     : viaEntrance ? {...place, lat: ent.lat, lon: ent.lon, viaEntrance: true} : place;
   // 3) adresse française : position « entrée » de la Base Adresse Nationale (certifiée par la commune), si elle
@@ -2051,6 +2243,7 @@ async function banEntrance(place) {
 let pickingDoor = false;
 function pickDoor() {
   if (!S.dest || pickingDoor) return;
+  setHeadingMode(false);                                  // (le toucher sur la carte doit tomber au bon endroit)
   pickingDoor = true;
   document.body.classList.add("picking-door");
   toast("Touchez la carte à l'endroit exact de la porte d'entrée.", 6000);
@@ -2083,7 +2276,7 @@ function doorCard() {
 function guideToPoint(label, lat, lon) {
   const from = whereAmI(), dest = {label, lat, lon, type: "poi", addrLat: lat, addrLon: lon};
   map.closePopup();
-  if (S.screen === "nav" && S.nav) { S.dest = dest; return reroute({lat: from.lat, lon: from.lon}, `Vers ${label}`, true); }
+  if (S.nav) { S.dest = dest; return reroute({lat: from.lat, lon: from.lon}, `Vers ${label}`, true); }   // (même réduit)
   if (S.screen !== "route") go("route");
   chooseDest(dest);
 }
@@ -2096,6 +2289,44 @@ function chooseOrigin(place) {
   S.dest ? computeRoute() : render();
 }
 function cancelOrigin() { S.searchFor = "dest"; S.oquery = ""; S.places = []; render(); }
+// Inverser départ et arrivée (comme Citymapper). « Ma position » devient l'arrivée : l'endroit où vous êtes
+// maintenant. L'arrivée devient le départ, à sa porte (on ressort par là). Un deuxième appui revient au trajet
+// d'origine : le lieu de départ garde sa fiche (place), pour retrouver son entrée.
+const canSwap = () => !!S.dest && S.searchFor !== "origin" && !S.nav;
+function swapTrip() {
+  if (!canSwap()) return;
+  if (originPending()) return toast("Votre position est en cours de recherche : patientez un instant.");
+  const from = S.origin, door = S.dest, place = S.destPlace || S.dest;
+  const fresh = liveFix && Date.now() - liveFix.at <= ORIGIN_RULES.staleMs ? liveFix : null;
+  if (door.gps) {                                         // « Ma position » repart en tête : départ GPS vivant
+    const at = fresh || door;
+    S.origin = {lat: at.lat, lon: at.lon, acc: fresh?.acc ?? 30, confirmedAt: Date.now(), label: "Ma position", gps: true};
+    S.originMode = "gps";
+  } else {
+    S.origin = {lat: door.lat, lon: door.lon, label: door.label, place};
+    S.originMode = "manual";
+  }
+  const to = from.gps ? {label: "Ma position", lat: (fresh || from).lat, lon: (fresh || from).lon, type: "gps", gps: true}
+    : from.place || {label: from.label, lat: from.lat, lon: from.lon, type: "poi"};
+  chooseDest(to);                                         // (le profil choisi pour ce trajet est gardé)
+  toast("Départ et arrivée inversés.");
+}
+// Profil du trajet, sous les itinéraires : « Mon profil » ou un autre, le temps de cette recherche
+function tripMobChips() {
+  const saved = primary(), single = S.mobilities.size <= 1;
+  const opts = [["", "Mon profil", MOB.find(m => m[0] === saved)?.[2] || "user-round"], ...TRIP_MOBS.filter(([m]) => !(single && m === saved))];
+  return `<div class="mob-chips" role="radiogroup" aria-label="Itinéraires calculés pour">${opts.map(([m, l, ic]) => {
+    const on = (S.tripMob || "") === m;
+    return `<button class="mchip ${on ? "on" : ""}" role="radio" aria-checked="${on}" data-trip-mob="${m}">${icon(ic)}<span>${l}</span></button>`;
+  }).join("")}</div>`;
+}
+function setTripMob(m) {
+  if ((S.tripMob || null) === (m || null)) return;
+  S.tripMob = m || null;
+  // l'entrée visée dépend du profil (entrée accessible pour un fauteuil) : la destination est choisie à nouveau
+  if (S.destPlace && !S.dest?.userDoor && !S.dest?.gps) chooseDest(S.destPlace);
+  else computeRoute();
+}
 function startGuidance() {
   unlockVoice();                                          // dans le geste de l'usager (obligatoire sur iPhone)
   // départ « Ma position » : si vous avez bougé depuis le calcul, le trajet repart d'où vous êtes
@@ -2104,11 +2335,13 @@ function startGuidance() {
     const label = S.routes[S.selected]?.label;
     S.origin = {lat: liveFix.lat, lon: liveFix.lon, acc: liveFix.acc, confirmedAt: Date.now(), label: "Ma position", gps: true};
     try {
-      const routes = computeRoutes(net, {origin: S.origin, destination: S.dest, profile: profileJson(), compare_shortest: true}, reports()).routes;
+      const routes = routeChoices(S.origin);
       if (routes.length) { S.routes = routes; S.selected = Math.max(0, routes.findIndex(r => r.label === label)); }
     } catch (e) { if (!(e instanceof RoutingError)) throw e; }
     if (!S.routes[S.selected]?.accessible) return render();
   }
+  setHeadingMode(false); follow = false;                  // la carte part dans la vue de guidage, nord en haut
+  liveArrived = false;
   hazardAlerted.clear();                                  // nouveau trajet : tous les obstacles seront annoncés
   startNav(S.routes[S.selected]);
   prepareOffline(S.routes[S.selected], true);           // carte du trajet gardée : le guidage tient sans réseau
@@ -2186,7 +2419,7 @@ document.addEventListener("touchstart", e => {
   if (e.touches.length !== 1 || S.hud || document.querySelector(".confirm")) return;
   const t = e.touches[0], x = t.clientX;
   const edge = x < SWIPE_EDGE ? "left" : x > innerWidth - SWIPE_EDGE ? "right" : null;
-  const onPanel = !!e.target.closest("#panel") && !e.target.closest("input, .seg, .tile, .switch");
+  const onPanel = !!e.target.closest("#panel") && !e.target.closest("input, .seg, .tile, .switch, .mob-chips");
   if ((!edge && !onPanel) || e.target.closest("#ar .sheet")) return;
   swipe = {x, y: t.clientY, edge, dx: 0, on: false};
 }, {passive: true});
@@ -2244,7 +2477,7 @@ function bind() {
   // la croix efface tout d'un coup ; mousedown empêché : le champ garde le clavier ouvert
   on("qClear", "onmousedown", e => e.preventDefault());
   on("qClear", "onclick", () => { const q = $("q"); q.value = ""; S.query = ""; $("qClear").hidden = true; search(""); q.focus(); });
-  on("q", "onfocus", () => { document.body.classList.add("typing"); if (sheetCollapsed) setSheet(false); else layoutSheet(); });
+  on("q", "onfocus", () => { setHeadingMode(false); document.body.classList.add("typing"); if (sheetCollapsed) setSheet(false); else layoutSheet(); });
   // (petit délai : un toucher sur une suggestion doit arriver avant que le panneau reprenne sa hauteur normale)
   on("q", "onblur", () => setTimeout(() => { if (document.activeElement?.id !== "q") { document.body.classList.remove("typing"); layoutSheet(); } }, 300));
   on("sheetHandle", "onkeydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSheet(!sheetCollapsed); } });
@@ -2252,11 +2485,16 @@ function bind() {
   on("favToggle", "onclick", toggleFavorite);
   on("arrSpeak", "onclick", () => say(arrivalSpeech(S.arrival), true));
   all("[data-route]", c => c.onclick = () => { S.selected = +c.dataset.route; render(); });
+  on("swapTrip", "onclick", swapTrip);
+  all("[data-trip-mob]", b => b.onclick = () => setTripMob(b.dataset.tripMob));
   on("pickDoor", "onclick", pickDoor);
   on("tourGo", "onclick", () => chooseDest({label: "Picard (surgelés), Allées Maria Casarès", lat: 48.925767, lon: 2.295317, type: "poi"}));
   on("resetDoor", "onclick", resetDoor);
   all("[data-indoor]", b => b.onclick = () => openBuilding(b.dataset.indoor));
   on("start", "onclick", startGuidance);
+  on("resumeNav", "onclick", resumeGuidance);
+  on("stopLive", "onclick", confirmQuit);
+  on("endLive", "onclick", endGuidanceSoftly);
   // Paramètres
   on("settingsBack", "onclick", () => go("route"));
   on("setProfile", "onclick", () => go("profile"));
@@ -2375,6 +2613,8 @@ fetch(ZONE.data).then(r => r.json()).then(data => {
 // Accès pour les tests automatiques uniquement (adresse terminée par ?debug)
 if (new URLSearchParams(location.search).has("debug"))
   window.__va = {S, posAt, navState, moveTo, chooseDest, get net() { return net; }, get transit() { return transit; }, addReport, reports, navApi,
-    useFavorite, stopGuidance, get liveFix() { return liveFix; }, get geoPermission() { return geoPermission; },
+    useFavorite, stopGuidance, minimize: () => minimizeGuidance(), resume: () => resumeGuidance(), recenter: () => recenter(),
+    heading: on => setHeadingMode(on), get follow() { return follow; }, get headingMode() { return headingMode; },
+    get liveFix() { return liveFix; }, get geoPermission() { return geoPermission; },
     resetOrigin() { stopHereWatch(); liveFix = null; wantOrigin = false; originState = {searchSince: null, best: null, lastUseAt: null};
       S.origin = {...MAIRIE}; S.originMode = "auto"; S.originNeedsFix = false; S.dest = null; S.routes = []; render(); }};

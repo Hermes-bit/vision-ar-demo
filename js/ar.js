@@ -826,6 +826,7 @@ function chip(cls, ic, label, value) {
 function renderUi(s, heading, compass) {
   const st = s.st, next = st.next, r = s.nav.route;
   const eta = new Date(Date.now() + st.remaining / s.speed * 1000).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
+  const minsLeft = `${Math.max(1, Math.ceil(st.remaining / s.speed / 60))} min`;     // temps restant, comme Citymapper (« 12 min · 23:58 »)
   const after = s.nav.route.steps[st.idx + 2];
   const crossing = next.alerts.some(a => a.startsWith("Traversée"));
   const sub = st.arrived ? (s.dest?.label || "") : crossing ? `puis traversez au passage piéton${next.alerts.some(a => a.includes("feu sonore")) ? " (feu sonore)" : ""}`
@@ -866,7 +867,7 @@ function renderUi(s, heading, compass) {
   if (!st.arrived) arrivalCheered = false;
   const html = `
     <div class="top">
-      <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", "Arrivée", eta)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
+      <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", st.arrived ? "Arrivée" : `Arrivée ${eta}`, st.arrived ? eta : minsLeft)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
       <div class="bubble"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
         ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
@@ -883,6 +884,7 @@ function renderUi(s, heading, compass) {
     <div class="dome-credit" aria-hidden="true">© OpenStreetMap · OpenFreeMap · OpenMapTiles</div>
     <div class="dome-ui">
       ${alt ? `<div class="alt-note">${esc(alt)}</div>` : ""}
+      <button class="mini" data-act="minimize" aria-label="Réduire : retour au plan, le guidage continue à la voix">${icon("chevron-down")}<span aria-hidden="true">Réduire</span></button>
       <div class="rose ${compass ? "on" : ""}" role="img" aria-label="${compass ? "Boussole active" : "Boussole indisponible : la vue suit le sens de l'itinéraire"}">
         <span class="needle"></span><i>N</i></div>
     </div>
@@ -1004,7 +1006,8 @@ function stopSheet() {
   return `<div class="sheet-head"><h3>${icon("x")} Arrêter le guidage ?</h3><button class="x" data-act="close-sheet" aria-label="Fermer">${icon("x")}</button></div>
     <p class="stop-text">Vous reviendrez à la recherche d'itinéraire. La destination reste enregistrée.</p>
     <button class="btn danger" data-act="stop">${icon("x")} Oui, arrêter le guidage</button>
-    <button class="btn soft" data-act="close-sheet">${icon("navigation")} Non, continuer</button>`;
+    <button class="btn soft" data-act="close-sheet">${icon("navigation")} Non, continuer</button>
+    <button class="btn soft" data-act="minimize">${icon("chevron-down")} Voir le plan, le guidage continue</button>`;
 }
 function reportSheet() {
   return `<div class="sheet-head"><h3>${icon("triangle-alert")} Signaler un obstacle</h3><button class="x" data-act="close-sheet" aria-label="Fermer">${icon("x")}</button></div>
@@ -1040,6 +1043,7 @@ function onAction(e) {
   else if (act === "arr-end") { api.endSoftly?.(); return; }
   else if (act === "arr-stay") { api.stay?.(); lastUi = ""; return; }
   else if (act === "gps-help") { api.locationHelp?.(); return; }
+  else if (act === "minimize") { sheet = null; api.minimize?.(); return; }   // (la vue est fermée : rien à redessiner)
   else if (act === "hud") { sheet = null; api.openHud(); }
   else if (act === "voice") api.toggleVoice();
   else if (act === "reroute") { sheet = null; api.reroute(); }
