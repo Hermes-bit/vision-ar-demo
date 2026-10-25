@@ -825,6 +825,10 @@ body.sheet .trip, body.sheet .places, body.sheet .rcard, body.sheet .icon-btn { 
 .trip-origin .grow { min-width: 0; }
 .trip-origin b .i { vertical-align: -3px; }
 .trip-origin b .i { width: 18px; height: 18px; color: var(--primary); }
+/* départ pas encore connu : texte atténué ; recherche en cours : l'icône clignote doucement */
+.trip-origin b.muted { color: var(--muted); }
+.trip-origin b.pending .i { color: #2F80ED; animation: loc-pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .trip-origin b.pending .i { animation: none; } }
 .trip-edit { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 50%; background: var(--surface-2); color: var(--primary); }
 .trip-edit .i { width: 18px; height: 18px; }
 .trip-origin:active .trip-edit { background: var(--primary-soft); }

@@ -42,7 +42,10 @@ const PRESENTATION = APP_CHANNEL === "presentation";
 configureAuth({presentation: PRESENTATION});
 const ZONE_ID = (() => { try { const z = JSON.parse(localStorage.getItem("va-zone")); return ZONES[z] ? z : "gennevilliers"; } catch { return "gennevilliers"; } })();
 const ZONE = ZONES[ZONE_ID];
-const MAIRIE = ZONE.start;                                   // point de départ par défaut de la zone
+const MAIRIE = ZONE.start;                                   // centre de la zone (plan à l'ouverture ; départ de la présentation)
+// Pas de départ tant que la position n'est pas connue (plus de départ fixé à la Mairie) : lat/lon gardent le
+// centre de la zone pour le plan, « none » dit qu'aucun trajet ne doit partir de là
+const NO_ORIGIN = () => ({lat: MAIRIE.lat, lon: MAIRIE.lon, label: "", none: true});
 const GEOCODER = "https://data.geopf.fr/geocodage/search/";       // France (IGN)
 const PHOTON = "https://photon.komoot.io/api/";                    // ailleurs (OpenStreetMap)
 
@@ -60,10 +63,10 @@ const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
   voice: store.get("va-voice", true), haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
-  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: {...MAIRIE}, dest: null, query: "", places: [],
-  // départ : position GPS par défaut (comme Citymapper) ; searchFor « origin » quand on modifie le départ
-  // (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
-  originMode: PRESENTATION ? "manual" : "auto", searchFor: "dest", oquery: "",
+  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: PRESENTATION ? {...MAIRIE} : NO_ORIGIN(), dest: null, query: "", places: [],
+  // départ : la position actuelle, demandée dès l'ouverture de la recherche ; searchFor « origin » quand on modifie
+  // le départ (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
+  originMode: PRESENTATION ? "manual" : "gps", originNeedsFix: !PRESENTATION, searchFor: "dest", oquery: "",
   simulate: store.get("va-simulate", PRESENTATION),
   // Alertes de proximité (5 à 10 m), portée des étiquettes de lieux dans la caméra, économie de batterie
   alertDist: store.get("va-alert-dist", 8), placesRange: store.get("va-places-range", 50), eco: store.get("va-eco", true), audioOnly: store.get("va-audio-only", false),
@@ -440,7 +443,7 @@ const chipInk = hex => {                                   // texte lisible sur 
 const whereAmI = () => {
   const n = S.nav;
   if (n) return n.real && Date.now() - n.real.at < 15000 ? n.real : n.here;
-  return S.origin;
+  return S.origin.none ? null : S.origin;
 };
 function transitPopup(st) {
   const m = MODE[st.mode] || MODE.bus, from = whereAmI(), t = stopTarget(st, from);
@@ -564,7 +567,7 @@ function drawRoutes() {
       L.polyline([[e.lat, e.lon], [S.dest.lat, S.dest.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.routes);
   }
   const underDot = S.origin.gps && liveFix && hereMarker && distM(S.origin, liveFix) < 12;
-  if (!S.nav && !underDot) L.marker([S.origin.lat, S.origin.lon], {icon: L.divIcon({className: "", html: '<div class="start-dot"></div>', iconSize: [24, 24]}),
+  if (!S.nav && !underDot && !S.origin.none) L.marker([S.origin.lat, S.origin.lon], {icon: L.divIcon({className: "", html: '<div class="start-dot"></div>', iconSize: [24, 24]}),
     title: "Départ"}).addTo(layers.marks);
   if (S.dest) L.marker([S.dest.lat, S.dest.lon], {icon: pin("flag", "pin-dest"), title: "Arrivée"}).addTo(layers.marks);
   if (S.nav) {
@@ -591,7 +594,8 @@ const routeChoices = from => walkingChoices(computeRoutes(net, {origin: from, de
 function computeRoute({keepView = false} = {}) {
   const was = S.routes[S.selected]?.label;
   S.routes = []; S.message = null;
-  if (S.dest && !originPending()) {                        // en attente d'une position sûre : pas de trajet faux
+  if (S.dest && !originPending() && S.origin.none) S.message = "Choisissez votre point de départ (touchez « Départ ») : votre position n'est pas disponible.";
+  else if (S.dest && !originPending()) {                   // en attente d'une position sûre : pas de trajet faux
     try {
       S.routes = routeChoices(S.origin);
       const i = keepView ? S.routes.findIndex(r => r.label === was) : -1;
@@ -691,26 +695,36 @@ function fitRoute() {
   // un rectangle de carte rétréci sur un fond sombre, vidéo du 19/10)
 }
 // Au premier affichage de la recherche : si la localisation est déjà autorisée et qu'on est à Gennevilliers,
-// le départ est « Ma position » au lieu de la Mairie (aucune demande d'autorisation surprise)
-// Au premier affichage de la recherche : si la localisation est déjà autorisée, le départ devient « Ma position »
-// sans attendre (aucune demande d'autorisation surprise : sinon elle est demandée au choix de l'arrivée)
+// Départ = la position actuelle, demandée dès le premier affichage de la recherche (plus de départ fixé à la
+// Mairie). Ensuite, l'usager n'a plus qu'à saisir son arrivée. Localisation refusée, introuvable ou hors de la zone :
+// le départ reste vide (« Choisissez votre départ ») et aucun trajet ne part d'un faux point.
 let autoOriginDone = false;
-async function autoOrigin() {
-  if (autoOriginDone || !net || !navigator.geolocation || S.originMode !== "auto") return;
+function autoOrigin() {
+  if (autoOriginDone || !net || S.screen !== "route" || S.originMode !== "gps" || !S.origin.none) return;
   autoOriginDone = true;
-  try {
-    const perm = await navigator.permissions?.query({name: "geolocation"});
-    geoPermission = perm?.state || geoPermission;
-    if (perm?.state !== "granted") return;
-  } catch { return; }
-  locateOrigin(true, true);
+  locateOrigin(true);                                     // sans fenêtre d'aide si l'usager refuse : le champ le dit
+  setTimeout(showOrigin, 0);                              // (appelé pendant render : la ligne « Départ » est mise à jour juste après)
 }
+// Ligne « Départ » : Ma position, recherche en cours, ou départ à choisir (et pourquoi)
+let originLost = false;
+function originView() {
+  if (S.origin.gps) return {text: `${icon("locate-fixed")} Ma position`, aria: "Ma position"};
+  if (!S.origin.none) return {text: esc(S.origin.label), aria: S.origin.label};
+  if (originPending()) return originLost
+    ? {text: "Position introuvable", sub: "touchez pour choisir une adresse", aria: "Position introuvable pour l'instant", muted: true}
+    : {text: `${icon("locate-fixed")} Recherche de votre position…`, aria: "Recherche de votre position", muted: true, pending: true};
+  const why = geoPermission === "denied" ? "localisation refusée" : S.originMode === "out" ? "hors de la zone couverte" : "";
+  return {text: "Choisissez votre départ", sub: why, aria: `Choisissez votre départ${why ? ` (${why})` : ""}`, muted: true};
+}
+const originRowHtml = (v = originView()) => `<span class="grow"><small>Départ${v.sub ? ` · ${esc(v.sub)}` : ""}</small>
+  <b class="${v.muted ? "muted" : ""} ${v.pending ? "pending" : ""}">${v.text}</b></span>`;
 // Met à jour la ligne « Départ » sans reconstruire le panneau (la saisie en cours n'est pas interrompue)
 function showOrigin() {
   const b = $("editOrigin");
-  if (!b) return render();
-  b.querySelector("b").innerHTML = `${S.origin.gps ? icon("locate-fixed") + " " : ""}${esc(S.origin.label)}`;
-  b.setAttribute("aria-label", `Départ : ${S.origin.label}. Toucher pour changer`);
+  if (!b) return;                                         // (saisie du départ en cours, autre écran : rien à reconstruire)
+  const v = originView();
+  b.querySelector(".grow").outerHTML = originRowHtml(v);
+  b.setAttribute("aria-label", `Départ : ${v.aria}. Toucher pour changer`);
 }
 // ---- Départ « Ma position » vivant (règles : js/origin.js) ---------------------------------------------------
 // Un seul suivi GPS sur l'écran de recherche : il fait bouger le point bleu « vous êtes ici » ET le départ des
@@ -718,6 +732,7 @@ function showOrigin() {
 // guidage ou depuis un favori. Pendant le guidage, c'est le suivi du guidage qui prend le relais.
 let hereWatch = null, hereMarker = null, hereCircle = null, hereCentered = false, hereLink = null;
 let liveFix = null, wantOrigin = false, geoPermission = "unknown";
+let originQuiet = true;                                      // demande automatique (lancement) : pas de fenêtre d'aide en cas de refus
 let originState = {searchSince: null, best: null, lastUseAt: null};
 navigator.permissions?.query?.({name: "geolocation"}).then(p => {
   geoPermission = p.state;
@@ -858,10 +873,10 @@ function onHereError(err) {
   const asked = S.originMode === "gps";
   wantOrigin = false; S.originNeedsFix = false;
   if (asked) {
-    if (!S.origin.gps) S.originMode = "manual";              // on garde le départ affiché (Mairie, adresse…)
-    locationHelp();
+    if (!S.origin.gps) S.originMode = "manual";              // départ à choisir (ou adresse déjà choisie)
+    if (!originQuiet) locationHelp();                        // demandée par l'usager (« Ma position ») : comment l'autoriser
   }
-  if (S.screen === "route" && S.dest) computeRoute();
+  if (S.screen === "route") S.dest ? computeRoute() : showOrigin();
 }
 function applyOriginFix(fix) {
   const now = Date.now(), cur = S.origin.gps ? S.origin : null;
@@ -875,12 +890,12 @@ function applyOriginFix(fix) {
     wantOrigin = false; S.originNeedsFix = false;
     if (S.originMode === "gps" && !S.origin.gps) S.originMode = "out";
     toast(`Vous êtes hors de la zone couverte (${zoneLabel(ZONE)}) : touchez « Départ » pour choisir une adresse.`, 6000);
-    if (S.screen === "route" && S.dest) computeRoute();
+    if (S.screen === "route") S.dest ? computeRoute() : showOrigin();
     return;
   }
   const moved = cur ? distM(cur, f) : Infinity;
   S.origin = {lat: f.lat, lon: f.lon, acc: f.acc, confirmedAt: now, label: "Ma position", gps: true};
-  S.originMode = "gps"; S.originNeedsFix = false;
+  S.originMode = "gps"; S.originNeedsFix = false; originLost = false;
   originState = {searchSince: null, best: null, lastUseAt: now};
   if (S.screen !== "route" || S.searchFor === "origin") return;
   if (S.dest) computeRoute({keepView: moved < 60}); else showOrigin();
@@ -891,11 +906,8 @@ setInterval(() => {
   const waited = Date.now() - (originState.searchSince ?? Date.now());
   // aucun relevé du tout depuis 10 s (à l'intérieur, GPS coupé) : inutile d'attendre davantage
   if (waited < 10000 || originState.best) return updateLocating();
-  if (S.originMode === "auto") {                             // jamais demandé explicitement : départ affiché
-    wantOrigin = false; S.originNeedsFix = false;
-    toast("Position introuvable pour l'instant : trajet depuis le départ affiché. Touchez « Départ » pour le changer.", 6000);
-    if (S.dest) computeRoute();
-  } else updateLocating(true);
+  if (!originLost) { originLost = true; showOrigin(); }      // le suivi continue : le départ se remplira dès qu'une position arrive
+  updateLocating(true);
 }, 1000);
 // Pointillés du point bleu jusqu'au début du trajet (comme Google Maps) : on voit toujours comment le rejoindre
 function updateHereLink() {
@@ -921,18 +933,21 @@ function updateLocating(lost = false) {
 // Départ = « Ma position ». quiet : sans message ; ifGranted : seulement si la localisation est déjà autorisée
 // (au lancement de l'appli : aucune demande surprise). Au choix d'une destination, elle peut être demandée.
 function locateOrigin(quiet = false, ifGranted = false) {
-  if (!navigator.geolocation) { if (!quiet) toast("La localisation n'est pas disponible sur cet appareil."); return; }
+  const giveUp = () => { if (!S.origin.gps) { wantOrigin = false; S.originNeedsFix = false; S.originMode = "manual"; } };
+  if (!navigator.geolocation) { giveUp(); if (!quiet) toast("La localisation n'est pas disponible sur cet appareil."); return; }
   if (geoPermission === "denied") {                         // refusée : on explique comment l'autoriser
-    if (!quiet && !ifGranted) { if (!S.origin.gps) S.originMode = "manual"; locationHelp(); }
+    if (!ifGranted) giveUp();                               // (le départ reste à choisir ; le champ « Départ » le dit)
+    if (!quiet && !ifGranted) locationHelp();
     return;
   }
   if (ifGranted && geoPermission !== "granted") return;
   if (S.originMode === "manual" && quiet) return;            // l'usager a choisi un autre départ
+  originQuiet = quiet;
   wantOrigin = true;
   if (!quiet) S.originMode = "gps";
   if (!originValid(S.origin.gps ? S.origin : null, Date.now())) {
     S.originNeedsFix = true;
-    originState = {searchSince: Date.now(), best: null, lastUseAt: originState.lastUseAt};
+    originState = {searchSince: Date.now(), best: null, lastUseAt: originState.lastUseAt}; originLost = false;
   }
   startHereWatch();
   // la dernière position reçue est peut-être déjà assez bonne
@@ -1437,7 +1452,7 @@ function screenProfile() {
 }
 const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
-const APP_VERSION = "93";
+const APP_VERSION = "94";
 function screenSettings() {
   const sess = currentSession(), mob = MOB.find(m => m[0] === primary());
   const row = (id, ic, label, value = "", chevron = true) => `<button class="set-row" id="${id}">${icon(ic)}<span class="grow">${label}</span>
@@ -1561,8 +1576,8 @@ function screenRoute() {
         ? `<label class="search grow">${icon("search")}<input type="search" id="qo" placeholder="Départ : adresse, lieu, arrêt…"
             value="${esc(S.oquery)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Point de départ">
             <button type="button" class="search-clear" id="qoCancel" aria-label="Garder le départ actuel">${icon("x")}</button></label>`
-        : `<button class="trip-origin grow" id="editOrigin" aria-label="Départ : ${esc(S.origin.label)}. Toucher pour changer">
-            <span class="grow"><small>Départ</small><b>${S.origin.gps ? icon("locate-fixed") + " " : ""}${esc(S.origin.label)}</b></span>
+        : `<button class="trip-origin grow" id="editOrigin" aria-label="Départ : ${esc(originView().aria)}. Toucher pour changer">
+            ${originRowHtml()}
             <span class="trip-edit">${icon("pencil")}</span></button>`}</div>
     <div class="trip-line" aria-hidden="true"></div>
     <div class="trip-row"><span class="trip-dot end" aria-hidden="true"></span>
@@ -1612,7 +1627,7 @@ function openBuilding(id) {
 const FAV_KEY = `va-favorites-${ZONE_ID}`, FAV_MAX = 12;
 const favorites = () => store.get(FAV_KEY, []);
 const samePlace = (a, b) => a && b && haversineM(a.lat, a.lon, b.lat, b.lon) < 30;
-const favOrigin = () => S.origin.gps ? {gps: true, label: "Ma position"} : {lat: S.origin.lat, lon: S.origin.lon, label: S.origin.label};
+const favOrigin = () => S.origin.gps || S.origin.none ? {gps: true, label: "Ma position"} : {lat: S.origin.lat, lon: S.origin.lon, label: S.origin.label};
 function currentFavIndex() {
   if (!S.dest) return -1;
   const o = favOrigin();
@@ -2019,6 +2034,7 @@ function render() {
     tp.setAttribute("aria-label", `${pillText()}. Toucher pour revenir à l'écran de guidage`);
   } else tp?.remove();
   if (headingMode && S.screen !== "route") setHeadingMode(false);
+  if (S.screen === "route") autoOrigin();                // première recherche : départ = la position actuelle
   syncMapButtons();
   syncGuard();
   syncHereDot();
@@ -2292,7 +2308,7 @@ function cancelOrigin() { S.searchFor = "dest"; S.oquery = ""; S.places = []; re
 // Inverser départ et arrivée (comme Citymapper). « Ma position » devient l'arrivée : l'endroit où vous êtes
 // maintenant. L'arrivée devient le départ, à sa porte (on ressort par là). Un deuxième appui revient au trajet
 // d'origine : le lieu de départ garde sa fiche (place), pour retrouver son entrée.
-const canSwap = () => !!S.dest && S.searchFor !== "origin" && !S.nav;
+const canSwap = () => !!S.dest && !S.origin.none && S.searchFor !== "origin" && !S.nav;
 function swapTrip() {
   if (!canSwap()) return;
   if (originPending()) return toast("Votre position est en cours de recherche : patientez un instant.");
@@ -2617,4 +2633,5 @@ if (new URLSearchParams(location.search).has("debug"))
     heading: on => setHeadingMode(on), get follow() { return follow; }, get headingMode() { return headingMode; },
     get liveFix() { return liveFix; }, get geoPermission() { return geoPermission; },
     resetOrigin() { stopHereWatch(); liveFix = null; wantOrigin = false; originState = {searchSince: null, best: null, lastUseAt: null};
-      S.origin = {...MAIRIE}; S.originMode = "auto"; S.originNeedsFix = false; S.dest = null; S.routes = []; render(); }};
+      S.origin = PRESENTATION ? {...MAIRIE} : NO_ORIGIN(); S.originMode = PRESENTATION ? "manual" : "gps"; S.originNeedsFix = false;
+      originLost = false; autoOriginDone = false; S.dest = null; S.routes = []; render(); }};

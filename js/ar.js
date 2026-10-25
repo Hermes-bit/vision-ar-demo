@@ -18,6 +18,7 @@ import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {BACKEND, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
+import {angleDiff, makeHeadingFusion} from "./heading.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
@@ -112,16 +113,27 @@ function backCameraHeading(alpha, beta, gamma) {
   if (Math.hypot(vx, vy) < 0.15) return null;                  // téléphone à plat : direction indéfinie
   return (Math.atan2(vx, vy) / d + 360) % 360;
 }
-let lastAbsolute = 0;
+// Cap : le gyroscope donne les mouvements tout de suite, la boussole recale doucement le nord (js/heading.js).
+// C'est ce qui garde le ruban collé au sol quand on tourne le téléphone (avant : boussole très lissée, en retard).
+const fusion = makeHeadingFusion();
+let lastAbsolute = 0, lastRelative = 0, absHeading = null;
 function onOrientation(e) {
   if (typeof e.beta !== "number" || typeof e.gamma !== "number") return;
+  const now = performance.now(), t = now / 1000;
+  const back = typeof e.alpha === "number" ? backCameraHeading(e.alpha, e.beta, e.gamma) : null;   // null : téléphone à plat
   let heading = null;
-  if (typeof e.webkitCompassHeading === "number" && e.webkitCompassHeading >= 0) {
-    heading = e.webkitCompassHeading;                                                // iPhone
+  if (typeof e.webkitCompassHeading === "number") {
+    // iPhone : alpha relatif (gyroscope) et webkitCompassHeading (boussole ; -1 = indisponible)
     sensors.compassAcc = typeof e.webkitCompassAccuracy === "number" ? e.webkitCompassAccuracy : null;   // degrés, -1 = à calibrer
+    heading = fusion.update(back, e.webkitCompassHeading >= 0 ? e.webkitCompassHeading : null, t, compassOk() ? 1 : 0.2);
+  } else if (e.absolute || e.type === "deviceorientationabsolute") {
+    // Android, événement absolu (boussole) : il recale le gyroscope ; il guide seul s'il n'y a pas de gyroscope
+    if (back !== null) { absHeading = back; lastAbsolute = now; }
+    if (now - lastRelative > 600) heading = fusion.compassOnly(back, t);
+  } else {
+    lastRelative = now;                                       // Android, événement relatif (gyroscope)
+    heading = fusion.update(back, now - lastAbsolute < 600 ? absHeading : null, t);
   }
-  else if (e.absolute && typeof e.alpha === "number") { heading = backCameraHeading(e.alpha, e.beta, e.gamma); lastAbsolute = performance.now(); }
-  else if (performance.now() - lastAbsolute < 2000) return;   // Android : l'événement relatif ne remplace pas l'absolu
   if (heading !== null) sensors.heading = heading;
   // Gravité dans le repère du téléphone -> inclinaison sous l'horizon et roulis de l'image
   const d = Math.PI / 180, cb = Math.cos(e.beta * d);
@@ -149,8 +161,11 @@ class OneEuro {
     return this.x;
   }
 }
-// Réglage terrain (v66) : plus lisse qu'avant (le ruban et les étiquettes tremblaient), toujours réactif quand on tourne
-const F = {heading: new OneEuro(0.15, 0.006, true), pitch: new OneEuro(0.25, 0.006), roll: new OneEuro(0.25, 0.006)};
+// Cap boussole seule (appli Android, démonstration) : très lissé. Inclinaison et roulis viennent déjà du gyroscope
+// (lisses et sans retard) : un lissage léger suffit. Lourdement lissés (0,25 Hz, v66), le ruban suivait l'image
+// avec du retard quand on inclinait le téléphone : il semblait flotter au lieu d'être posé au sol.
+const F = {heading: new OneEuro(0.15, 0.006, true), pitch: new OneEuro(2.5, 0.05), roll: new OneEuro(2.5, 0.05)};
+let lastHeading = 0, drawnH = null, drawnP = null;
 async function startSensors() {
   try {
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function")
@@ -264,12 +279,14 @@ function drawPath(cam, s, here, pos) {
   };
   ctx.save();
   if (t.ribbon) {
-    // halo, ruban, cœur clair : le « tapis lumineux » de la maquette 1
-    ctx.shadowColor = t.glow; ctx.shadowBlur = 34 * dpr;
+    // Ruban posé au sol comme une bande collée : plus de grand halo lumineux (il le faisait flotter au-dessus de la
+    // rue), mais un liseré sombre AU SOL (7 cm de chaque côté, en perspective comme le ruban) qui le détache du
+    // trottoir, puis le ruban turquoise et son cœur clair
+    const [ol, or] = bandEdges(cam, pts, t.half + 0.07);
+    if (ol.length > 1) { bandPath(ol, or); ctx.fillStyle = fade("rgba(0,40,52,.42)", "rgba(0,40,52,.24)", "rgba(0,40,52,0)"); ctx.fill(); }
     bandPath(left, right);
-    ctx.fillStyle = fade("rgba(0,174,204,.80)", "rgba(20,190,200,.62)", "rgba(61,220,151,0)");
+    ctx.fillStyle = fade("rgba(0,174,204,.82)", "rgba(20,190,200,.62)", "rgba(61,220,151,0)");
     ctx.fill();
-    ctx.shadowBlur = 0;
     const [cl, cr] = bandEdges(cam, pts, t.half * 0.35);
     if (cl.length > 1) { bandPath(cl, cr); ctx.fillStyle = fade("rgba(200,255,240,.55)", "rgba(170,250,225,.35)", "rgba(61,220,151,0)"); ctx.fill(); }
     ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = fade("rgba(255,255,255,.75)", "rgba(255,255,255,.35)", "rgba(255,255,255,0)");
@@ -283,10 +300,10 @@ function drawPath(cam, s, here, pos) {
   }
   ctx.restore();
 
-  // Chevrons « ^ » tracés au sol le long de la ligne lissée, à intervalle régulier
+  // Chevrons « ^ » peints au sol le long de la ligne lissée, à intervalle régulier (halo réduit : ils restent au sol)
   ctx.save();
   ctx.lineCap = "round"; ctx.lineJoin = "round";
-  ctx.shadowColor = t.glow; ctx.shadowBlur = (t.ribbon ? 8 : 26) * dpr;
+  ctx.shadowColor = t.glow; ctx.shadowBlur = (t.ribbon ? 0 : 10) * dpr;
   // chevrons ancrés à l'itinéraire (ils ne glissent pas avec soi) : ils approchent, puis s'effacent sous les pieds
   let acc = 0, next = Math.ceil((pos - 1.5) / t.chevGap) * t.chevGap - from;
   const wave = (performance.now() / 1000 * 7) % (PATH_AHEAD_M + 6) - 1;   // onde lumineuse, de soi vers l'avant
@@ -637,7 +654,7 @@ function autoSample(s) {
 }
 function sampleMeta(s) {
   const r = s.nav.real;
-  return {lat: r?.lat, lon: r?.lon, accuracy: r?.acc, heading: Math.round(F.heading.x ?? -1), pitch: Math.round(lastPitch)};
+  return {lat: r?.lat, lon: r?.lon, accuracy: r?.acc, heading: Math.round(lastHeading ?? -1), pitch: Math.round(lastPitch)};
 }
 // Mode test : toutes les détections encadrées, avec le nom et le score
 function drawDetections() {
@@ -713,7 +730,7 @@ function routeBearing(s) {
   let ahead = Math.min(15, turnAt - s.nav.pos);
   if (ahead < 3) ahead = 8;
   const a = s.posAt(s.nav.pos), b = s.posAt(Math.min(s.nav.total, s.nav.pos + ahead));
-  if (a.lat === b.lat && a.lon === b.lon) return F.heading.x ?? 0;   // (sans boussole : ordinateur, capteurs refusés)
+  if (a.lat === b.lat && a.lon === b.lon) return lastHeading;       // (sans boussole : ordinateur, capteurs refusés)
   const k = Math.cos(a.lat * Math.PI / 180);
   return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
 }
@@ -723,8 +740,10 @@ function frame() {
   raf = requestAnimationFrame(frame);
   const s = api.state();
   if (!s) return;
-  // Économie de batterie (loin du prochain virage et des obstacles) : 20 images par seconde au lieu de 60
-  if (s.eco && performance.now() - lastFrameAt < 48) return;
+  // Économie de batterie (loin du prochain virage et des obstacles) : 20 images par seconde au lieu de 60, sauf si le
+  // téléphone bouge (sinon le ruban suivait la rue par à-coups)
+  const moving = drawnH === null || Math.abs(angleDiff(sensors.heading ?? drawnH, drawnH)) > 0.3 || Math.abs((sensors.pitch ?? 0) - drawnP) > 0.3;
+  if (s.eco && !moving && performance.now() - lastFrameAt < 48) return;
   lastFrameAt = performance.now();
   const dpr = devicePixelRatio, w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
@@ -732,7 +751,9 @@ function frame() {
   if (nativeOn) syncNative(s);
   // démonstration : la vue suit le sens du trajet (pas la boussole du téléphone, qui n'est pas dans la rue simulée)
   const now = performance.now(), nh = nativeHeading(), compass = !s.simulated && (nh !== null || sensors.heading !== null);
-  const heading = F.heading.filter(nh ?? (compass ? sensors.heading : routeBearing(s)), now);
+  // boussole du téléphone : cap fusionné, sans lissage (il suivrait l'image en retard) ; sinon cap lissé
+  const heading = nh !== null ? F.heading.filter(nh, now) : compass ? sensors.heading : F.heading.filter(routeBearing(s), now);
+  lastHeading = heading; drawnH = sensors.heading ?? heading; drawnP = sensors.pitch ?? 0;
   document.documentElement.style.setProperty("--heading", `${heading.toFixed(1)}deg`);
   const pitch = F.pitch.filter(Math.max(-30, Math.min(80, sensors.pitch ?? 10)), now);   // sans capteur : téléphone presque droit
   const roll = compass ? ((F.roll.filter(sensors.roll + 180, now) + 360) % 360) - 180 : 0;
@@ -790,7 +811,7 @@ function onVisibility() {
   if (performance.now() - hiddenAt < 1500) return;
   recal = {since: Date.now(), at: performance.now()};
   ribbonA = 0; view = null; lastUi = ""; obs = null; labelSmooth.clear();
-  Object.values(F).forEach(f => f.reset());
+  Object.values(F).forEach(f => f.reset()); fusion.reset(); drawnH = null;
   tracker.reset(); dets = [];
   api.say?.("Recalage en cours, gardez le téléphone devant vous.", 1);   // niveau CONSIGNE (js/speech.js)
   const track = stream?.getVideoTracks()[0];
@@ -1086,7 +1107,7 @@ export async function openAR(options) {
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
   view = null; mapFull = false; sheet = null; lastUi = ""; ribbonA = 0; recal = null; obs = null; labelSmooth.clear();
   tracker.reset(); annState = {}; lastMovePos = null;
-  Object.values(F).forEach(f => f.reset());
+  Object.values(F).forEach(f => f.reset()); fusion.reset(); drawnH = null;
   sensors = {heading: null, pitch: null, roll: 0};
   root = document.getElementById("ar");
   root.hidden = false;
