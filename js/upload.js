@@ -39,16 +39,35 @@ export function descriptionDe(s) {
   };
 }
 
-/** Identifiant d'appareil : tiré au hasard une fois, gardé sur le téléphone, jamais une identité. */
+// Le serveur n'accepte que ce motif (app/reports.py : device_hash).
+export const CODE_RE = /^[A-Za-z0-9_-]{16,128}$/;
+
+/**
+ * Code de collecteur : tiré au hasard la première fois, gardé sur le téléphone.
+ * Ce n'est PAS une identité — le serveur n'en garde qu'une empreinte SHA-256. Il sert
+ * seulement à regrouper les envois d'une même personne, y compris depuis plusieurs
+ * appareils si elle y recopie le même code.
+ */
 export function deviceId(store) {
   let id = store.get("va-device-id", null);
-  if (!id) {
+  if (!CODE_RE.test(id || "")) {
     const b = new Uint8Array(24);
     crypto.getRandomValues(b);
     id = [...b].map(x => x.toString(36).padStart(2, "0")).join("").slice(0, 40);
     store.set("va-device-id", id);
   }
   return id;
+}
+
+/**
+ * Reprend un code existant sur un autre appareil : les envois se regroupent.
+ * @returns {string|null} le code retenu, ou null si la saisie ne convient pas.
+ */
+export function setDeviceId(store, saisie) {
+  const code = String(saisie ?? "").trim();
+  if (!CODE_RE.test(code)) return null;
+  store.set("va-device-id", code);
+  return code;
 }
 
 /**

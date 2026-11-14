@@ -4,7 +4,7 @@
 import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
 import {MODE, linesText, loadTransit, makeStreetFinder, searchPlaces, stopTarget, wheelText} from "./transit.js";
 import {clearSamples, exportZip, listSamples, removeSamples} from "./obstacles.js";
-import {deviceId, envoyer} from "./upload.js";
+import {deviceId, envoyer, setDeviceId} from "./upload.js";
 import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, configureAuth, currentSession, isGuest, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
@@ -1611,6 +1611,9 @@ function screenSettings() {
     ${S.dataConsent && S.survey ? `<p class="fine">${icon("info")} Le relevé prend beaucoup plus d'images : à réserver aux sorties de collecte, pas à l'usage courant.</p>` : ""}
     <div class="set-row static">${icon("database")}<span class="grow">Images collectées</span><span class="set-val" id="sampleCount">…</span></div>
     ${apiBase() ? row("sendSamples", "arrow-up", "Envoyer au serveur", "", false) : ""}
+    ${apiBase() ? row("codeCollecte", "tags", "Code de collecteur", `${deviceId(store).slice(0, 8)}…`, false) : ""}
+    ${apiBase() ? row("codeReprendre", "users", "Utiliser le code d'un autre appareil", "", false) : ""}
+    ${apiBase() ? `<div class="set-row static">${icon("database")}<span class="grow">Envoyé avec ce code</span><span class="set-val" id="sentCount">…</span></div>` : ""}
     <p class="fine" id="sendState" aria-live="polite">${apiBase() ? "" :
       "Aucun serveur configuré : les images restent sur ce téléphone. L'export ZIP ci-dessous reste disponible."}</p>
     ${row("exportSamples", "share-2", "Exporter les images (ZIP)", "", false)}
@@ -2666,6 +2669,26 @@ function bind() {
     a.href = URL.createObjectURL(blob); a.download = `vision-ar-obstacles-${new Date().toISOString().slice(0, 10)}.zip`;
     document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   });
+  // Le code de collecteur regroupe les envois d'une même personne, sur plusieurs appareils.
+  // Ce n'est pas une identité : le serveur n'en garde qu'une empreinte (voir 002_signalements.sql).
+  on("codeCollecte", "onclick", async () => {
+    const code = deviceId(store);
+    try { await navigator.clipboard.writeText(code); toast("Code copié. Collez-le sur votre autre appareil.", 5000); }
+    catch { prompt("Copiez ce code, puis collez-le sur votre autre appareil :", code); }
+  });
+  on("codeReprendre", "onclick", () => {
+    const saisi = prompt("Collez le code de votre autre appareil : vos envois seront regroupés.", "");
+    if (saisi === null) return;
+    if (!setDeviceId(store, saisi)) return toast("Ce code ne convient pas : au moins 16 caractères, lettres, chiffres, « - » et « _ » seulement.", 7000);
+    toast("Code repris. Vos prochains envois rejoindront ceux de l'autre appareil.", 6000);
+    render();
+  });
+  if ($("sentCount")) {
+    fetch(`${apiBase().replace(/\/$/, "")}/samples/stats`, {headers: {"X-Device-Id": deviceId(store)}})
+      .then(r => r.ok ? r.json() : null)
+      .then(s => { if ($("sentCount")) $("sentCount").textContent = s ? `${s.mine ?? 0}` : "—"; })
+      .catch(() => { if ($("sentCount")) $("sentCount").textContent = "serveur injoignable"; });
+  }
   on("sendSamples", "onclick", async () => {
     const etat = $("sendState"), list = await listSamples();
     if (!list.length) return toast("Aucune image collectée pour l'instant.");

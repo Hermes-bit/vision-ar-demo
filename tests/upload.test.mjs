@@ -3,7 +3,7 @@
 // Lancer : node --test web/tests/*.test.mjs
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {LOT, lots, descriptionDe, deviceId, envoyer} from "../js/upload.js";
+import {LOT, lots, descriptionDe, deviceId, setDeviceId, CODE_RE, envoyer} from "../js/upload.js";
 
 const image = (id, o = {}) => ({
   id, created: "2026-11-14T03:12:00.000Z", lat: 48.933, lon: 2.297, accuracy: 8,
@@ -109,3 +109,38 @@ test("rien à envoyer : aucune requête réseau", async () => {
   assert.deepEqual(r, {envoyes: [], refuses: []});
   assert.equal(vues.length, 0);
 });
+
+
+const faireStore = () => {
+  const d = new Map();
+  return {get: (k, v) => (d.has(k) ? d.get(k) : v), set: (k, v) => d.set(k, v)};
+};
+
+test("reprendre un code sur un autre appareil : les envois se regroupent", () => {
+  const premier = faireStore(), second = faireStore();
+  const code = deviceId(premier);
+  assert.equal(setDeviceId(second, code), code);
+  assert.equal(deviceId(second), code, "le second appareil envoie désormais sous le même code");
+});
+
+test("code collé avec des espaces : nettoyé, pas refusé", () => {
+  const s = faireStore(), code = "a".repeat(20);
+  assert.equal(setDeviceId(s, `  ${code}
+`), code);
+});
+
+test("saisie qui ne convient pas : refusée, et le code en place est gardé", () => {
+  const s = faireStore(), avant = deviceId(s);
+  for (const mauvais of ["abc", "", null, "a".repeat(20) + "/evasion", "a".repeat(200)]) {
+    assert.equal(setDeviceId(s, mauvais), null, `devrait refuser ${JSON.stringify(mauvais)}`);
+  }
+  assert.equal(deviceId(s), avant, "un refus ne doit jamais faire perdre le code existant");
+});
+
+test("un code abîmé dans le stockage est remplacé, pas propagé au serveur", () => {
+  const s = faireStore();
+  s.set("va-device-id", "trop-court");
+  const code = deviceId(s);
+  assert.ok(CODE_RE.test(code), "le serveur n'accepterait pas « trop-court »");
+});
+
