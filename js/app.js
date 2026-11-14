@@ -17,6 +17,7 @@ import {labelPoints, minutes, walkingChoices} from "./compare.js";
 import {startCompass} from "./compass.js";
 import {SAMPLE_TEXT, VOICES, VOICE_DOWNLOAD_MB, makeVoiceEngine} from "./voices.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
+import {alertesAutour, phraseAlerte} from "./nearby.js";
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
   ["cane_or_walker", "Canne ou déambulateur", "cane"], ["low_vision", "Malvoyance", "eye-off"], ["hard_of_hearing", "Malentendance", "ear-off"]];
@@ -1645,6 +1646,22 @@ function screenZones() {
   </section>`).join("")}
   <p class="fine">${icon("info")} D'autres villes et quartiers seront ajoutés au fur et à mesure de la collecte des données.</p>`;
 }
+// Autour de vous : ce qui gêne ou ce qui aide à moins de 300 m, selon le profil, avant même
+// d'avoir choisi une destination. La donnée vient du réseau, rien n'est inventé (js/nearby.js).
+function nearbyHtml() {
+  const p = herePoint();
+  if (!net || !p) return "";
+  const list = alertesAutour(net, p, {profil: resolveProfile(profileJson())});
+  if (!list.length) return "";
+  return `<section class="nearby">
+    <h3>${icon("locate-fixed")} Autour de vous</h3>
+    <ul>${list.map(a => `<li class="${a.genant ? "gene" : "aide"}">
+      <span class="nearby-ic" aria-hidden="true">${icon(a.icone)}</span>
+      <span class="sr-only">${esc(a.genant ? "Obstacle : " : "Utile : ")}${esc(phraseAlerte(a))}</span>
+      <span class="nearby-txt" aria-hidden="true"><b>${esc(a.label)}</b>${a.nom ? `<small>${esc(a.nom)}</small>` : ""}</span>
+      <span class="nearby-d" aria-hidden="true">${Math.round(a.distance / 5) * 5}&nbsp;m</span></li>`).join("")}</ul>
+  </section>`;
+}
 function screenRoute() {
   if (S.nav) return screenTripLive();                     // guidage réduit : son panneau, pas la recherche
   const chosen = S.routes[S.selected];
@@ -1678,6 +1695,7 @@ function screenRoute() {
       <li>Comparez les itinéraires&nbsp;: le plus accessible pour votre profil est proposé en premier.</li>
       <li>Touchez «&nbsp;Démarrer le guidage&nbsp;»&nbsp;: le trajet défile tout seul, avec la voix et les alertes.</li></ol>
     <button class="btn soft small" id="tourGo">${icon("navigation")} Essayer avec un exemple</button></section>` : ""}
+  ${!S.dest && S.searchFor === "dest" ? nearbyHtml() : ""}
   ${S.searchFor === "origin" ? "" : `
   ${S.dest ? `<div class="routes-head"><h3>${icon("route")} Choisissez votre itinéraire</h3>
     <button class="btn soft small fav-toggle ${currentFavIndex() >= 0 ? "on" : ""}" id="favToggle" aria-pressed="${currentFavIndex() >= 0}">

@@ -656,7 +656,7 @@ body.auth-screen #panel { padding: 0; gap: 0; background: var(--bg); }
   background: var(--bg); border-radius: 6px; z-index: 1; }
 .field input { width: 100%; min-height: 58px; border: 2px solid var(--primary); border-radius: 18px; background: transparent;
   padding: 10px 52px 6px 54px; font-size: 17px; color: var(--ink); outline: none; }
-.field input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(0, 174, 204, .22); }
+.field input:focus { border-color: var(--primary); outline: 3px solid var(--primary); outline-offset: 2px; }
 .field-ic { position: absolute; left: 12px; top: 13px; width: 32px; height: 32px; border-radius: 9px; background: var(--primary); color: var(--on-primary);
   display: grid; place-items: center; pointer-events: none; }
 .field-ic .i { width: 18px; height: 18px; }
@@ -978,6 +978,22 @@ body.picking-door #panel { opacity: .55; pointer-events: none; }
 .tour-card ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.4; }
 .tour-card .btn { align-self: flex-start; width: auto; }
 
+/* ---- Autour de vous : ce qui gêne ou ce qui aide à moins de 300 m (js/nearby.js) -------------- */
+.nearby { display: flex; flex-direction: column; padding: 10px 16px 6px; border-radius: var(--radius); background: var(--surface);
+  outline: 1px solid var(--glass-border); outline-offset: -1px; box-shadow: var(--shadow); }
+.nearby h3 { color: var(--primary); display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.nearby ul { list-style: none; margin: 0; padding: 0; }
+.nearby li { display: flex; align-items: center; gap: 12px; min-height: 56px; }
+.nearby li + li { border-top: 1px solid var(--hair); }
+.nearby-ic { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 11px; }
+.nearby-ic .i { width: 22px; height: 22px; }
+.nearby li.gene .nearby-ic { background: var(--danger-bg); color: var(--danger); }
+.nearby li.aide .nearby-ic { background: var(--ok-bg); color: var(--ok); }
+.nearby-txt { display: flex; flex-direction: column; min-width: 0; }
+.nearby-txt b { font-size: 16px; }
+.nearby-txt small { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nearby-d { margin-left: auto; flex: none; font-weight: 700; font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
 /* ---- Itinéraires comparés (comme Citymapper) : étiquettes sur le plan, différence expliquée ------------------- */
 .route-tag-host { width: 0 !important; height: 0 !important; }
 .route-tag { position: absolute; left: -14px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
@@ -1078,3 +1094,12 @@ body.heading-up .here-dot::before { content: ""; position: absolute; left: 50%; 
 /* Point du guidage sur le plan (guidage réduit) : pas de cône, la direction n'y est suivie que carte orientée */
 body.sheet .puck .cone { display: none; }
 body.sheet.heading-up .puck .cone { display: block; transform: none; }
+
+/* ---- « Augmenter le contraste » (réglages d'accessibilité d'iOS et d'Android) ------------------
+   Le verre dépoli et les surfaces translucides baissent le contraste : on les rend opaques et on
+   épaissit les filets. Rien ne change pour qui n'a pas demandé ce réglage. */
+@media (prefers-contrast: more) {
+  :root { --surface: var(--surface-solid); --glass-filter: none; --hair: var(--line); --panel-bg: var(--bg); }
+  .tile, .nearby, .tour-card, .setting.strong { outline-color: var(--line); outline-width: 2px; }
+  .nearby li + li { border-top-width: 2px; }
+}
