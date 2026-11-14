@@ -57,8 +57,11 @@ d'obstacles restent sur votre téléphone dans cette démo.
   `data/gennevilliers.json` est une base de données dérivée, sous la même licence.
 - Pentes : calculées à partir du relief RGE ALTI © IGN (Géoplateforme).
 - Recherche d'adresse : service de géocodage de l'IGN (Géoplateforme).
-- Fond de carte : tuiles © OpenStreetMap.
-- Carte interactive : [Leaflet](https://leafletjs.com) 1.9.4 (licence BSD-2).
+- Fond de carte : tuiles vectorielles [OpenFreeMap](https://openfreemap.org) (style « liberty », schéma OpenMapTiles) ;
+  données © les contributeurs d'OpenStreetMap, sous licence ODbL.
+- Carte interactive : [Leaflet](https://leafletjs.com) 1.9.4 (licence BSD-2),
+  [MapLibre GL JS](https://maplibre.org) 5.6.0 (licence BSD-3) et
+  [maplibre-gl-leaflet](https://github.com/maplibre/maplibre-gl-leaflet) 0.1.4 (licence ISC).
 - Police : [Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/) du Braille Institute, conçue pour
   les personnes malvoyantes (licence SIL OFL, `fonts/OFL.txt`).
 - Icônes : [Lucide](https://lucide.dev) (licence ISC, `js/LICENSE-lucide.txt`) et pictogrammes dessinés pour
