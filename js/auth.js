@@ -27,23 +27,23 @@ export function configureAuth(o) { OPTS = {...OPTS, ...o}; }
 
 // ---- Mots de passe : jamais en clair ------------------------------------------------------------
 const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
-async function hashPassword(password, saltB64) {
+export async function hashPassword(password, saltB64) {
   const salt = saltB64 ? Uint8Array.from(atob(saltB64), c => c.charCodeAt(0)) : crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits({name: "PBKDF2", hash: "SHA-256", salt, iterations: 150000}, key, 256);
   return {salt: b64(salt), hash: b64(bits)};
 }
-const normEmail = e => e.trim().toLowerCase();
+export const normEmail = e => e.trim().toLowerCase();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-async function createAccount({name, email, password}) {
+export async function createAccount({name, email, password}) {
   const accounts = store.get(ACCOUNTS, {}), key = normEmail(email);
   if (accounts[key]) throw {email: "Un compte existe déjà avec cette adresse. Connectez-vous."};
   accounts[key] = {name: name.trim(), ...(await hashPassword(password)), created: Date.now()};
   store.set(ACCOUNTS, accounts);
   store.set(SESSION, {email: key, name: name.trim(), since: Date.now()});
 }
-async function checkLogin({email, password}) {
+export async function checkLogin({email, password}) {
   const acc = store.get(ACCOUNTS, {})[normEmail(email)];
   const fail = {form: "Adresse e-mail ou mot de passe incorrect."};      // même message : on ne dit pas lequel est faux
   if (!acc) throw fail;
