@@ -1146,7 +1146,10 @@ function hazardsOn(n) {
       if (road && along - road.end < 3) road.len += len;
       else { road = {id: `e${id}-road`, along: at, len, ic: "triangle-alert"}; out.push(road); }
       road.end = along + len;
-      road.label = `Passage sur la chaussée, ${Math.max(5, Math.round(road.len / 5) * 5)} mètres`;
+      // L'étendue reste à part de la distance : « 160 mètres à 9 m » collait deux nombres
+      // sans rapport, illisible à l'écran comme à la voix (retour terrain du 14/11/2026).
+      road.label = "Passage sur la chaussée";
+      road.extent = Math.max(5, Math.round(road.len / 5) * 5);
     }
     // traversée sans feu sonore : annoncée seulement si c'est CONFIRMÉ (à Gennevilliers, 9 traversées sur 10 n'ont
     // pas l'information : les annoncer toutes saturerait l'usager ; le résumé avant le départ les compte)
@@ -1182,7 +1185,7 @@ function checkHazards() {
   hazardAlerted.add(h.id);
   const m = Math.max(1, Math.round(h.along - n.pos)), where = h.side ? `sur votre ${h.side}` : "devant vous";
   n.hazard = {...h, dist: m, where, at: Date.now()};       // bandeau à l'écran (malentendance : le repère principal)
-  say(`Attention, ${h.label.charAt(0).toLowerCase()}${h.label.slice(1)}, à ${m} mètre${m > 1 ? "s" : ""}, ${where}.`, DANGER);
+  say(`Attention, ${h.label.charAt(0).toLowerCase()}${h.label.slice(1)} dans ${m} mètre${m > 1 ? "s" : ""}, ${where}${h.extent ? `, sur ${h.extent} mètres` : ""}.`, DANGER);
   buzz("obstacle");
 }
 // Économie de batterie : loin du prochain virage et de tout obstacle, la vue caméra s'allège (moins d'images

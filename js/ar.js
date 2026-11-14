@@ -18,6 +18,7 @@ import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {BACKEND, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
 import {creerReleve} from "./survey.js";
+import {recentrage} from "./ribbon.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 import {angleDiff, makeHeadingFusion} from "./heading.js";
 
@@ -273,8 +274,13 @@ function drawPath(cam, s, here, pos) {
   const reach = Math.min(30, Math.max(PATH_AHEAD_M, turnAt != null && turnAt > pos ? turnAt - pos + TURN_AFTER_M : 0));
   const raw = [], from = Math.max(0, pos - BEHIND_M), to = Math.min(s.nav.total, pos + reach);
   lastReach = to - pos;
-  for (let d = from; d < to; d += 1.5) raw.push(enu(here, s.posAt(d)));
-  raw.push(enu(here, s.posAt(to)));
+  // Le ruban est ramené sous les pieds : sans ça, une erreur de GPS de trois mètres le pose
+  // sur le mur ou sur la chaussée (captures du 14/11/2026). Au-delà de 6 m, l'écart reste
+  // visible : ce n'est plus une imprécision, c'est qu'on n'est pas sur le chemin. js/ribbon.js
+  const dec = recentrage(enu(here, s.posAt(pos)));
+  const au = d => { const q = enu(here, s.posAt(d)); q.x -= dec.x; q.y -= dec.y; return q; };
+  for (let d = from; d < to; d += 1.5) raw.push(au(d));
+  raw.push(au(to));
   if (raw.length < 3) return;
   const pts = chaikin(raw);
   // Le ruban est plein jusqu'à ses 4 derniers mètres, qui s'effacent dans le sens du chemin. (Avant : fondu du bas
@@ -919,7 +925,7 @@ function renderUi(s, heading, compass) {
   const shownAlerts = next.alerts.filter(a => !a.startsWith("Traversée") && a !== "Données à confirmer");
   const rer = s.nav.rerouted && Date.now() - s.nav.rerouted.at < 10000 ? s.nav.rerouted : null;
   const haz = s.nav.hazard && Date.now() - s.nav.hazard.at < 6000 ? s.nav.hazard : null;   // alerte de proximité : 6 s à l'écran
-  const banner = haz ? `<div class="banner danger" role="alert">${icon(haz.ic)}<span><b>${esc(haz.label)}</b> à ${haz.dist} m, ${esc(haz.where)}</span></div>`
+  const banner = haz ? `<div class="banner danger" role="alert">${icon(haz.ic)}<span><b>${esc(haz.label)}</b> dans ${haz.dist} m, ${esc(haz.where)}${haz.extent ? ` · sur ${haz.extent} m` : ""}</span></div>`
     : rer ? `<div class="banner danger">${icon("triangle-alert")}<span><b>${esc(rer.title)}</b> Itinéraire recalculé</span></div>`
     : s.gpsProblem && s.gpsDenied ? `<button class="banner warn banner-btn" data-act="gps-help">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span>${icon("chevron-right")}</button>`
     : s.gpsProblem ? `<div class="banner warn">${icon("map-pin")}<span>${esc(s.gpsProblem)}</span></div>`
