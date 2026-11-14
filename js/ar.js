@@ -17,6 +17,7 @@ import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {BACKEND, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
+import {creerReleve} from "./survey.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 import {angleDiff, makeHeadingFusion} from "./heading.js";
 
@@ -629,6 +630,7 @@ function runDetection(s) {
     tracker.update(dets.filter(d => d.alert && d.score >= minScore && d.ground), detsAt);
     obstacleAlerts(s);
     autoSample(s);
+    surveySample(s);
   }).catch(() => {}).finally(() => { detBusy = false; });
 }
 // Alerte (voix + vibration) : obstacle confirmé dans le couloir, une seule fois, le plus proche d'abord,
@@ -662,6 +664,18 @@ function autoSample(s) {
   if (!dets.some(d => d.alert && d.score >= 0.3 && d.score < 0.5)) return;
   lastAutoSample = performance.now();
   captureSample(video, {kind: "faible_confiance", detections: dets, meta: sampleMeta(s)}).catch(() => {});
+}
+// Relevé systématique : une image tous les 25 m (10 m après un virage), pour constituer la base
+// d'images de référence. La décision est dans js/survey.js, testée ; ici on ne fait que l'appliquer.
+const releve = creerReleve();
+function surveySample(s) {
+  if (!s.dataConsent || !s.survey) return;
+  const r = s.nav.real;
+  if (!r) return;
+  const fix = {lat: r.lat, lon: r.lon, acc: r.acc, cap: lastHeading ?? -1, at: Date.now()};
+  if (!releve.decider(fix).capturer) return;
+  releve.noter(fix);
+  captureSample(video, {kind: "releve", detections: dets, meta: sampleMeta(s)}).catch(() => {});
 }
 function sampleMeta(s) {
   const r = s.nav.real;

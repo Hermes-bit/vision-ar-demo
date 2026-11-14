@@ -65,7 +65,7 @@ const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
   voice: store.get("va-voice", true), voiceName: VOICES[store.get("va-voice-name", "")] ? store.get("va-voice-name", "") : "systeme", haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
-  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), origin: PRESENTATION ? {...MAIRIE} : NO_ORIGIN(), dest: null, query: "", places: [],
+  dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), survey: store.get("va-survey", false), origin: PRESENTATION ? {...MAIRIE} : NO_ORIGIN(), dest: null, query: "", places: [],
   // départ : la position actuelle, demandée dès l'ouverture de la recherche ; searchFor « origin » quand on modifie
   // le départ (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
   originMode: PRESENTATION ? "manual" : "gps", originNeedsFix: !PRESENTATION, searchFor: "dest", oquery: "",
@@ -1533,7 +1533,7 @@ function screenProfile() {
   <p class="fine">${icon("shield-check")} Démonstration : ${esc(zoneLabel(ZONE))}. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
     Réseau © OpenStreetMap (ODbL)${ZONE.france ? ", pentes © IGN" : ""}.</p>`;
 }
-const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf"};
+const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf", survey: "va-survey"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
 const APP_VERSION = "101";
 function screenSettings() {
@@ -1598,6 +1598,8 @@ function screenSettings() {
       d'une fausse alerte, avec la position et l'heure. Visages et plaques sont floutés avant tout enregistrement ; les images restent sur ce
       téléphone tant que vous ne les exportez pas. Vous pouvez retirer votre accord et tout effacer à tout moment.</p>
     ${S.dataConsent ? sw("setAutoLow", "scan-eye", "Enregistrer aussi les détections incertaines", S.autoLowConf) : ""}
+    ${S.dataConsent ? sw("setSurvey", "camera", "Relevé systématique (une image tous les 25 m)", S.survey) : ""}
+    ${S.dataConsent && S.survey ? `<p class="fine">${icon("info")} Le relevé prend beaucoup plus d'images : à réserver aux sorties de collecte, pas à l'usage courant.</p>` : ""}
     <div class="set-row static">${icon("database")}<span class="grow">Images collectées</span><span class="set-val" id="sampleCount">…</span></div>
     ${row("exportSamples", "share-2", "Exporter les images (ZIP)", "", false)}
     ${row("clearSamples", "trash-2", "Tout effacer", "", false)}
@@ -1860,7 +1862,7 @@ const navApi = {
   map,
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
     mobility: tripMobility(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
-    detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf,
+    detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf, survey: S.survey,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsDenied: S.nav.gpsDenied, gpsStatus: S.nav.gpsStatus,
     placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly, simulated: !!S.nav.simulated},
   reroute: () => manualReroute(),
@@ -2638,8 +2640,9 @@ function bind() {
   on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
   on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
-  on("setConsent", "onchange", e => { navApi.setOption("dataConsent", e.target.checked); if (!e.target.checked) navApi.setOption("autoLowConf", false); render(); });
+  on("setConsent", "onchange", e => { navApi.setOption("dataConsent", e.target.checked); if (!e.target.checked) { navApi.setOption("autoLowConf", false); navApi.setOption("survey", false); } render(); });
   on("setAutoLow", "onchange", e => navApi.setOption("autoLowConf", e.target.checked));
+  on("setSurvey", "onchange", e => navApi.setOption("survey", e.target.checked));
   if ($("sampleCount")) listSamples().then(list => {
     const mb = list.reduce((t, x) => t + (x.blob?.size || 0), 0) / 1e6;
     if ($("sampleCount")) $("sampleCount").textContent = `${list.length} (${mb.toFixed(1).replace(".", ",")} Mo)`;
