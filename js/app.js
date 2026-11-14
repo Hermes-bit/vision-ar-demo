@@ -643,7 +643,9 @@ function drawRoutes() {
     else L.polyline(ll, {color: C.route, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round"}).addTo(layers.routes);
     // fin du trajet -> porte : pointillés, comme Google Maps
     const e = sel.geometry.at(-1);
-    if (S.dest && haversineM(e.lat, e.lon, S.dest.lat, S.dest.lon) > 12)
+    // Géométrie vide : départ et arrivée tombent sur le même nœud, on est déjà sur place.
+    // C'est un itinéraire légitime, mais il n'y a aucun point à relier (anomalie VA-012).
+    if (e && S.dest && haversineM(e.lat, e.lon, S.dest.lat, S.dest.lon) > 12)
       L.polyline([[e.lat, e.lon], [S.dest.lat, S.dest.lon]], {color: C.route, weight: 4, dashArray: "2 9", lineCap: "round", interactive: false}).addTo(layers.routes);
   }
   const underDot = S.origin.gps && liveFix && hereMarker && distM(S.origin, liveFix) < 12;
@@ -998,6 +1000,7 @@ function updateHereLink() {
   const r = S.screen === "route" && !S.nav ? S.routes[S.selected] : null;
   if (!r || !S.origin.gps || !liveFix || !hereMarker || Date.now() - liveFix.at > 15000) return;   // (départ choisi ailleurs : pas de lien)
   const g0 = r.geometry[0];
+  if (!g0) return;                 // déjà sur place : aucun point de départ à rejoindre (VA-012)
   if (haversineM(liveFix.lat, liveFix.lon, g0.lat, g0.lon) < 6 || haversineM(liveFix.lat, liveFix.lon, g0.lat, g0.lon) > 400) return;
   hereLink = L.polyline([[liveFix.lat, liveFix.lon], [g0.lat, g0.lon]], {color: C.route, weight: 4, dashArray: "2 9",
     lineCap: "round", interactive: false}).addTo(map);
