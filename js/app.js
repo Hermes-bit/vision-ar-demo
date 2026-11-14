@@ -3,7 +3,8 @@
 // sur le téléphone par js/routing.js, copie fidèle du moteur du serveur.
 import {arOpen, closeAR, currentHeading, openAR} from "./ar.js";
 import {MODE, linesText, loadTransit, makeStreetFinder, searchPlaces, stopTarget, wheelText} from "./transit.js";
-import {clearSamples, exportZip, listSamples} from "./obstacles.js";
+import {clearSamples, exportZip, listSamples, removeSamples} from "./obstacles.js";
+import {deviceId, envoyer} from "./upload.js";
 import {ZONES, zoneLabel} from "./zones.js";
 import {bindAuth, configureAuth, currentSession, isGuest, logout, resetForm, screenLogin, screenSignup, screenWelcome} from "./auth.js";
 import {icon} from "./icons.js";
@@ -18,6 +19,11 @@ import {startCompass} from "./compass.js";
 import {SAMPLE_TEXT, VOICES, VOICE_DOWNLOAD_MB, makeVoiceEngine} from "./voices.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 import {alertesAutour, phraseAlerte} from "./nearby.js";
+
+// Adresse du serveur de collecte. Vide par défaut : aucun serveur n'est hébergé aujourd'hui
+// (PRODUCT.md § 7). Pour la régler sur un téléphone ou en local, depuis la console :
+//   localStorage.setItem("va-api-base", "http://localhost:8000")
+const apiBase = () => store.get("va-api-base", "");
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
   ["cane_or_walker", "Canne ou déambulateur", "cane"], ["low_vision", "Malvoyance", "eye-off"], ["hard_of_hearing", "Malentendance", "ear-off"]];
@@ -1601,6 +1607,9 @@ function screenSettings() {
     ${S.dataConsent ? sw("setSurvey", "camera", "Relevé systématique (une image tous les 25 m)", S.survey) : ""}
     ${S.dataConsent && S.survey ? `<p class="fine">${icon("info")} Le relevé prend beaucoup plus d'images : à réserver aux sorties de collecte, pas à l'usage courant.</p>` : ""}
     <div class="set-row static">${icon("database")}<span class="grow">Images collectées</span><span class="set-val" id="sampleCount">…</span></div>
+    ${apiBase() ? row("sendSamples", "arrow-up", "Envoyer au serveur", "", false) : ""}
+    <p class="fine" id="sendState" aria-live="polite">${apiBase() ? "" :
+      "Aucun serveur configuré : les images restent sur ce téléphone. L'export ZIP ci-dessous reste disponible."}</p>
     ${row("exportSamples", "share-2", "Exporter les images (ZIP)", "", false)}
     ${row("clearSamples", "trash-2", "Tout effacer", "", false)}
   </section>
@@ -2653,6 +2662,33 @@ function bind() {
     const blob = await exportZip(), a = document.createElement("a");
     a.href = URL.createObjectURL(blob); a.download = `vision-ar-obstacles-${new Date().toISOString().slice(0, 10)}.zip`;
     document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+  on("sendSamples", "onclick", async () => {
+    const etat = $("sendState"), list = await listSamples();
+    if (!list.length) return toast("Aucune image collectée pour l'instant.");
+    if (etat) etat.textContent = `Envoi : 0 / ${list.length}…`;
+    let envoyes, refuses;
+    try {
+      ({envoyes, refuses} = await envoyer(list, {
+        url: `${apiBase().replace(/\/$/, "")}/samples`,
+        device: deviceId(store),
+        onProgress: (f, t) => { if (etat) etat.textContent = `Envoi : ${f} / ${t}…`; },
+      }));
+    } catch {
+      if (etat) etat.textContent = "Envoi impossible : pas de réseau. Les images sont conservées.";
+      return;
+    }
+    // Effacement séparé de l'envoi : s'il échoue, l'utilisateur doit savoir que ses images
+    // SONT arrivées — lui dire « pas de réseau » serait faux et l'inciterait à tout renvoyer.
+    try {
+      await removeSamples(envoyes);            // on n'efface QUE ce que le serveur a accusé
+    } catch {
+      if (etat) etat.textContent = `${envoyes.length} image(s) envoyée(s), mais l'effacement sur ce téléphone a échoué.`;
+      return;
+    }
+    if (etat) etat.textContent = `${envoyes.length} image(s) envoyée(s)` +
+      (refuses.length ? `, ${refuses.length} conservée(s) : ${refuses[0].raison}.` : ", espace libéré.");
+    render();
   });
   on("clearSamples", "onclick", async () => {
     if (!confirm("Effacer toutes les images collectées sur ce téléphone ?")) return;

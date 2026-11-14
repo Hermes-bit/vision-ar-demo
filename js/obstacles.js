@@ -142,6 +142,9 @@ export async function captureSample(video, {kind, note = "", detections = [], me
 }
 export const listSamples = () => tx("readonly", st => st.getAll());
 export const clearSamples = () => tx("readwrite", st => st.clear());
+// N'efface que les images citées : après un envoi, seulement celles dont le serveur a
+// accusé réception. clearSamples() tout court perdrait celles qui ne sont jamais arrivées.
+export const removeSamples = ids => tx("readwrite", st => { for (const id of ids) st.delete(id); });
 
 // ---- Export ZIP (format COCO) : à importer dans Label Studio, CVAT ou Roboflow ------------------------------
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
