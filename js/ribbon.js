@@ -25,3 +25,15 @@ export function recentrage(ancre, max = RECENTRAGE_MAX_M) {
   const f = Math.min(1, max / d);
   return {x: x * f, y: y * f, reste: Math.max(0, d - max)};
 }
+
+/**
+ * La vue caméra s'ouvre-t-elle d'office au départ du guidage ?
+ *
+ * Pour la malvoyance, non : le ruban ne se voit pas, et la caméra est le poste qui vide la
+ * batterie. Le guidage démarre alors « réduit » — voix, vibrations et alertes, sans caméra.
+ * Une exception : si la détection d'obstacles est activée, elle a besoin de la caméra, et
+ * c'est justement à un malvoyant qu'elle sert le plus. On ne la lui retire pas.
+ */
+export function cameraDOffice({malvoyance = false, detection = false} = {}) {
+  return !malvoyance || detection;
+}

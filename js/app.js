@@ -19,6 +19,7 @@ import {startCompass} from "./compass.js";
 import {SAMPLE_TEXT, VOICES, VOICE_DOWNLOAD_MB, makeVoiceEngine} from "./voices.js";
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 import {alertesAutour, phraseAlerte} from "./nearby.js";
+import {cameraDOffice} from "./ribbon.js";
 
 // Adresse du serveur de collecte. Vide par défaut : aucun serveur n'est hébergé aujourd'hui
 // (PRODUCT.md § 7). Pour la régler sur un téléphone ou en local, depuis la console :
@@ -2485,15 +2486,19 @@ function startGuidance() {
   startNav(S.routes[S.selected]);
   prepareOffline(S.routes[S.selected], true);           // carte du trajet gardée : le guidage tient sans réseau
   stickerPop("je-te-guide");
+  // Malvoyance sans détection d'obstacles : le guidage part « réduit », caméra éteinte (voix,
+  // vibrations, alertes). La vue caméra reste à un geste, par « Trajet en cours ». js/ribbon.js
+  const depart = cameraDOffice({malvoyance: S.mobilities.has("low_vision"), detection: S.detect}) ? "nav" : "route";
   if (S.simulate) {                                       // démonstration : positions simulées le long du trajet
     S.nav.simulated = true;
     say("Démonstration : le trajet défile tout seul, comme si vous marchiez.", true);
-    go("nav");
+    go(depart);
     startSimulation();
   } else {
-    say("Guidage lancé. Recherche de votre position.", true);
+    say(depart === "nav" ? "Guidage lancé. Recherche de votre position."
+      : "Guidage à la voix lancé, caméra éteinte. Recherche de votre position.", true);
     startGps();
-    go("nav");
+    go(depart);
   }
   map.setView([S.nav.here.lat, S.nav.here.lon], 17, {animate: false});
 }

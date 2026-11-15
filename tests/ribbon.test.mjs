@@ -2,7 +2,7 @@
 // Lancer : node --test web/tests/*.test.mjs
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {recentrage, RECENTRAGE_MAX_M} from "../js/ribbon.js";
+import {recentrage, RECENTRAGE_MAX_M, cameraDOffice} from "../js/ribbon.js";
 
 test("route déjà sous les pieds : aucune correction", () => {
   assert.deepEqual(recentrage({x: 0, y: 0}), {x: 0, y: 0, reste: 0});
@@ -48,3 +48,17 @@ test("la limite reste du bon ordre de grandeur pour une erreur de GPS", () => {
   assert.ok(RECENTRAGE_MAX_M >= 4 && RECENTRAGE_MAX_M <= 10,
     "un GPS de téléphone se trompe de 5 à 10 m entre les immeubles");
 });
+
+test("caméra d'office pour qui voit le ruban", () => {
+  assert.equal(cameraDOffice({malvoyance: false, detection: false}), true);
+  assert.equal(cameraDOffice(), true, "sans information, on garde le comportement d'avant");
+});
+
+test("malvoyance : pas de caméra d'office, elle viderait la batterie pour rien", () => {
+  assert.equal(cameraDOffice({malvoyance: true, detection: false}), false);
+});
+
+test("malvoyance AVEC détection d'obstacles : la caméra reste, c'est elle qui détecte", () => {
+  assert.equal(cameraDOffice({malvoyance: true, detection: true}), true);
+});
+
