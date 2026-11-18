@@ -1114,3 +1114,19 @@ body.sheet.heading-up .puck .cone { display: block; transform: none; }
   pointer-events: none; white-space: pre-wrap;
 }
 #ar .ar-diag div.on { color: #FFB45C; }
+
+
+/* Bord de l'ecran qui clignote : pour qui n'entend pas l'alerte (js/panneau.js). */
+html.alerte-bord::after {
+  content: ""; position: fixed; inset: 0; z-index: 9999; pointer-events: none;
+  border: 10px solid #FF8A00; animation: va-bord .42s steps(1) 3;
+}
+@keyframes va-bord { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { html.alerte-bord::after { animation: none; opacity: 1; } }
+
+/* Carte a montrer a un chauffeur ou a un passant : lisible a bout de bras, de nuit. */
+.comm-card {
+  margin: 8px 0 0; padding: 14px 16px; border-radius: 12px;
+  background: #FFF6D9; color: #1A1A1A; border: 2px solid #E8C45A;
+  font-size: 19px; line-height: 1.4; font-weight: 700;
+}

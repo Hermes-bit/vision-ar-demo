@@ -21,6 +21,7 @@ import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE
 import {alertesAutour, phraseAlerte} from "./nearby.js";
 import {cameraDOffice} from "./ribbon.js";
 import {effortDouteux, lignesEffort, resumeEffort} from "./effort.js";
+import {clignoter, historique, phraseCommunication, sectionsPanneau} from "./panneau.js";
 import {PAS_ECHANTILLON_M, PERIODE_MS, aSignalerALUsager, emprise,
   envoyer as envoyerSignalements, fusionner, recuperer, voter} from "./sync.js";
 
@@ -331,9 +332,28 @@ function unlockVoice() {
   } catch { /* pas de synthèse vocale : l'écran et les vibrations restent */ }
   voiceEngine.unlock();                                   // voix naturelle (lecture audio) : débloquée dans le même geste
 }
+// Historique des consignes et clignotement du bord : tenus AVANT le test de la voix.
+// Quelqu'un qui n'entend pas la coupe souvent — et c'est précisément à lui que les consignes
+// écrites servent. Les mettre après ce test les aurait privées de ceux pour qui elles existent.
+const consignesDites = [];
+let flashTimer = 0;
+function flashBord() {
+  const el = document.documentElement;
+  el.classList.add("alerte-bord");
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove("alerte-bord"), 1300);
+}
 function say(text, level = false) {
+  const niveau = level === true ? CONSIGNE : level === false ? INFO : level;
+  if (text) {
+    consignesDites.push({texte: text, at: Date.now()});
+    if (consignesDites.length > 24) consignesDites.shift();
+    if (clignoter(S.mobilities, niveau)) flashBord();
+    const box = $("liveConsignes");
+    if (box) box.innerHTML = consignesHtml();
+  }
   if (!S.voice) return;
-  speech.say(text, level === true ? CONSIGNE : level === false ? INFO : level);
+  speech.say(text, niveau);
 }
 // Vibrations de direction : le nombre d'impulsions dit où aller (même code sur Android et sur iPhone)
 //   2 = à gauche, 3 = à droite, 5 rapides = mauvais sens / demi-tour, 1 longue = arrivé
@@ -2198,6 +2218,31 @@ function liveNextHtml() {
   return st.arrived ? `${icon("flag")}<span>${esc(S.dest?.label || "")}</span>` : `${icon(MAN_ICON[st.next.maneuver] || "arrow-up")}<span>${esc(st.spoken)}</span>`;
 }
 // Panneau du bas pendant un guidage réduit (à la place de la recherche : changer de destination demande d'arrêter)
+// ---- Sections du panneau, selon les besoins déclarés --------------------------------
+// Quelles sections, dans quel ordre : js/panneau.js, testé. Les profils se cumulent, donc on
+// compose au lieu de choisir un gabarit — en fauteuil et malentendant, on voit les deux.
+const heureCourte = at => new Date(at).toLocaleTimeString("fr-FR", {hour: "2-digit", minute: "2-digit"});
+function consignesHtml() {
+  const h = historique(consignesDites);
+  if (!h.length) return `<p class="fine">Les consignes s&rsquo;afficheront ici au fil du trajet.</p>`;
+  return h.map(e => `<div class="set-row static"><span class="set-val">${heureCourte(e.at)}</span>
+    <span class="grow">${esc(e.texte)}</span></div>`).join("");
+}
+function sectionPanneau(cle) {
+  if (cle === "consignes") {
+    return `<section class="card"><h3>${icon("clock")} Dernières consignes</h3>
+      <div id="liveConsignes">${consignesHtml()}</div>
+      <p class="fine">${icon("info")} Le bord de l&rsquo;écran clignote et le téléphone vibre à chaque alerte.</p></section>`;
+  }
+  if (cle === "effort") return S.nav?.route ? effortCard(S.nav.route) : "";
+  if (cle === "communication") {
+    const p = phraseCommunication(S.mobilities, S.dest?.label || "");
+    return p ? `<section class="card"><h3>${icon("users")} À montrer à un passant</h3>
+      <p class="comm-card">${esc(p)}</p>
+      <p class="fine">${icon("info")} Ce message ne dit que ce que vous avez déclaré dans votre profil.</p></section>` : "";
+  }
+  return "";
+}
 function screenTripLive() {
   const arrived = liveArrived = navState().arrived;
   return `<div class="sheet-head">
@@ -2210,6 +2255,7 @@ function screenTripLive() {
     <div class="live-stats" id="liveStats">${liveStatsHtml()}</div>
     <p class="live-next" id="liveNext">${liveNextHtml()}</p>
   </section>
+  ${sectionsPanneau(S.mobilities).map(sectionPanneau).join("")}
   ${arrived ? `<button class="btn primary" id="endLive">${icon("check")} Terminer</button>
     <button class="btn soft" id="resumeNav">${icon("navigation")} Revenir à l'écran de guidage</button>`
     : `<button class="btn primary" id="resumeNav">${icon("navigation")} Reprendre le guidage</button>
