@@ -7,7 +7,9 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {DANGER, CONSIGNE, INFO} from "../js/speech.js";
-import {MAX_CONSIGNES, clignoter, historique, phraseCommunication, sectionsPanneau} from "../js/panneau.js";
+import {
+  MAX_CONSIGNES, blocsPanneau, clignoter, historique, phraseCommunication, sectionsPanneau, valeur,
+} from "../js/panneau.js";
 
 const prof = (...m) => new Set(m);
 
@@ -117,4 +119,113 @@ test("une simple consigne ne fait pas clignoter : sinon plus rien ne signale rie
 test("qui entend n'a pas besoin du clignotement", () => {
   assert.equal(clignoter(prof("manual_wheelchair"), DANGER), false);
   assert.equal(clignoter(prof(), DANGER), false);
+});
+
+// ---- Le contenu des écrans, d'après les maquettes ------------------------------------------
+//
+// La règle choisie le 18/11 : une valeur absente GARDE SA PLACE et s'affiche « non renseigné ».
+// Masquer la ligne laisserait croire qu'il n'y a rien à signaler.
+
+const bloc = (bl, cle) => bl.find(b => b.cle === cle);
+const type = (bl, t) => bl.find(b => b.type === t);
+
+test("une valeur absente ne devient jamais zéro", () => {
+  assert.deepEqual(valeur(null, "6 %"), {texte: "non renseigné", connu: false});
+  assert.deepEqual(valeur(undefined, "6 %"), {texte: "non renseigné", connu: false});
+  assert.deepEqual(valeur(0, "0 m"), {texte: "0 m", connu: true}, "zéro mesuré reste zéro");
+  assert.deepEqual(valeur(6, "6 %"), {texte: "6 %", connu: true});
+});
+
+test("fauteuil manuel : la barre d'effort, les quatre pastilles, la pause", () => {
+  const b = blocsPanneau(prof("manual_wheelchair"), {
+    effort: {niveau: "faible", pente: 6, penteRaideM: 35, devers: null, revetementM: null, bordureHaute: 0},
+  });
+  assert.equal(type(b, "effort").niveau, "faible");
+  const p = type(b, "pastilles").items.map(x => x.cle);
+  assert.deepEqual(p, ["pente", "devers", "revetement", "bordures"]);
+  assert.ok(type(b, "pastilles").items.find(x => x.cle === "pente").texte.includes("6 %"));
+  assert.ok(bloc(b, "pause"), "la ligne de pause reste là même sans banc connu");
+});
+
+test("les pastilles sans donnée restent affichées, en « non renseigné »", () => {
+  const b = blocsPanneau(prof("manual_wheelchair"), {effort: {niveau: "faible"}});
+  const items = type(b, "pastilles").items;
+  assert.equal(items.length, 4, "les quatre pastilles sont là, même vides");
+  for (const i of items) {
+    assert.equal(i.connu, false);
+    assert.equal(i.texte, "non renseigné");
+  }
+});
+
+test("Gennevilliers : zéro banc cartographié, la ligne le dit au lieu de disparaître", () => {
+  const b = blocsPanneau(prof("manual_wheelchair"), {effort: {}});
+  assert.equal(bloc(b, "pause").texte, "non renseigné");
+});
+
+test("fauteuil électrique : l'en-tête des dimensions et les trois lignes", () => {
+  const b = blocsPanneau(prof("electric_wheelchair"), {ascenseur: {distanceM: 400}});
+  assert.match(type(b, "entete").texte, /VOTRE FAUTEUIL/);
+  assert.equal(type(b, "entete").connu, false, "les dimensions ne sont pas encore demandées");
+  assert.ok(bloc(b, "passage") && bloc(b, "virage"));
+  assert.equal(bloc(b, "ascenseur").texte, "400 m", "celui-là, on le connaît");
+  assert.equal(bloc(b, "passage").texte, "non renseigné");
+});
+
+test("canne ou déambulateur : frise, banc, escalier, et la traversée s'il y en a une", () => {
+  const b = blocsPanneau(prof("cane_or_walker"), {
+    escalier: {distanceM: 140, marches: 4},
+    traversee: {distanceM: 90, dureeVertS: null, monTempsS: 18},
+  });
+  assert.ok(type(b, "frise"));
+  assert.equal(bloc(b, "escalier").texte, "140 m");
+  const t = type(b, "traversee");
+  assert.equal(t.vert.connu, false, "la durée du feu vert n'existe dans aucune base ouverte");
+  assert.equal(t.moi.texte, "18 s", "mon temps de traversée, lui, se calcule");
+  assert.match(t.conseil, /début du vert/);
+});
+
+test("malvoyance : « Ce qui vous attend », trois lignes et le bouton de description", () => {
+  const b = blocsPanneau(prof("low_vision"), {feuSonore: {distanceM: 90}});
+  assert.equal(type(b, "titre").texte, "Ce qui vous attend");
+  assert.equal(bloc(b, "feu_sonore").texte, "90 m");
+  assert.equal(bloc(b, "podotactile").texte, "non renseigné");
+  assert.equal(bloc(b, "mur").texte, "non renseigné");
+  assert.equal(bloc(b, "decrire").texte, "Décrire ce qui m'entoure");
+});
+
+test("malentendance : le bandeau d'alerte passe avant tout le reste", () => {
+  const b = blocsPanneau(prof("hard_of_hearing"), {
+    alerte: {texte: "Bordure haute dans 20 m"},
+    consignes: [{texte: "Continuez tout droit 60 m", at: 2}],
+  });
+  assert.equal(b[0].type, "bandeau");
+  assert.equal(b[0].texte, "Bordure haute dans 20 m");
+  assert.equal(b[1].type, "consignes");
+  assert.equal(b[1].entrees[0].texte, "Continuez tout droit 60 m");
+});
+
+test("sans alerte en cours, pas de bandeau vide", () => {
+  const b = blocsPanneau(prof("hard_of_hearing"), {consignes: []});
+  assert.equal(type(b, "bandeau"), undefined);
+});
+
+test("la carte de communication ferme la marche, pour qui n'entend pas ou ne voit pas", () => {
+  const sourd = blocsPanneau(prof("hard_of_hearing"), {destination: "Mairie de Gennevilliers"});
+  const c = type(sourd, "communication");
+  assert.match(c.texte, /Mairie de Gennevilliers/);
+  assert.deepEqual(c.boutons.map(x => x.cle), ["ecrire", "transcrire"]);
+  assert.equal(type(blocsPanneau(prof("manual_wheelchair"), {}), "communication"), undefined);
+});
+
+test("profils cumulés : les blocs des deux besoins, le plus contraignant d'abord", () => {
+  const b = blocsPanneau(prof("manual_wheelchair", "hard_of_hearing"), {effort: {niveau: "modéré"}});
+  const types = b.map(x => x.type);
+  assert.ok(types.indexOf("consignes") < types.indexOf("effort"),
+    "ne pas entendre passe avant l'effort : les consignes écrites remplacent la voix");
+  assert.ok(type(b, "pastilles"), "et le fauteuil garde ses pastilles");
+});
+
+test("aucun besoin déclaré : aucun bloc", () => {
+  assert.deepEqual(blocsPanneau(prof("pedestrian"), {}), []);
+  assert.deepEqual(blocsPanneau(prof(), {}), []);
 });

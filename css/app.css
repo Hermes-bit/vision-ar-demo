@@ -1143,3 +1143,56 @@ html.alerte-bord::after {
 }
 #ar.avec-panneau .dome { display: none; }
 #ar .ar-profil .card { margin: 0 0 8px; }
+
+
+/* ---- Panneau par profil, d'apres les maquettes du 18/11/2026 ------------------------------ */
+#ar .pan-badge {
+  display: inline-block; margin: 6px 0 0 2px; padding: 7px 14px; border-radius: 999px;
+  background: #0F2537; color: #fff; font-weight: 700; font-size: 14px;
+}
+.pan { padding: 2px 2px 4px; }
+.pan-head { margin: 0 0 12px; font-size: 15px; color: #5B7183; }
+.pan-head b { font-size: 26px; color: #0F2537; margin-right: 8px; }
+.pan-effort { margin: 0 0 12px; }
+.pan-effort .row { display: flex; align-items: baseline; font-weight: 700; font-size: 16px; margin-bottom: 6px; }
+.pan-bar { height: 10px; border-radius: 999px; background: #DFE6EB; overflow: hidden; margin-bottom: 10px; }
+.pan-bar > i { display: block; height: 100%; background: #2FA360; border-radius: 999px; }
+.pan-bar.orange > i { background: #E8820C; }
+.pan-bar.bleu > i { background: #2B72E8; }
+.pan-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.pan-chips .chip {
+  padding: 9px 14px; border-radius: 999px; font-weight: 700; font-size: 15px;
+  background: #E8F4EC; color: #1C6B3E;
+}
+.pan-chips .chip.on { background: #FDEBD8; color: #9A5A08; }
+.pan-chips .chip.off { background: #EEF1F4; color: #6C7E8C; font-weight: 600; }
+.pan-row { display: flex; align-items: center; gap: 12px; padding: 10px 2px; }
+.pan-row svg { width: 26px; height: 26px; flex: none; color: #2FA360; }
+.pan-row.off svg { color: #9AA8B4; }
+.pan-row b { display: block; font-size: 17px; color: #0F2537; }
+.pan-row small { display: block; color: #6C7E8C; font-size: 14px; }
+.pan-val { font-weight: 800; font-size: 17px; color: #0F2537; }
+.pan-row.off .pan-val { color: #8A99A6; font-weight: 600; }
+.pan-titre { margin: 4px 0 8px; font-size: 21px; }
+.pan-entete { margin: 0 0 6px; font-size: 13px; font-weight: 800; letter-spacing: .04em; color: #6C7E8C; }
+.pan-entete.off { color: #9AA8B4; }
+.pan-frise { position: relative; height: 26px; margin: 6px 0 14px; }
+.pan-frise::before { content: ""; position: absolute; left: 0; right: 0; top: 11px; height: 5px; background: #DFE6EB; border-radius: 999px; }
+.pan-frise > i { position: absolute; top: 2px; width: 22px; height: 22px; border-radius: 7px; }
+.pan-frise .d { left: 0; background: #2B72E8; border-radius: 999px; }
+.pan-frise .l { left: 46%; background: #2FA360; }
+.pan-frise .f { right: 0; background: #1FA6A6; }
+.pan-bandeau {
+  display: flex; align-items: center; gap: 10px; margin: 0 0 12px;
+  padding: 13px 16px; border-radius: 14px; background: #E8820C; color: #fff; font-weight: 800; font-size: 17px;
+}
+.pan-bandeau svg { width: 24px; height: 24px; flex: none; }
+.pan-cons-l { margin: 4px 0; font-size: 16px; color: #0F2537; }
+.pan-conseil { margin: 10px 0 0; padding: 11px 14px; border-radius: 10px; background: #FDF1DF; color: #8A5407; font-weight: 700; }
+.pan-btn {
+  display: block; width: 100%; margin: 10px 0 2px; padding: 16px; border: 0; border-radius: 14px;
+  background: #0F2537; color: #fff; font-size: 18px; font-weight: 800;
+}
+.pan-actions { display: flex; gap: 10px; margin-top: 10px; }
+.pan-act { padding: 11px 16px; border: 0; border-radius: 10px; background: #EEF1F4; color: #0F2537; font-weight: 700; }
+.pan-act:last-child { background: #E8F4EC; color: #1C6B3E; }

@@ -21,7 +21,7 @@ import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE
 import {alertesAutour, phraseAlerte} from "./nearby.js";
 import {cameraDOffice} from "./ribbon.js";
 import {effortDouteux, lignesEffort, resumeEffort} from "./effort.js";
-import {clignoter, historique, phraseCommunication, sectionsPanneau} from "./panneau.js";
+import {blocsPanneau, clignoter, historique, phraseCommunication, sectionsPanneau} from "./panneau.js";
 import {PAS_ECHANTILLON_M, PERIODE_MS, aSignalerALUsager, emprise,
   envoyer as envoyerSignalements, fusionner, recuperer, voter} from "./sync.js";
 
@@ -2243,13 +2243,127 @@ function sectionPanneau(cle) {
   }
   return "";
 }
+// Les boutons du panneau. Un bouton qui ne fait rien vaut moins que pas de bouton : celui de
+// transcription n est rendu que si le telephone sait ecouter (voir panBloc).
+function actionPanneau(cle) {
+  if (cle === "decrire") {
+    const ou = S.nav?.real || S.nav?.here;
+    const l = ou ? alertesAutour(net, ou, {profil: resolveProfile(profileJson())}) : [];
+    say(l.length ? l.map(phraseAlerte).join(". ") : "Rien de particulier n est signale autour de vous.", true);
+    return;
+  }
+  if (cle === "ecrire") {
+    const m = prompt("Votre message, a montrer a votre interlocuteur :", S.commMessage || "");
+    if (m === null) return;
+    S.commMessage = m.trim();
+    render();
+    return;
+  }
+  if (cle === "transcrire") {
+    toast("Transcription : touchez pour parler, le texte s affiche sur la carte.", 5000);
+    ecouterPourTranscrire();
+  }
+}
+// Reconnaissance vocale du navigateur, quand elle existe. Sur iPhone elle est absente la
+// plupart du temps : le bouton n est alors pas affiche du tout.
+const TRANSCRIPTION = typeof window !== "undefined"
+  && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+function ecouterPourTranscrire() {
+  const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!R) return;
+  const r = new R();
+  r.lang = "fr-FR"; r.interimResults = false; r.maxAlternatives = 1;
+  r.onresult = e => { S.commMessage = e.results[0][0].transcript; render(); };
+  r.onerror = () => toast("Je n ai pas pu entendre. Reessayez.", 4000);
+  try { r.start(); } catch { /* deja en cours */ }
+}
+// ---- Rendu du panneau, d'après les maquettes du 18/11/2026 --------------------------
+// Les BLOCS viennent de js/panneau.js, testé ; ici, uniquement leur mise en forme.
+// Règle choisie par l'usager : une valeur absente garde sa place et s'affiche « non renseigné ».
+// Masquer la ligne laisserait croire qu'il n'y a rien à signaler.
+
+/** Ce qu'on sait mesurer du trajet en cours. Tout champ absent vaudra « non renseigné ». */
+function donneesPanneau() {
+  const n = S.nav;
+  if (!n?.route) return {};
+  const r = resumeEffort(net, n.route, profileJson());
+  const p = resolveProfile(profileJson());
+  const h = (n.hazards || []).filter(x => x.along - n.pos >= 0);
+  const prochain = re => h.find(x => re.test(x.label || ""));
+  const dist = x => (x ? Math.round(x.along - n.pos) : null);
+  const marche = prochain(/marche/i), chaussee = prochain(/chaussée/i);
+  // Mon temps pour traverser : la longueur d'une traversée à ma vitesse. La durée du feu vert,
+  // elle, n'existe dans aucune base ouverte — elle restera « non renseigné ».
+  const traversee = prochain(/travers/i);
+  return {
+    effort: r ? {
+      niveau: r.niveau,
+      pente: r.pente.fiable ? r.pente.valeur : null,
+      penteRaideM: Math.round(r.penteRaideM) || null,
+      devers: r.devers.fiable ? r.devers.valeur : null,
+      revetementM: r.revetementRugueux.fiable ? Math.round(r.revetementRugueux.valeur) : null,
+      bordureHaute: r.bordureHaute,
+    } : {},
+    escalier: marche ? {distanceM: dist(marche), marches: null} : null,
+    traversee: traversee ? {distanceM: dist(traversee), dureeVertS: null,
+                            monTempsS: Math.round(8 / (p.speed_m_s || 1))} : null,
+    solGlissant: chaussee ? {distanceM: dist(chaussee)} : null,
+    alerte: h.length ? {texte: `${h[0].label} dans ${Math.round(h[0].along - n.pos)} m`} : null,
+    consignes: consignesDites,
+    destination: S.dest?.label || "",
+    frise: [],
+  };
+}
+
+const panChip = i => `<span class="chip ${i.connu ? (i.alerte ? "on" : "ok") : "off"}">${esc(i.texte)}</span>`;
+const panRow = b => `<div class="pan-row ${b.connu ? "" : "off"}">${icon(b.icone)}
+  <span class="grow"><b>${esc(b.titre)}</b><small>${esc(b.detail || "")}</small></span>
+  <span class="pan-val">${esc(b.texte)}</span></div>`;
+
+function panBloc(b) {
+  switch (b.type) {
+    case "bandeau": return `<div class="pan-bandeau">${icon("triangle-alert")}<span>${esc(b.texte)}</span></div>`;
+    case "effort": {
+      const niv = b.niveau || "non renseigné";
+      const part = {faible: 28, "modéré": 58, soutenu: 92}[b.niveau] || 0;
+      return `<div class="pan-effort"><div class="row"><span class="grow">${esc(b.libelle)}</span><b>${esc(niv)}</b></div>
+        <div class="pan-bar"><i style="width:${part}%"></i></div></div>`;
+    }
+    case "pastilles": return `<div class="pan-chips">${b.items.map(panChip).join("")}</div>`;
+    case "ligne": return panRow(b);
+    case "titre": return `<h3 class="pan-titre">${esc(b.texte)}</h3>`;
+    case "entete": return `<p class="pan-entete ${b.connu ? "" : "off"}">${esc(b.texte)}</p>`;
+    case "frise": return `<div class="pan-frise" aria-hidden="true"><i class="d"></i><i class="l"></i><i class="f"></i></div>`;
+    case "traversee": return `<div class="pan-trav"><h3 class="pan-titre">Traversée dans ${Math.round(b.distanceM)} m</h3>
+      <div class="row"><span class="grow">Feu vert piéton</span><b class="${b.vert.connu ? "" : "off"}">${esc(b.vert.texte)}</b></div>
+      <div class="pan-bar orange"><i style="width:${b.vert.connu ? 65 : 0}%"></i></div>
+      <div class="row"><span class="grow">Votre temps pour traverser</span><b>${esc(b.moi.texte)}</b></div>
+      <div class="pan-bar bleu"><i style="width:${b.moi.connu ? 80 : 0}%"></i></div>
+      <p class="pan-conseil">${esc(b.conseil)}</p></div>`;
+    case "consignes": return `<div class="pan-cons"><p class="pan-entete">${esc(b.titre).toUpperCase()}</p>
+      <div id="liveConsignes">${b.entrees.length
+        ? b.entrees.map(e => `<p class="pan-cons-l"><b>${heureCourte(e.at)}</b> · ${esc(e.texte)}</p>`).join("")
+        : `<p class="fine">Les consignes s&rsquo;afficheront ici au fil du trajet.</p>`}</div>
+      <p class="fine">${esc(b.note)}</p></div>`;
+    case "bouton": return `<button class="pan-btn" data-pan="${b.cle}">${esc(b.texte)}</button>`;
+    case "communication": return `<div class="pan-comm"><p class="pan-entete">${esc(b.entete)}</p>
+      <p class="comm-card">${esc(S.commMessage || b.texte)}</p>
+      <div class="pan-actions">${b.boutons.filter(x => x.cle !== "transcrire" || TRANSCRIPTION).map(x => `<button class="pan-act" data-pan="${x.cle}">${esc(x.texte)}</button>`).join("")}</div></div>`;
+    default: return "";
+  }
+}
 // ---- Panneau de profil dans la vue caméra ------------------------------------------
 // Demandé le 18/11/2026 : les maquettes montrent ce panneau À LA PLACE de la carte en dôme,
 // dans l'écran de guidage lui-même. Je l'avais d'abord mis dans le guidage réduit, ce qui
 // n'était pas la demande. La carte reste à un geste : la pastille « Plan » du bas.
 function tripPanneauHtml() {
   if (!S.nav) return "";
-  return sectionsPanneau(S.mobilities).map(sectionPanneau).join("");
+  const blocs = blocsPanneau(S.mobilities, donneesPanneau());
+  if (!blocs.length) return "";
+  const st = navState();
+  return `<div class="pan"><p class="pan-head"><b>${minutes(st.remaining / speed())}</b>
+    ${short(st.remaining)} · arrivée ${heureCourte(Date.now() + st.remaining / speed() * 1000)}</p>
+    ${blocs.map(panBloc).join("")}</div>`;
 }
 function screenTripLive() {
   const arrived = liveArrived = navState().arrived;
@@ -2263,7 +2377,7 @@ function screenTripLive() {
     <div class="live-stats" id="liveStats">${liveStatsHtml()}</div>
     <p class="live-next" id="liveNext">${liveNextHtml()}</p>
   </section>
-  ${sectionsPanneau(S.mobilities).map(sectionPanneau).join("")}
+  ${tripPanneauHtml()}
   ${arrived ? `<button class="btn primary" id="endLive">${icon("check")} Terminer</button>
     <button class="btn soft" id="resumeNav">${icon("navigation")} Revenir à l'écran de guidage</button>`
     : `<button class="btn primary" id="resumeNav">${icon("navigation")} Reprendre le guidage</button>
@@ -2912,6 +3026,7 @@ function bind() {
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
   on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
   on("setDiag", "onchange", e => navApi.setOption("diag", e.target.checked));
+  all("[data-pan]", b => b.onclick = () => actionPanneau(b.dataset.pan));
   on("setConsent", "onchange", e => { navApi.setOption("dataConsent", e.target.checked); if (!e.target.checked) { navApi.setOption("autoLowConf", false); navApi.setOption("survey", false); } render(); });
   on("setAutoLow", "onchange", e => navApi.setOption("autoLowConf", e.target.checked));
   on("setSurvey", "onchange", e => navApi.setOption("survey", e.target.checked));
