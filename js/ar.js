@@ -21,6 +21,7 @@ import {creerReleve} from "./survey.js";
 import {AVANT_M, capFleche, formeFleche, lisserCap, opaciteFleche, placer} from "./arrow.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 import {angleDiff, makeHeadingFusion} from "./heading.js";
+import {VERIF_MS, cameraMorte} from "./camera.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
@@ -700,11 +701,26 @@ function routeBearing(s) {
   return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
 }
 // ---- Boucle d'affichage -------------------------------------------------------------------------------
+// Surveillance du flux caméra. La décision « faut-il relancer ? » est dans js/camera.js, testée ;
+// ici, la relance, avec un verrou : deux getUserMedia simultanés couperaient l'image au lieu de la
+// rétablir. Jusqu'au 18/11/2026 ce contrôle ne tournait qu'au retour dans l'appli, si bien qu'un
+// flux mort en pleine marche — capture d'écran, autre appli qui prend l'objectif — y restait mort.
+let cameraVerifAt = 0, cameraRelance = false;
+function veillerCamera() {
+  if (nativeOn || noCamera || mapFull || document.hidden || cameraRelance) return;
+  const t = performance.now();
+  if (t - cameraVerifAt < VERIF_MS) return;
+  cameraVerifAt = t;
+  if (!cameraMorte(stream?.getVideoTracks()[0], video)) return;
+  cameraRelance = true;
+  startCamera().finally(() => { cameraRelance = false; });
+}
 let lastFrameAt = 0;
 function frame() {
   raf = requestAnimationFrame(frame);
   const s = api.state();
   if (!s) return;
+  veillerCamera();                        // le flux peut mourir sans que l'appli parte en fond
   // Économie de batterie (loin du prochain virage et des obstacles) : 20 images par seconde au lieu de 60, sauf si le
   // téléphone bouge (sinon le ruban suivait la rue par à-coups)
   const moving = drawnH === null || Math.abs(angleDiff(sensors.heading ?? drawnH, drawnH)) > 0.3 || Math.abs((sensors.pitch ?? 0) - drawnP) > 0.3;
