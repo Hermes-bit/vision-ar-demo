@@ -2093,7 +2093,7 @@ const navApi = {
   map,
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
     mobility: tripMobility(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
-    detect: S.detect, detectDebug: S.detectDebug, diag: S.diag, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf, survey: S.survey,
+    detect: S.detect, detectDebug: S.detectDebug, diag: S.diag, panneau: tripPanneauHtml, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf, survey: S.survey,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsDenied: S.nav.gpsDenied, gpsStatus: S.nav.gpsStatus,
     placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly, simulated: !!S.nav.simulated},
   reroute: () => manualReroute(),
@@ -2242,6 +2242,14 @@ function sectionPanneau(cle) {
       <p class="fine">${icon("info")} Ce message ne dit que ce que vous avez déclaré dans votre profil.</p></section>` : "";
   }
   return "";
+}
+// ---- Panneau de profil dans la vue caméra ------------------------------------------
+// Demandé le 18/11/2026 : les maquettes montrent ce panneau À LA PLACE de la carte en dôme,
+// dans l'écran de guidage lui-même. Je l'avais d'abord mis dans le guidage réduit, ce qui
+// n'était pas la demande. La carte reste à un geste : la pastille « Plan » du bas.
+function tripPanneauHtml() {
+  if (!S.nav) return "";
+  return sectionsPanneau(S.mobilities).map(sectionPanneau).join("");
 }
 function screenTripLive() {
   const arrived = liveArrived = navState().arrived;

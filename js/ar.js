@@ -750,6 +750,23 @@ function dessinerDiag(montrer) {
     images: imagesParSec, lecture: mesLecture, preparation: mesPrep, relances: relancesCamera,
   }).map(l => `<div class="${l.alerte ? "on" : ""}">${esc(l.texte)}</div>`).join("");
 }
+// Panneau de profil, posé à la place du dôme. Le contenu vient de l'appli (js/panneau.js
+// décide des sections) ; ici on ne fait que l'écrire quand il a changé, une fois par seconde
+// au plus — le reconstruire à chaque image coûterait pour rien.
+let panneauAt = 0, panneauDernier = null;
+function dessinerPanneau(s) {
+  const box = root?.querySelector(".ar-profil");
+  if (!box) return;
+  const t = performance.now();
+  if (panneauDernier !== null && t - panneauAt < 1000) return;
+  panneauAt = t;
+  const html = mapFull ? "" : (s.panneau?.() || "");
+  if (html === panneauDernier) return;
+  panneauDernier = html;
+  box.innerHTML = html;
+  box.hidden = !html;
+  root.classList.toggle("avec-panneau", !!html);
+}
 let lastFrameAt = 0;
 function frame() {
   raf = requestAnimationFrame(frame);
@@ -794,6 +811,7 @@ function frame() {
     if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); else drawCorridorMarks(); }
   }
   compterImages();
+  dessinerPanneau(s);
   dessinerDiag(!!s.diag);
   renderUi(s, heading, compass);
 }
@@ -1153,7 +1171,7 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  view = null; mapFull = false; sheet = null; lastUi = ""; flecheA = 0; recal = null; obs = null; labelSmooth.clear();
+  view = null; mapFull = false; sheet = null; lastUi = ""; panneauDernier = null; flecheA = 0; recal = null; obs = null; labelSmooth.clear();
   tracker.reset(); annState = {}; lastMovePos = null;
   Object.values(F).forEach(f => f.reset()); fusion.reset(); drawnH = null;
   sensors = {heading: null, pitch: null, roll: 0};
@@ -1164,7 +1182,7 @@ export async function openAR(options) {
     <div class="dome"><div class="dome-map"></div>
       <svg class="ring" preserveAspectRatio="none" aria-hidden="true"><path class="ring-arc"/><g class="ring-ticks"></g></svg>
       <button class="dome-grip" aria-label="Agrandir la carte" aria-expanded="false"><span></span></button></div>
-    <div class="ar-ui"></div><div class="ar-diag" hidden></div>
+    <div class="ar-ui"></div><div class="ar-profil" hidden></div><div class="ar-diag" hidden></div>
     <div class="ar-live sr-only" aria-live="polite"></div>`;
   video = root.querySelector("video");
   canvas = root.querySelector("canvas");

@@ -1130,3 +1130,16 @@ html.alerte-bord::after {
   background: #FFF6D9; color: #1A1A1A; border: 2px solid #E8C45A;
   font-size: 19px; line-height: 1.4; font-weight: 700;
 }
+
+
+/* Panneau de profil dans la vue camera : il prend la place du dome, comme sur les maquettes
+   du 18/11/2026. La carte revient par la pastille « Plan ». */
+#ar .ar-profil {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  max-height: calc(min(42vh, 380px) + var(--safe-bottom));
+  padding: 10px 12px calc(var(--safe-bottom) + 86px);
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  background: linear-gradient(to top, var(--bg, #0F2537) 72%, transparent);
+}
+#ar.avec-panneau .dome { display: none; }
+#ar .ar-profil .card { margin: 0 0 8px; }
