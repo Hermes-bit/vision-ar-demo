@@ -77,7 +77,7 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), voiceName: VOICES[store.get("va-voice-name", "")] ? store.get("va-voice-name", "") : "systeme", haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), camera: store.get("va-camera", true), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
+  voice: store.get("va-voice", true), voiceName: VOICES[store.get("va-voice-name", "")] ? store.get("va-voice-name", "") : "systeme", haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), camera: store.get("va-camera", true), diag: store.get("va-diag", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), survey: store.get("va-survey", false), origin: PRESENTATION ? {...MAIRIE} : NO_ORIGIN(), dest: null, query: "", places: [],
   // départ : la position actuelle, demandée dès l'ouverture de la recherche ; searchFor « origin » quand on modifie
   // le départ (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
@@ -1665,7 +1665,7 @@ function screenProfile() {
   <p class="fine">${icon("shield-check")} Démonstration : ${esc(zoneLabel(ZONE))}. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
     Réseau © OpenStreetMap (ODbL)${ZONE.france ? ", pentes © IGN" : ""}.</p>`;
 }
-const OPTION_KEYS = {camera: "va-camera", detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf", survey: "va-survey"};
+const OPTION_KEYS = {camera: "va-camera", diag: "va-diag", detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf", survey: "va-survey"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
 const APP_VERSION = "101";
 function screenSettings() {
@@ -1729,6 +1729,10 @@ function screenSettings() {
       Reconnaît : potelets, poteaux, barrières, mobilier urbain, vélos et trottinettes, voitures sur le trottoir, travaux, piétons arrêtés.
       Seuls les obstacles devant vous, sur votre passage, sont annoncés.</p>
     ${sw("setDetectDebug", "square-dashed", "Mode test : boîtes, scores et couloir de passage (calibrage)", S.detectDebug)}
+    ${sw("setDiag", "square-dashed", "Diagnostic : tailles, images par seconde et durées", S.diag)}
+    <p class="fine">${icon("info")} Affiche en haut à gauche de la vue caméra ce que mesure l&rsquo;appli : taille réelle de la vidéo et du tracé,
+      images par seconde, durée de lecture de chaque image, état de la caméra. Les lignes en orange signalent une anomalie. À activer
+      le temps d&rsquo;une sortie, quand l&rsquo;image se fige ou que la vidéo paraît mal cadrée.</p>
     ${sw("setConsent", "shield-check", "Contribuer à l'entraînement", S.dataConsent)}
     <p class="fine">${icon("info")} Avec votre accord, le bouton ⚠ du guidage permet d'enregistrer l'image caméra d'un obstacle manqué ou
       d'une fausse alerte, avec la position et l'heure. Visages et plaques sont floutés avant tout enregistrement ; les images restent sur ce
@@ -2069,7 +2073,7 @@ const navApi = {
   map,
   state: () => S.nav && {nav: S.nav, st: navState(), posAt, net, dest: S.dest, reports: reports(), speed: speed(),
     mobility: tripMobility(), voice: S.voice, theme: S.theme, haptics: S.haptics, hapticsNote: hapticsNote(),
-    detect: S.detect, detectDebug: S.detectDebug, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf, survey: S.survey,
+    detect: S.detect, detectDebug: S.detectDebug, diag: S.diag, dataConsent: S.dataConsent, autoLowConf: S.autoLowConf, survey: S.survey,
     gpsInfo: S.nav.gpsInfo, gpsProblem: S.nav.gpsProblem, gpsDenied: S.nav.gpsDenied, gpsStatus: S.nav.gpsStatus,
     placesRange: S.placesRange, eco: ecoNow(), audioOnly: S.audioOnly, simulated: !!S.nav.simulated},
   reroute: () => manualReroute(),
@@ -2853,6 +2857,7 @@ function bind() {
   on("setCamera", "onchange", e => navApi.setOption("camera", e.target.checked));
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
   on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
+  on("setDiag", "onchange", e => navApi.setOption("diag", e.target.checked));
   on("setConsent", "onchange", e => { navApi.setOption("dataConsent", e.target.checked); if (!e.target.checked) { navApi.setOption("autoLowConf", false); navApi.setOption("survey", false); } render(); });
   on("setAutoLow", "onchange", e => navApi.setOption("autoLowConf", e.target.checked));
   on("setSurvey", "onchange", e => navApi.setOption("survey", e.target.checked));

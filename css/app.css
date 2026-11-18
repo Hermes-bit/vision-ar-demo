@@ -1103,3 +1103,14 @@ body.sheet.heading-up .puck .cone { display: block; transform: none; }
   .tile, .nearby, .tour-card, .setting.strong { outline-color: var(--line); outline-width: 2px; }
   .nearby li + li { border-top-width: 2px; }
 }
+
+
+/* Panneau de diagnostic de la vue AR (js/diag.js) : lu de nuit, en marchant, d'un coup d'oeil. */
+#ar .ar-diag {
+  position: absolute; left: 8px; top: 8px; z-index: 6; max-width: 72vw;
+  padding: 6px 9px; border-radius: 10px;
+  background: rgba(6, 18, 28, .82); color: #CFEFF6;
+  font: 600 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none; white-space: pre-wrap;
+}
+#ar .ar-diag div.on { color: #FFB45C; }

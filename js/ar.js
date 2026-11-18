@@ -16,12 +16,13 @@
 import {haversineM} from "./routing.js";
 import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
-import {BACKEND, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
+import {BACKEND, CHRONO, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
 import {creerReleve} from "./survey.js";
 import {AVANT_M, capFleche, formeFleche, lisserCap, opaciteFleche, placer} from "./arrow.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 import {angleDiff, makeHeadingFusion} from "./heading.js";
 import {VERIF_MS, cameraMorte} from "./camera.js";
+import {creerMesureur, lignesDiag} from "./diag.js";
 
 // Hauteur du téléphone au-dessus du trottoir, tenu devant soi
 const PHONE_HEIGHT_M = {standing: 1.35, wheelchair: 1.05};
@@ -713,7 +714,41 @@ function veillerCamera() {
   cameraVerifAt = t;
   if (!cameraMorte(stream?.getVideoTracks()[0], video)) return;
   cameraRelance = true;
+  relancesCamera++;
   startCamera().finally(() => { cameraRelance = false; });
+}
+// ---- Panneau de diagnostic ---------------------------------------------------------------
+// Visible seulement si le réglage est coché. Il sert à trancher deux anomalies du 18/11/2026
+// dont la cause reste à prouver : l'image qui se fige pendant la détection, et la vidéo qui
+// s'affiche parfois plus petite que le tracé. Les lignes et leurs alertes sont dans js/diag.js.
+let relancesCamera = 0, imagesAt = 0, imagesN = 0, imagesParSec = null;
+const mesLecture = creerMesureur(), mesPrep = creerMesureur();
+
+function compterImages() {
+  const t = performance.now();
+  imagesN++;
+  if (t - imagesAt >= 1000) { imagesParSec = imagesN * 1000 / (t - imagesAt); imagesN = 0; imagesAt = t; }
+}
+function boite(el) {
+  const r = el?.getBoundingClientRect?.();
+  return r ? {w: r.width, h: r.height} : null;
+}
+function dessinerDiag(montrer) {
+  const box = root?.querySelector(".ar-diag");
+  if (!box) return;
+  box.hidden = !montrer;
+  if (!montrer) return;
+  mesLecture.ajouter(CHRONO.lecture);
+  mesPrep.ajouter(CHRONO.preparation);
+  const t = stream?.getVideoTracks()[0], reg = t?.getSettings?.() || {};
+  box.innerHTML = lignesDiag({
+    video: video?.videoWidth ? {w: video.videoWidth, h: video.videoHeight} : null,
+    videoBox: boite(video), canvasBox: boite(canvas),
+    canvas: canvas ? {w: canvas.width, h: canvas.height} : null,
+    dpr: devicePixelRatio,
+    piste: t ? {readyState: t.readyState, muted: t.muted, w: reg.width, h: reg.height, fps: reg.frameRate} : null,
+    images: imagesParSec, lecture: mesLecture, preparation: mesPrep, relances: relancesCamera,
+  }).map(l => `<div class="${l.alerte ? "on" : ""}">${esc(l.texte)}</div>`).join("");
 }
 let lastFrameAt = 0;
 function frame() {
@@ -758,6 +793,8 @@ function frame() {
     drawDestination(cam, s, v.here);
     if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); else drawCorridorMarks(); }
   }
+  compterImages();
+  dessinerDiag(!!s.diag);
   renderUi(s, heading, compass);
 }
 // Un seul repère visuel : la flèche au sol. Elle ne montre jamais une direction fausse : elle disparaît hors
@@ -1127,7 +1164,8 @@ export async function openAR(options) {
     <div class="dome"><div class="dome-map"></div>
       <svg class="ring" preserveAspectRatio="none" aria-hidden="true"><path class="ring-arc"/><g class="ring-ticks"></g></svg>
       <button class="dome-grip" aria-label="Agrandir la carte" aria-expanded="false"><span></span></button></div>
-    <div class="ar-ui"></div><div class="ar-live sr-only" aria-live="polite"></div>`;
+    <div class="ar-ui"></div><div class="ar-diag" hidden></div>
+    <div class="ar-live sr-only" aria-live="polite"></div>`;
   video = root.querySelector("video");
   canvas = root.querySelector("canvas");
   ctx = canvas.getContext("2d");

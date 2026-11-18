@@ -22,6 +22,7 @@ const DEFAULT_NAMES = ["barriere", "deux_roues", "mobilier", "pieton_immobile", 
 export let MODEL_VERSION = "detecteur_obstacles.onnx";
 export let TARGET_CATEGORIES = DEFAULT_NAMES;           // catégories de l'export d'images (= classes du modèle)
 export let lastLuma = 128;                                // luminosité moyenne de la dernière image (0–255)
+export const CHRONO = {lecture: 0, preparation: 0};   // dernières durées en ms, lues par js/ar.js
 export let BACKEND = "";                                  // moteur utilisé, affiché en mode test
 
 let worker = null, ready = false, loading = null, names = DEFAULT_NAMES, canvas = null, ctx2d = null;
@@ -76,15 +77,21 @@ export async function detect(video, minScore = 0.5) {
     canvas = document.createElement("canvas"); canvas.width = canvas.height = INPUT;
     ctx2d = canvas.getContext("2d", {willReadFrequently: true});
   }
+  // Chronométrage pour le panneau de diagnostic (js/diag.js) : ces deux étapes sont les seules
+  // de la détection à tourner sur le fil principal, donc les seules qui puissent figer l'image.
+  const tDebut = performance.now();
   ctx2d.fillStyle = "rgb(114,114,114)";
   ctx2d.fillRect(0, 0, INPUT, INPUT);
   ctx2d.drawImage(video, lb.px, lb.py, lb.nw, lb.nh);
-  const px = ctx2d.getImageData(0, 0, INPUT, INPUT).data;
+  const px = ctx2d.getImageData(0, 0, INPUT, INPUT).data;   // rapatriement bloquant : le suspect
+  const tLu = performance.now();
   // luminosité moyenne de l'image (échantillon) : la nuit, le détecteur est moins sûr de lui (voir js/ar.js)
   let sum = 0, cnt = 0;
   for (let i = 0; i < px.length; i += 4 * 97) { sum += 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; cnt++; }
   lastLuma = sum / cnt;
   const input = toNCHW(px, INPUT, spare || undefined);
+  CHRONO.lecture = tLu - tDebut;
+  CHRONO.preparation = performance.now() - tLu;
   spare = null;
   const res = await ask({type: "run", input, size: INPUT}, [input.buffer]);
   spare = res.input;                                     // le tampon revient : réutilisé à l'image suivante
