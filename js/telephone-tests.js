@@ -139,7 +139,7 @@ const SCENARIOS = [
     C.setFast(false); if (!C.sim.walking) C.toggleWalk();
     const moved = await waitFor(() => va().S.nav?.phase === "route" && va().S.nav.pos > 8 && Math.round(va().S.nav.pos), 25000);
     check(`On avance sur l'itinéraire (${moved || 0} m)`, !!moved);
-    check("Le ruban est affiché au sol", !!(await waitFor(() => ar()?.ribbonA > 0.5, 6000)), `opacité ${ar()?.ribbonA?.toFixed(2)}`);
+    check("La flèche de direction est affichée au sol", !!(await waitFor(() => ar()?.flecheA > 0.5, 6000)), `opacité ${ar()?.flecheA?.toFixed(2)}`);
     check("Temps restant affiché en haut (« min »)", text("#ar .c-eta").includes("min"), text("#ar .c-eta"));
     // pendant la marche, la consigne change à chaque mètre ; les boutons, eux, ne doivent pas être recréés (sinon un
     // toucher qui tombe à ce moment-là est perdu : « Réduire » sans effet, tests du 25/10)
@@ -180,13 +180,13 @@ const SCENARIOS = [
       if (v?.here && va().S.nav.phase === "route" && !va().S.nav.away) {
         const d = Math.hypot((v.here.lat - C.sim.lat) * 111320, (v.here.lon - C.sim.lon) * 111320 * Math.cos(lat0 * Math.PI / 180));
         worst = Math.max(worst, d); samples++;
-        if (st().idx === idx0 && st().toManeuver < 12 && ar().reach >= st().toManeuver + 5) sawTurn = true;
+        if (st().idx === idx0 && st().toManeuver < 12 && Math.abs(ar().capFleche ?? 0) >= 10) sawTurn = true;
       }
       await sleep(150);
     }
     C.sim.speed = 1.2;
-    check(`Le ruban part de sous les pieds, même dans le virage (écart max ${worst.toFixed(1)} m sur ${samples} mesures)`, samples > 20 && worst < 2);
-    check("Le tournant et la rue d'après sont dessinés avant d'arriver au virage", sawTurn);
+    check(`Le point de vue colle à la position, même dans le virage (écart max ${worst.toFixed(1)} m sur ${samples} mesures)`, samples > 20 && worst < 2);
+    check("La flèche pivote vers la nouvelle rue avant d'arriver au virage", sawTurn);
     check("Le virage est passé, consigne suivante", st().idx > idx0, `étape ${st().idx}`);
   }],
   ["reduire", "Réduire et reprendre le guidage", async () => {

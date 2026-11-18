@@ -20,11 +20,17 @@ import {SAMPLE_TEXT, VOICES, VOICE_DOWNLOAD_MB, makeVoiceEngine} from "./voices.
 import {computeRoutes, loadNetwork, nearestNode, RoutingError, SNAP_MAX_DISTANCE_M, haversineM, resolveProfile} from "./routing.js";
 import {alertesAutour, phraseAlerte} from "./nearby.js";
 import {cameraDOffice} from "./ribbon.js";
+import {effortDouteux, lignesEffort, resumeEffort} from "./effort.js";
+import {PAS_ECHANTILLON_M, PERIODE_MS, aSignalerALUsager, emprise,
+  envoyer as envoyerSignalements, fusionner, recuperer, voter} from "./sync.js";
 
-// Adresse du serveur de collecte. Vide par défaut : aucun serveur n'est hébergé aujourd'hui
-// (PRODUCT.md § 7). Pour la régler sur un téléphone ou en local, depuis la console :
+// Adresse du serveur. Vide par défaut : sans elle, rien ne sort du téléphone et l'appli se
+// comporte comme avant le partage des signalements (18/11/2026). Elle se règle dans les réglages,
+// « Serveur de partage » ; depuis la console d'un ordinateur, cela reste possible aussi :
 //   localStorage.setItem("va-api-base", "http://localhost:8000")
 const apiBase = () => store.get("va-api-base", "");
+// L'hôte seul, pour l'afficher : une adresse entière déborde de la ligne de réglage.
+const hoteServeur = () => { try { return new URL(apiBase()).host; } catch { return apiBase(); } };
 
 const MOB = [["manual_wheelchair", "Fauteuil roulant manuel", "accessibility"], ["electric_wheelchair", "Fauteuil électrique", "wheelchair-electric"],
   ["cane_or_walker", "Canne ou déambulateur", "cane"], ["low_vision", "Malvoyance", "eye-off"], ["hard_of_hearing", "Malentendance", "ear-off"]];
@@ -71,7 +77,7 @@ const saved = store.get("va-profile", null);
 const S = {
   screen: !currentSession() ? "welcome" : saved ? "route" : "profile",
   mobilities: new Set(saved?.mobilities || ["manual_wheelchair"]), maxSlope: saved?.maxSlope ?? null, steps: saved?.steps ?? false,
-  voice: store.get("va-voice", true), voiceName: VOICES[store.get("va-voice-name", "")] ? store.get("va-voice-name", "") : "systeme", haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
+  voice: store.get("va-voice", true), voiceName: VOICES[store.get("va-voice-name", "")] ? store.get("va-voice-name", "") : "systeme", haptics: store.get("va-haptics", true), stopsVoice: store.get("va-stops-voice", false), camera: store.get("va-camera", true), detect: store.get("va-detect", true), detectDebug: store.get("va-detect-debug", false),
   dataConsent: store.get("va-data-consent", false), autoLowConf: store.get("va-auto-lowconf", false), survey: store.get("va-survey", false), origin: PRESENTATION ? {...MAIRIE} : NO_ORIGIN(), dest: null, query: "", places: [],
   // départ : la position actuelle, demandée dès l'ouverture de la recherche ; searchFor « origin » quand on modifie
   // le départ (présentation : départ à la Mairie, la visite se fait de n'importe où, sans demande de localisation)
@@ -119,18 +125,110 @@ function profileJson() {
 }
 const speed = () => resolveProfile(profileJson()).speed_m_s;
 
-// ---- Signalements (gardés sur ce téléphone) ----------------------------------------
-function reports() {
+// ---- Signalements : les siens, et ceux des autres ----------------------------------
+// Les siens restent sur ce téléphone ; ceux des autres arrivent du serveur (js/sync.js) et sont
+// gardés à part, pour qu'on ne les renvoie jamais et que l'usager puisse effacer les siens.
+function locaux() {
   const now = Date.now();
   const list = store.get("va-reports", []).filter(r => r.expires > now);
   store.set("va-reports", list);
   return list;
 }
+function distants() {
+  const now = Date.now();
+  const list = store.get("va-reports-serveur", []).filter(r => r.expires > now);
+  store.set("va-reports-serveur", list);
+  return list;
+}
+// Ce que voit tout le reste de l'appli. Un obstacle signalé par quelqu'un d'autre pèse donc sur
+// le calcul (routing.js : OBSTACLE_PENALTY_M, et arc interdit au fauteuil s'il bloque), s'affiche
+// sur la carte et s'annonce à l'approche — sans qu'aucun de ces trois codes ait eu à changer.
+function reports() {
+  return fusionner(locaux(), distants());
+}
 function addReport(kind, blocking, at) {
   const now = Date.now();
   const r = {id: now, kind, blocking, lat: at.lat, lon: at.lon, created: now, expires: now + (REPORT_TTL_H[kind] ?? 336) * 3600e3};
-  store.set("va-reports", [...reports(), r]);
+  store.set("va-reports", [...locaux(), r]);
+  synchroniser();                                  // envoi automatique, sans attendre
   return r;
+}
+
+// ---- Partage automatique des signalements ------------------------------------------
+// Décidé le 18/11/2026 : l'envoi est automatique, et un obstacle signalé par quelqu'un d'autre
+// doit peser sur l'itinéraire, être annoncé, et déclencher un nouveau calcul.
+// La mécanique est dans js/sync.js, testée ; ici on ne fait que brancher.
+let syncEnCours = false, dernierSync = 0;
+
+/** Les points du chemin qu'il reste à parcourir : seul ce qui s'y trouve nous concerne encore. */
+function cheminRestant() {
+  const n = S.nav;
+  if (!n?.route || n.phase !== "route" || n.arrived) return n?.real ? [n.real] : [];
+  const pts = [];
+  for (let d = n.pos; d < n.total; d += PAS_ECHANTILLON_M) pts.push(posAt(d));
+  pts.push(posAt(n.total));
+  return pts;
+}
+
+/** Un autre usager vient de signaler un obstacle bloquant devant nous : le dire, et recalculer. */
+function obstacleSignaleParUnAutre(r) {
+  const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
+  hazardAlerted.add(r.id);                      // annoncé ici : pas une seconde fois à l'approche
+  let msg = `Attention, ${k[1].toLowerCase()} signalé sur votre chemin par un autre usager.`;
+  try {
+    const res = computeRoutes(net, {origin: S.nav.here, destination: S.dest,
+      profile: profileJson(), compare_shortest: false}, reports());
+    startNav(res.routes[0], true);
+    S.routes = res.routes; S.selected = 0;
+    S.nav.rerouted = {at: Date.now(), title: k[1]};
+    msg += " Nouvel itinéraire.";
+  } catch (e) {
+    if (!(e instanceof RoutingError)) throw e;
+    msg += " Aucun détour accessible n'a été trouvé : avancez prudemment.";
+  }
+  say(msg, true);
+  buzz("obstacle");
+  drawRoutes(); drawReports();
+}
+
+/**
+ * Envoie ce qui attend, récupère ce qui nous entoure, et prévient si un obstacle bloquant vient
+ * d'apparaître devant nous. Ne lève jamais : une panne de réseau n'arrête pas un guidage, et
+ * sans serveur configuré (apiBase vide) cette fonction rend la main sans rien faire.
+ */
+async function synchroniser() {
+  const url = apiBase();
+  if (!url || syncEnCours) return;
+  syncEnCours = true;
+  try {
+    const {accuses} = await envoyerSignalements(locaux(), {url, device: deviceId(store)});
+    if (accuses.length) {                        // accusés : on ne les renverra plus
+      const idServeur = new Map(accuses.map(a => [a.id, a.serverId]));
+      store.set("va-reports", locaux().map(r =>
+        idServeur.has(r.id) ? {...r, serverId: idServeur.get(r.id)} : r));
+    }
+    const chemin = cheminRestant();
+    const bbox = emprise(chemin);
+    if (!bbox) return;
+    const avant = reports();
+    const recus = await recuperer(bbox, {url});
+    // On remplace au lieu d'accumuler : seuls les obstacles autour de nous ont un sens, et c'est
+    // ce qui empêche la liste de grossir sans fin sur le téléphone.
+    store.set("va-reports-serveur", recus);
+    const apres = reports();
+    drawReports();
+    const bloquants = aSignalerALUsager(avant, apres, chemin);
+    if (bloquants.length && S.nav?.here && S.dest && !S.nav.arrived) {
+      obstacleSignaleParUnAutre(bloquants[0]);
+    }
+  } catch { /* hors ligne, serveur muet : on réessaiera à la prochaine position */ } finally {
+    syncEnCours = false;
+  }
+}
+function peutEtreSynchroniser() {
+  if (Date.now() - dernierSync < PERIODE_MS) return;
+  dernierSync = Date.now();
+  synchroniser();
 }
 
 // ---- Voix et vibrations ---------------------------------------------------------------
@@ -594,8 +692,18 @@ function announceStops() {
     break;                                                // une annonce à la fois
   }
 }
+// « Il n'est plus là » sur l'obstacle d'un autre usager : le serveur compte les démentis, et deux
+// suffisent à le retirer pour tout le monde. En attendant, on l'ôte de cette carte-ci.
+function plusLa(r) {
+  voter(r.serverId, {url: apiBase(), device: deviceId(store), encore: false});
+  store.set("va-reports-serveur", distants().filter(x => x.id !== r.id));
+  map.closePopup();
+  drawReports();
+  toast("Merci, c'est noté. Deux démentis suffisent à le retirer pour tout le monde.");
+  if (S.screen === "route" && S.dest) computeRoute();
+}
 function removeReport(id) {
-  store.set("va-reports", reports().filter(r => r.id !== id));
+  store.set("va-reports", locaux().filter(r => r.id !== id));
   map.closePopup();
   drawReports();
   toast("Signalement retiré.");
@@ -606,11 +714,21 @@ function drawReports() {
   layers.reports.clearLayers();
   for (const r of reports()) {
     const k = REPORT_KINDS.find(x => x[0] === r.kind) || REPORT_KINDS.at(-1);
+    const quand = new Date(r.expires).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"});
+    // On n'efface pas l'obstacle de quelqu'un d'autre : on peut seulement le démentir, et il faut
+    // deux démentis pour le retirer à tout le monde. Dire « signalé sur ce téléphone » sur celui
+    // d'un autre, avec un bouton « Retirer » sans effet, serait un mensonge.
+    const origine = r.distant
+      ? `Signalé par un autre usager${r.confirmations ? `, confirmé ${r.confirmations} fois` : ""} · expire le ${quand}`
+      : `Signalé sur ce téléphone · expire le ${quand}`;
     L.marker([r.lat, r.lon], {icon: pin(k[2], "pin-report"), title: k[1]})
       .bindPopup(`<div class="pp"><div class="pp-title">${k[1]}${r.blocking ? " — bloquant" : ""}</div>
-        <div class="pp-src">Signalé sur ce téléphone · expire le ${new Date(r.expires).toLocaleString("fr-FR", {dateStyle: "short", timeStyle: "short"})}</div>
-        <button class="pp-remove" type="button">${icon("trash-2")} Retirer ce signalement</button></div>`)
-      .on("popupopen", e => { e.popup.getElement().querySelector(".pp-remove").onclick = () => removeReport(r.id); })
+        <div class="pp-src">${origine}</div>
+        <button class="pp-remove" type="button">${icon(r.distant ? "check" : "trash-2")} ${r.distant ? "Il n'est plus là" : "Retirer ce signalement"}</button></div>`)
+      .on("popupopen", e => {
+        e.popup.getElement().querySelector(".pp-remove").onclick =
+          () => (r.distant ? plusLa(r) : removeReport(r.id));
+      })
       .addTo(layers.reports);
   }
 }
@@ -1298,6 +1416,7 @@ function moveTo(pos) {
   S.nav.pos = Math.min(S.nav.total, Math.max(0, pos));
   S.nav.here = posAt(S.nav.pos);
   announce();
+  peutEtreSynchroniser();                 // partage des signalements (js/sync.js)
   checkHazards();
   updateGpsMode();
   renderNavLive();
@@ -1546,7 +1665,7 @@ function screenProfile() {
   <p class="fine">${icon("shield-check")} Démonstration : ${esc(zoneLabel(ZONE))}. Itinéraires calculés sur ce téléphone, aucune donnée personnelle envoyée.
     Réseau © OpenStreetMap (ODbL)${ZONE.france ? ", pentes © IGN" : ""}.</p>`;
 }
-const OPTION_KEYS = {detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf", survey: "va-survey"};
+const OPTION_KEYS = {camera: "va-camera", detect: "va-detect", detectDebug: "va-detect-debug", dataConsent: "va-data-consent", autoLowConf: "va-auto-lowconf", survey: "va-survey"};
 // ---- Paramètres : tout ce qui concerne l'appli, rangé au même endroit ----------------------------------
 const APP_VERSION = "101";
 function screenSettings() {
@@ -1600,7 +1719,11 @@ function screenSettings() {
     <p class="fine">${icon("info")} Le vrai fond Google Maps ou Plans (Apple, utilisé par Citymapper) demande leurs propres outils : une
       clé Google avec compte de facturation, ou un compte développeur Apple (99 €/an). « Style Plans » en est l'équivalent gratuit.</p>
   </section>
-  <section class="card"><h3>${icon("scan-eye")} Obstacles vus par la caméra</h3>
+  <section class="card"><h3>${icon("camera")} Caméra et obstacles</h3>
+    ${sw("setCamera", "camera", "Ouvrir la caméra au départ du guidage", S.camera)}
+    <p class="fine">${icon("info")} Décoché, le guidage démarre réduit : voix, vibrations et alertes, sans caméra — et sans demande
+      d'autorisation au départ. La vue caméra reste accessible à tout moment par « Trajet en cours ». La détection d'obstacles
+      ci-dessous a besoin de la caméra : elle ne fonctionne que lorsque celle-ci est ouverte.</p>
     ${sw("setDetect", "scan-eye", "Détecter les obstacles (expérimental)", S.detect)}
     <p class="fine">${icon("info")} Détecteur Vision AR (11 Mo, téléchargé une fois puis gardé hors connexion, tout reste sur le téléphone).
       Reconnaît : potelets, poteaux, barrières, mobilier urbain, vélos et trottinettes, voitures sur le trottoir, travaux, piétons arrêtés.
@@ -1614,6 +1737,10 @@ function screenSettings() {
     ${S.dataConsent ? sw("setSurvey", "camera", "Relevé systématique (une image tous les 25 m)", S.survey) : ""}
     ${S.dataConsent && S.survey ? `<p class="fine">${icon("info")} Le relevé prend beaucoup plus d'images : à réserver aux sorties de collecte, pas à l'usage courant.</p>` : ""}
     <div class="set-row static">${icon("database")}<span class="grow">Images collectées</span><span class="set-val" id="sampleCount">…</span></div>
+    ${row("serveurAdresse", "cloud", "Serveur de partage", apiBase() ? hoteServeur() : "aucun", false)}
+    <p class="fine">${icon("info")} Sans serveur, tout reste sur ce téléphone. Avec un serveur, vos signalements d'obstacles
+      partent automatiquement et vous recevez ceux des autres usagers : ils sont alors pris en compte dans le calcul de
+      votre itinéraire, où qu'ils aient été signalés dans le monde.</p>
     ${apiBase() ? row("sendSamples", "arrow-up", "Envoyer au serveur", "", false) : ""}
     ${apiBase() ? row("codeCollecte", "tags", "Code de collecteur", `${deviceId(store).slice(0, 8)}…`, false) : ""}
     ${apiBase() ? row("codeReprendre", "users", "Utiliser le code d'un autre appareil", "", false) : ""}
@@ -1683,6 +1810,66 @@ function nearbyHtml() {
       <span class="nearby-d" aria-hidden="true">${Math.round(a.distance / 5) * 5}&nbsp;m</span></li>`).join("")}</ul>
   </section>`;
 }
+// ---- Résumé d'effort de l'itinéraire choisi -----------------------------------------
+// Les décisions — quoi montrer selon le profil, et ce qu'on a le DROIT d'en dire — sont dans
+// js/effort.js, testées. Ici, seulement la mise en mots.
+//
+// Pourquoi « non renseigné » plutôt qu'un zéro : sur le réseau de Gennevilliers le dévers est
+// connu sur 0,0 % des tronçons et le revêtement sur 31 %. Une pastille « Pavés : 0 m » y
+// promettrait un sol lisse que personne n'a mesuré — et pour un fauteuil manuel, c'est la
+// différence entre un trajet et une sortie de route.
+const EFFORT_LIGNES = {
+  pente: ["mountain", "Pente maximale"],
+  devers: ["triangle-alert", "Dévers"],
+  revetement: ["layers", "Revêtement irrégulier"],
+  largeur: ["move-horizontal", "Passage le plus étroit"],
+  marches: ["stairs", "Marches sur le trajet"],
+  feu_sonore: ["volume-x", "Traversées sans feu sonore"],
+};
+const unChiffre = n => String(Math.round(n * 10) / 10).replace(".", ",");
+function effortValeur(l) {
+  if (l.ton === "inconnu") return "non renseigné";
+  switch (l.cle) {
+    case "pente": return `${unChiffre(l.valeur)} %${l.auDelaM > 0 ? ` · ${Math.round(l.auDelaM)} m trop raides` : ""}`;
+    case "devers": return `${unChiffre(l.valeur)} %`;
+    case "revetement": return l.valeur > 0 ? `${Math.round(l.valeur)} m` : "aucun";
+    case "largeur": return `${unChiffre(l.valeur)} m`;
+    case "marches": return String(l.valeur);
+    case "feu_sonore": return `${l.valeur} sur ${l.total}`;
+    default: return "";
+  }
+}
+// Nommer ce qui manque vaut mieux qu'un pourcentage. Sur un vrai trajet de Gennevilliers en
+// fauteuil, la part « non renseignée » atteint 100 % — une largeur de trottoir inconnue suffit à
+// rendre un tronçon douteux — alors que la pente, elle, est connue sur 94 %. « 100 % » laisserait
+// croire que l'appli ne sait rien ; « la largeur et le dévers » dit la vérité utile.
+const EFFORT_MANQUE = {pente: "la pente", devers: "le dévers", revetement: "le revêtement",
+  largeur: "la largeur des passages", marches: "les marches", feu_sonore: "les feux sonores"};
+function manquantes(lignes) {
+  const noms = lignes.filter(l => l.ton === "inconnu").map(l => EFFORT_MANQUE[l.cle] || l.cle);
+  if (!noms.length) return "";
+  return noms.length === 1 ? noms[0] : `${noms.slice(0, -1).join(", ")} ni ${noms.at(-1)}`;
+}
+function effortCard(route) {
+  const profil = profileJson();
+  const r = resumeEffort(net, route, profil);
+  if (!r || !r.niveau) return "";
+  const lignes = lignesEffort(r, profil);
+  return `<section class="card">
+    <div class="row"><h3 class="grow">${icon("route")} Effort estimé</h3>
+      <span class="set-val">${esc(r.niveau)}</span></div>
+    ${effortDouteux(r) ? `<p class="fine">${icon("info")} Estimation prudente${manquantes(lignes)
+      ? ` : la carte ne renseigne pas ${manquantes(lignes)} sur ce trajet` : ""}.
+      Le calcul majore ce qu'il ignore au lieu de le supposer facile.</p>` : ""}
+    ${lignes.map(l => {
+      const [ic, lib] = EFFORT_LIGNES[l.cle] || ["circle-alert", l.cle];
+      return `<div class="set-row static">${icon(ic)}<span class="grow">${lib}</span>
+        <span class="set-val">${esc(effortValeur(l))}</span></div>`;
+    }).join("")}
+    ${lignes.some(l => l.ton === "inconnu") ? `<p class="fine">${icon("info")} « Non renseigné » veut dire que la carte
+      ne contient pas cette donnée ici — pas qu'il n'y a rien. Le mode relevé des réglages sert à la constituer.</p>` : ""}
+  </section>`;
+}
 function screenRoute() {
   if (S.nav) return screenTripLive();                     // guidage réduit : son panneau, pas la recherche
   const chosen = S.routes[S.selected];
@@ -1724,6 +1911,7 @@ function screenRoute() {
   ${S.dest && originPending() ? locatingHtml() : ""}
   ${S.message ? `<div class="msg warn">${icon("circle-alert")}<span>${esc(S.message)}</span></div>` : ""}
   ${S.routes.map((r, i) => routeCard(r, i)).join("")}
+  ${chosen ? effortCard(chosen) : ""}
   ${doorCard()}${S.dest && S.arrival ? arrivalCard(S.arrival) : ""}${indoorButton()}
   ${S.routes.length ? `<button class="btn primary" id="start" ${chosen?.accessible ? "" : "disabled"}>${icon("navigation")} Démarrer le guidage</button>` : ""}`}`;
 }
@@ -2488,7 +2676,8 @@ function startGuidance() {
   stickerPop("je-te-guide");
   // Malvoyance sans détection d'obstacles : le guidage part « réduit », caméra éteinte (voix,
   // vibrations, alertes). La vue caméra reste à un geste, par « Trajet en cours ». js/ribbon.js
-  const depart = cameraDOffice({malvoyance: S.mobilities.has("low_vision"), detection: S.detect}) ? "nav" : "route";
+  const depart = cameraDOffice({malvoyance: S.mobilities.has("low_vision"), detection: S.detect,
+                                demandee: S.camera}) ? "nav" : "route";
   if (S.simulate) {                                       // démonstration : positions simulées le long du trajet
     S.nav.simulated = true;
     say("Démonstration : le trajet défile tout seul, comme si vous marchiez.", true);
@@ -2661,6 +2850,7 @@ function bind() {
   all("[data-basemap]", b => b.onclick = () => { setBasemap(b.dataset.basemap); render(); });
   all("[data-logo]", b => b.onclick = () => { setLogo(b.dataset.logo); render(); toast(`Logo « ${LOGOS[S.logo]} » choisi pour l'écran d'accueil.`); });
   on("setStopsVoice", "onchange", e => { S.stopsVoice = e.target.checked; store.set("va-stops-voice", S.stopsVoice); });
+  on("setCamera", "onchange", e => navApi.setOption("camera", e.target.checked));
   on("setDetect", "onchange", e => navApi.setOption("detect", e.target.checked));
   on("setDetectDebug", "onchange", e => navApi.setOption("detectDebug", e.target.checked));
   on("setConsent", "onchange", e => { navApi.setOption("dataConsent", e.target.checked); if (!e.target.checked) { navApi.setOption("autoLowConf", false); navApi.setOption("survey", false); } render(); });
@@ -2683,6 +2873,18 @@ function bind() {
     const code = deviceId(store);
     try { await navigator.clipboard.writeText(code); toast("Code copié. Collez-le sur votre autre appareil.", 5000); }
     catch { prompt("Copiez ce code, puis collez-le sur votre autre appareil :", code); }
+  });
+  on("serveurAdresse", "onclick", () => {
+    const saisi = prompt("Adresse du serveur Vision AR, ou rien du tout pour tout garder sur ce téléphone :", apiBase());
+    if (saisi === null) return;
+    const url = saisi.trim().replace(/\/+$/, "");
+    if (url && !/^https?:\/\/\S+$/i.test(url)) {
+      return toast("Adresse invalide : elle doit commencer par http:// ou https://.", 7000);
+    }
+    store.set("va-api-base", url);
+    toast(url ? "Serveur enregistré. Vos signalements seront partagés automatiquement." :
+      "Serveur retiré : tout reste sur ce téléphone.", 6000);
+    render();
   });
   on("codeReprendre", "onclick", () => {
     const saisi = prompt("Collez le code de votre autre appareil : vos envois seront regroupés.", "");

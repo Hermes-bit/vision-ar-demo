@@ -62,3 +62,15 @@ test("malvoyance AVEC détection d'obstacles : la caméra reste, c'est elle qui 
   assert.equal(cameraDOffice({malvoyance: true, detection: true}), true);
 });
 
+
+test("caméra refusée par l'usager : le guidage part réduit, quel que soit le profil", () => {
+  assert.equal(cameraDOffice({demandee: false}), false);
+  assert.equal(cameraDOffice({malvoyance: false, detection: true, demandee: false}), false,
+    "même la détection d'obstacles ne doit pas passer outre le choix");
+});
+
+test("sans choix exprimé, la règle du profil s'applique comme avant", () => {
+  assert.equal(cameraDOffice({demandee: true}), true);
+  assert.equal(cameraDOffice({malvoyance: true, demandee: true}), false);
+  assert.equal(cameraDOffice({malvoyance: true, detection: true, demandee: true}), true);
+});

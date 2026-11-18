@@ -18,7 +18,7 @@ import {icon, ICONS} from "./icons.js";
 import {sticker, stickerPop} from "./stickers.js";
 import {BACKEND, captureSample, detect, lastLuma, loadModel, modelReady} from "./obstacles.js";
 import {creerReleve} from "./survey.js";
-import {recentrage} from "./ribbon.js";
+import {AVANT_M, capFleche, formeFleche, lisserCap, opaciteFleche, placer} from "./arrow.js";
 import {CORRIDOR, DIST_CALIB, MAX_SHOWN, TRAPEZE, corridor2D, halfAt, makeTracker, nextAnnouncement} from "./corridor.js";
 import {angleDiff, makeHeadingFusion} from "./heading.js";
 
@@ -36,10 +36,10 @@ const BEHIND_M = 4;              // le ruban part de sous les pieds
 const CHEV_START_M = 2;
 const RING_DEG = 55;              // demi-ouverture de l'anneau de boussole du dôme
 const THEMES = {
-  // Verre (maquette 1) : ruban turquoise -> vert lumineux, chevrons blancs
-  verre: {ribbon: true, half: 0.6, chevW: 0.62, chevL: 0.38, chevGap: 2.6, chevStroke: 0.09, chevRGB: "255,255,255", glow: "rgba(61,220,151,.9)", pins: false},
-  // Néon (maquette 2) : grands chevrons turquoise lumineux, léger halo au sol
-  neon: {ribbon: false, half: 0.75, chevW: 0.95, chevL: 0.55, chevGap: 2.4, chevStroke: 0.15, chevRGB: "140,244,248", glow: "rgba(91,224,234,1)", pins: true},
+  // Verre (maquette 1) : flèche turquoise -> vert lumineux, étiquettes en verre clair
+  verre: {flecheSombre: "0,118,142", fleche: "0,180,200", flecheClair: "120,242,216", chevRGB: "255,255,255", glow: "rgba(61,220,151,.9)", pins: false},
+  // Néon (maquette 2) : flèche turquoise lumineuse, repères en goutte flottant dans la rue
+  neon: {flecheSombre: "10,128,150", fleche: "60,205,215", flecheClair: "170,250,250", chevRGB: "140,244,248", glow: "rgba(91,224,234,1)", pins: true},
 };
 const TITLE = {left: "Tournez à gauche", slight_left: "Serrez à gauche", right: "Tournez à droite", slight_right: "Serrez à droite",
   uturn: "Faites demi-tour", straight: "Continuez tout droit", depart: "Continuez tout droit", arrive: "Vous arrivez"};
@@ -232,122 +232,56 @@ function fillGround(cam, pts) {               // polygone au sol, coupé devant 
   return true;
 }
 
-// ---- Dessin du chemin ---------------------------------------------------------------------------
-// Ligne centrale lissée (Chaikin) : les virages deviennent des courbes, comme sur les maquettes
-function chaikin(pts, rounds = 2) {
-  for (let r = 0; r < rounds; r++) {
-    const out = [pts[0]];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      out.push({x: a.x * .75 + b.x * .25, y: a.y * .75 + b.y * .25, z: a.z}, {x: a.x * .25 + b.x * .75, y: a.y * .25 + b.y * .75, z: a.z});
-    }
-    out.push(pts.at(-1));
-    pts = out;
-  }
-  return pts;
-}
-// Bords gauche / droite d'une bande au sol, projetés à l'écran (coupés avant le premier point trop proche)
-function bandEdges(cam, pts, half) {
-  const left = [], right = [];
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
-    let dx = b.x - a.x, dy = b.y - a.y;
-    const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
-    const l = cam.toCam({x: pts[i].x - dy * half, y: pts[i].y + dx * half, z: pts[i].z});
-    const r = cam.toCam({x: pts[i].x + dy * half, y: pts[i].y - dx * half, z: pts[i].z});
-    if (l.d < NEAR_M || r.d < NEAR_M) { if (left.length) break; continue; }
-    left.push(cam.toScreen(l)); right.push(cam.toScreen(r));
-  }
-  return [left, right];
-}
-function bandPath(left, right) {
-  ctx.beginPath();
-  left.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
-  for (let k = right.length - 1; k >= 0; k--) ctx.lineTo(right[k][0], right[k][1]);
-  ctx.closePath();
-}
-function drawPath(cam, s, here, pos) {
-  const t = theme(), dpr = devicePixelRatio;
-  // Jusqu'où : 15 m devant soi ; à l'approche d'un virage (moins de 22 m), jusqu'à 8 m APRÈS lui. On voit le
-  // tournant avant d'y être, et la nouvelle rue est déjà dessinée quand on se tourne vers elle.
-  const turnAt = s.nav.stepAt?.[s.st.idx + 1];
-  const reach = Math.min(30, Math.max(PATH_AHEAD_M, turnAt != null && turnAt > pos ? turnAt - pos + TURN_AFTER_M : 0));
-  const raw = [], from = Math.max(0, pos - BEHIND_M), to = Math.min(s.nav.total, pos + reach);
-  lastReach = to - pos;
-  // Le ruban est ramené sous les pieds : sans ça, une erreur de GPS de trois mètres le pose
-  // sur le mur ou sur la chaussée (captures du 14/11/2026). Au-delà de 6 m, l'écart reste
-  // visible : ce n'est plus une imprécision, c'est qu'on n'est pas sur le chemin. js/ribbon.js
-  const dec = recentrage(enu(here, s.posAt(pos)));
-  const au = d => { const q = enu(here, s.posAt(d)); q.x -= dec.x; q.y -= dec.y; return q; };
-  for (let d = from; d < to; d += 1.5) raw.push(au(d));
-  raw.push(au(to));
-  if (raw.length < 3) return;
-  const pts = chaikin(raw);
-  // Le ruban est plein jusqu'à ses 4 derniers mètres, qui s'effacent dans le sens du chemin. (Avant : fondu du bas
-  // vers le haut de l'écran ; la rue d'après un virage, à la même hauteur que l'horizon, était presque invisible.)
-  const cum = [0];
-  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-  const cut = Math.max(1, cum.findIndex(c => c >= cum.at(-1) - TAIL_M));
-  const main = pts.slice(0, cut + 1), tail = pts.slice(cut);
-  const tailFill = (l, r, rgb, a, rgbEnd = rgb) => {
-    const mid = k => [(l[k][0] + r[k][0]) / 2, (l[k][1] + r[k][1]) / 2], [x0, y0] = mid(0), [x1, y1] = mid(l.length - 1);
-    const g = ctx.createLinearGradient(x0, y0, x1 === x0 && y1 === y0 ? x0 + 1 : x1, y1);
-    g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgbEnd},0)`);
-    return g;
-  };
-  const band = (half, rgb, a, rgbEnd) => {               // une couche : partie pleine, puis bout qui s'efface
-    const [lm, rm] = bandEdges(cam, main, half), [lt, rt] = bandEdges(cam, tail, half);
-    if (lm.length > 1) { bandPath(lm, rm); ctx.fillStyle = `rgba(${rgb},${a})`; ctx.fill(); }
-    if (lt.length > 1) { bandPath(lt, rt); ctx.fillStyle = tailFill(lt, rt, rgb, a, rgbEnd); ctx.fill(); }
-    return [lm, rm, lt, rt];
-  };
-  const stroke = (p, style) => {
-    if (p.length < 2) return;
-    ctx.strokeStyle = style; ctx.beginPath(); p.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
-  };
-  ctx.save();
-  if (t.ribbon) {
-    // Ruban posé au sol comme une bande collée : pas de grand halo (il le faisait flotter au-dessus de la rue), un
-    // liseré sombre AU SOL (7 cm de chaque côté, en perspective) qui le détache du trottoir, le ruban, son cœur clair
-    band(t.half + 0.07, "0,40,52", .36);
-    const [lm, rm, lt, rt] = band(t.half, "0,174,204", .78, "61,220,151");
-    band(t.half * 0.35, "200,255,240", .45);
-    ctx.lineWidth = 1.5 * dpr;
-    stroke(lm, "rgba(255,255,255,.7)"); stroke(rm, "rgba(255,255,255,.7)");
-    if (lt.length > 1) { const g = tailFill(lt, rt, "255,255,255", .7); stroke(lt, g); stroke(rt, g); }
-  } else band(t.half, "91,224,234", .13);                // néon : léger halo au sol sous les chevrons
-  ctx.restore();
+// ---- Flèche de direction ---------------------------------------------------------------------
+// Géométrie et décisions : js/arrow.js (testé). Ici, seulement le tracé au canevas.
+//
+// Elle remplace le ruban depuis la sortie terrain du 16/11/2026. Un ruban doit coïncider avec le
+// trottoir sur toute sa longueur : trois mètres d'erreur latérale de GPS le posent sur un mur, et
+// aucun lissage ne rattrape ça. La flèche est ancrée à la CAMÉRA — toujours AVANT_M mètres devant
+// l'axe de visée, à plat sur le sol — donc le GPS n'entre pas dans sa position et ne peut pas la
+// faire trembler. Il n'entre que dans sa rotation, et seulement par le cap du TRACÉ.
+const FLECHE_VISEE_M = 10;         // on vise un point du tracé 10 m plus loin : le coin est dépassé avant d'y être,
+                                   // donc la flèche pivote progressivement au lieu de basculer d'un coup
+const FLECHE_HAUT_M = 0.33;        // elle flotte un peu : son ombre portée la pose dans la rue
+const FLECHE_EPAISSEUR_M = 0.13;   // tranche sombre sous la face claire : c'est ce qui lui donne du volume
+let capFlecheAffiche = null;       // angle lissé, conservé d'une image à l'autre
 
-  // Chevrons « ^ » peints au sol le long de la ligne lissée, à intervalle régulier (halo réduit : ils restent au sol)
+// Cap du tracé : la corde entre sa position sur l'itinéraire et un point FLECHE_VISEE_M plus loin
+// SUR LE TRACÉ. Deux points de l'itinéraire, jamais la position mesurée : une erreur latérale de
+// GPS ne le fausse donc pas, et c'est ce qui distingue la flèche du ruban.
+function capItineraire(s) {
+  const pos = s.nav.pos, a = s.posAt(pos), b = s.posAt(Math.min(s.nav.total, pos + FLECHE_VISEE_M));
+  if (a.lat === b.lat && a.lon === b.lon) return null;
+  const k = Math.cos(a.lat * Math.PI / 180);
+  return (Math.atan2((b.lon - a.lon) * k, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
+}
+
+function drawArrow(cam, s, heading) {
+  capFlecheAffiche = lisserCap(capFlecheAffiche, capFleche(capItineraire(s), heading));
+  if (capFlecheAffiche === null) return;
+  const t = theme(), dpr = devicePixelRatio, yaw = heading * Math.PI / 180;
+  const sy = Math.sin(yaw), cy = Math.cos(yaw), forme = formeFleche();
+  // (devant l'objectif, à sa droite) -> (est, nord) : l'inverse exact de cam.toCam. La flèche est
+  // posée dans le monde sans jamais passer par une position GPS.
+  const monde = (p, haut) => {
+    const q = placer(p, capFlecheAffiche, AVANT_M);
+    return {x: q.avant * sy + q.droite * cy, y: q.avant * cy - q.droite * sy, z: -camHeight + haut};
+  };
+  const couche = haut => forme.map(p => monde(p, haut));
+  const ecran = (a, b, haut) => cam.toScreen(cam.toCam(monde({a, b}, haut)));
   ctx.save();
-  ctx.lineCap = "round"; ctx.lineJoin = "round";
-  ctx.shadowColor = t.glow; ctx.shadowBlur = (t.ribbon ? 0 : 10) * dpr;
-  // chevrons ancrés à l'itinéraire (ils ne glissent pas avec soi) : ils approchent, puis s'effacent sous les pieds
-  let acc = 0, next = Math.ceil((pos - 1.5) / t.chevGap) * t.chevGap - from;
-  const ahead = to - pos, wave = (performance.now() / 1000 * 7) % (ahead + 6) - 1;   // onde lumineuse, de soi vers l'avant
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1], b = pts[i], seg = Math.hypot(b.x - a.x, b.y - a.y);
-    if (!seg) continue;
-    while (acc + seg >= next) {
-      const f = (next - acc) / seg, ux = (b.x - a.x) / seg, uy = (b.y - a.y) / seg;
-      const c = {x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: a.z};
-      const tip = {x: c.x + ux * t.chevL / 2, y: c.y + uy * t.chevL / 2, z: c.z};
-      const back = (side) => ({x: c.x - ux * t.chevL / 2 - uy * side * t.chevW / 2, y: c.y - uy * t.chevL / 2 + ux * side * t.chevW / 2, z: c.z});
-      const q = [back(1), tip, back(-1)].map(p => cam.toCam(p));
-      if (q.every(v => v.d >= NEAR_M)) {
-        const along = next - (pos - from);               // distance devant soi
-        const passed = along < CHEV_START_M ? Math.max(0, (along + 1.5) / (CHEV_START_M + 1.5)) : 1;
-        const pulse = Math.exp(-((along - wave) ** 2) / 3);
-        const alpha = passed * Math.max(0, Math.min(1, (ahead - along) / TAIL_M)) * (0.55 + 0.45 * pulse);   // pleins jusqu'au bout
-        ctx.strokeStyle = `rgba(${t.chevRGB},${alpha.toFixed(3)})`;
-        ctx.lineWidth = Math.max(1.5 * dpr, Math.min(16 * dpr, cam.scale(q[1].d) * t.chevStroke));
-        ctx.beginPath();
-        q.forEach((v, k) => { const [x, y] = cam.toScreen(v); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-        ctx.stroke();
-      }
-      next += t.chevGap;
-    }
-    acc += seg;
+  // 1. L'ombre au sol : c'est elle qui dit que la flèche est posée dans la rue, pas collée à l'écran.
+  ctx.shadowColor = "rgba(0,0,0,.55)"; ctx.shadowBlur = 22 * dpr;
+  if (fillGround(cam, couche(0))) { ctx.fillStyle = "rgba(0,0,0,.42)"; ctx.fill(); }
+  ctx.shadowBlur = 0;
+  // 2. La tranche, puis la face : l'écart de hauteur entre les deux se voit comme une épaisseur.
+  if (fillGround(cam, couche(FLECHE_HAUT_M - FLECHE_EPAISSEUR_M))) { ctx.fillStyle = `rgba(${t.flecheSombre},.96)`; ctx.fill(); }
+  if (fillGround(cam, couche(FLECHE_HAUT_M))) {
+    const [x0, y0] = ecran(-1, 0, FLECHE_HAUT_M), [x1, y1] = ecran(1, 0, FLECHE_HAUT_M);
+    const g = ctx.createLinearGradient(x0, y0, x1 === x0 && y1 === y0 ? x0 + 1 : x1, y1);
+    g.addColorStop(0, `rgba(${t.fleche},.97)`); g.addColorStop(1, `rgba(${t.flecheClair},.97)`);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.lineWidth = 1.6 * dpr; ctx.strokeStyle = "rgba(255,255,255,.72)"; ctx.stroke();
   }
   ctx.restore();
 }
@@ -792,12 +726,12 @@ function frame() {
   const cam = makeCamera(heading, pitch, roll, w, h);
   lastPitch = pitch;
   const v = viewpoint(s);
-  ribbonA += (ribbonTarget(s, compass) - ribbonA) * 0.08;   // fondu doux, jamais de saut
+  flecheA += (flecheTarget(s, compass) - flecheA) * 0.08;   // fondu doux, jamais de saut
   if (!mapFull && !nativeOn) {                             // (appli Android : ARCore dessine le tracé lui-même)
     if (noCamera) drawGrid(cam, v.here, heading);
-    if (ribbonA > 0.02 && !s.st.arrived) {
-      ctx.save(); ctx.globalAlpha = ribbonA;
-      drawPath(cam, s, v.here, v.pos);
+    if (flecheA > 0.02 && !s.st.arrived) {
+      ctx.save(); ctx.globalAlpha = flecheA;
+      drawArrow(cam, s, heading);
       ctx.restore();
     }
     // pointillés vers l'itinéraire : seulement si la position est connue à 8 m près (sinon ils mentiraient)
@@ -810,15 +744,15 @@ function frame() {
   }
   renderUi(s, heading, compass);
 }
-// Un seul repère visuel : le ruban au sol. Il ne montre jamais un tracé faux : il pâlit quand la position
-// devient imprécise (8 à 25 m d'incertitude) et disparaît au-delà, ou pendant le recalage après une pause de
-// l'appli. La voix et la consigne écrite prennent alors le relais.
-let ribbonA = 0, recal = null;          // recal : {since (horloge), at (performance)} pendant le recalage
+// Un seul repère visuel : la flèche au sol. Elle ne montre jamais une direction fausse : elle disparaît hors
+// de l'itinéraire, boussole non calibrée, ou pendant le recalage après une pause de l'appli, et elle pâlit
+// quand la position devient trop imprécise. La voix et la consigne écrite prennent alors le relais.
+let flecheA = 0, recal = null;          // recal : {since (horloge), at (performance)} pendant le recalage
 function precision(s) {
   const r = s.nav.real;
   return r && Date.now() - r.at < 15000 ? r.acc : null;
 }
-function ribbonTarget(s, compass) {
+function flecheTarget(s, compass) {
   const r = s.nav.real;
   if (recal) {
     // fin du recalage : une position GPS reçue APRÈS le retour, assez précise, et la boussole stabilisée (2 s)
@@ -826,14 +760,12 @@ function ribbonTarget(s, compass) {
     else return 0;
   }
   if (!compass) return 1;                                   // ordinateur : pas de GPS de terrain, on montre tout
-  // Le ruban est posé au sol depuis la position sur l'itinéraire : il n'a de sens que si l'on y est vraiment
-  // (pas à l'intérieur, pas à l'écart), avec un GPS précis et une boussole fiable. Sinon : la voix et le plan.
+  // La table de décision est dans js/arrow.js, testée. Elle est plus permissive que celle du ruban : la
+  // flèche ne prétend pas montrer OÙ est le trottoir, seulement de quel côté part l'itinéraire, et ce cap
+  // reste juste même avec un GPS médiocre (terrain de nuit du 19/10 : 14 m en permanence).
   const n = s.nav;
-  if (n.phase !== "route" || n.offRoute || n.away || !compassOk()) return 0;
-  const acc = precision(s);
-  // terrain de nuit (19/10) : GPS à 14 m en permanence, le ruban ne s'affichait jamais. Plein jusqu'à 8 m,
-  // de plus en plus pâle jusqu'à 25 m, masqué au-delà.
-  return acc === null || acc > 25 ? 0 : acc <= 8 ? 1 : 1 - 0.6 * (acc - 8) / 17;
+  return opaciteFleche({phase: n.phase, offRoute: n.offRoute, away: n.away,
+                        boussoleOk: compassOk(), precisionM: precision(s)});
 }
 // Retour dans l'appli après une pause (écran verrouillé, autre appli) : l'ancien calage est faux. On efface
 // le ruban, on annonce « Recalage en cours », on remet à zéro filtres et suivi, et on relance la caméra.
@@ -842,7 +774,7 @@ function onVisibility() {
   if (document.visibilityState === "hidden") { hiddenAt = performance.now(); return; }
   if (performance.now() - hiddenAt < 1500) return;
   recal = {since: Date.now(), at: performance.now()};
-  ribbonA = 0; view = null; lastUi = ""; obs = null; labelSmooth.clear();
+  flecheA = 0; view = null; lastUi = ""; obs = null; labelSmooth.clear();
   Object.values(F).forEach(f => f.reset()); fusion.reset(); drawnH = null;
   tracker.reset(); dets = [];
   api.say?.("Recalage en cours, gardez le téléphone devant vous.", 1);   // niveau CONSIGNE (js/speech.js)
@@ -854,7 +786,7 @@ let hiddenAt = 0;
 // À l'écart du tracé (à l'intérieur, de l'autre côté de la rue, hors itinéraire), la vraie position GPS :
 // le ruban reste à sa vraie place dans la rue et des pointillés montrent comment le rejoindre.
 // Glissement lent entre deux mesures GPS pour que les lignes ne sautent pas.
-let lastView = 0, lastReach = 0;
+let lastView = 0;
 // Sur l'itinéraire, le ruban part de sous les pieds, sans retard : la position est prolongée au rythme de la marche
 // entre deux mesures GPS (au plus 1,5 s, une mesure arrive normalement chaque seconde), et reste SUR le tracé.
 // Avant : glissement de 1,6 s en ligne droite (en coupant les virages) ; en marchant puis en tournant, le ruban
@@ -1168,7 +1100,7 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  view = null; mapFull = false; sheet = null; lastUi = ""; ribbonA = 0; recal = null; obs = null; labelSmooth.clear();
+  view = null; mapFull = false; sheet = null; lastUi = ""; flecheA = 0; recal = null; obs = null; labelSmooth.clear();
   tracker.reset(); annState = {}; lastMovePos = null;
   Object.values(F).forEach(f => f.reset()); fusion.reset(); drawnH = null;
   sensors = {heading: null, pitch: null, roll: 0};
@@ -1248,5 +1180,5 @@ export function closeAR() {
 export const arOpen = () => root && !root.hidden;
 // Tests automatiques uniquement (adresse terminée par ?debug) : état des capteurs et des étiquettes
 if (new URLSearchParams(location.search).has("debug"))
-  globalThis.__ar = {get sensors() { return sensors; }, get obs() { return obs; }, get labels() { return [...labelSmooth]; }, compassOk, get ribbonA() { return ribbonA; },
-    get view() { return view; }, get reach() { return lastReach; }};
+  globalThis.__ar = {get sensors() { return sensors; }, get obs() { return obs; }, get labels() { return [...labelSmooth]; }, compassOk, get flecheA() { return flecheA; },
+    get view() { return view; }, get capFleche() { return capFlecheAffiche; }};

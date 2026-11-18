@@ -29,11 +29,18 @@ export function recentrage(ancre, max = RECENTRAGE_MAX_M) {
 /**
  * La vue caméra s'ouvre-t-elle d'office au départ du guidage ?
  *
- * Pour la malvoyance, non : le ruban ne se voit pas, et la caméra est le poste qui vide la
- * batterie. Le guidage démarre alors « réduit » — voix, vibrations et alertes, sans caméra.
- * Une exception : si la détection d'obstacles est activée, elle a besoin de la caméra, et
- * c'est justement à un malvoyant qu'elle sert le plus. On ne la lui retire pas.
+ * `demandee` est le choix de l'usager (réglage « Ouvrir la caméra au départ », 18/11/2026) :
+ * à faux, le guidage part toujours réduit, quel que soit le profil, et le navigateur ne
+ * demande donc plus l'autorisation de la caméra. Jusque-là, la détection d'obstacles étant
+ * active par défaut, la caméra s'ouvrait à chaque départ sans que personne puisse s'y opposer.
+ *
+ * Sans choix exprimé, la règle du profil s'applique. Pour la malvoyance, non : la flèche ne se
+ * voit pas, et la caméra est le poste qui vide la batterie. Le guidage démarre alors « réduit »
+ * — voix, vibrations et alertes, sans caméra. Une exception : si la détection d'obstacles est
+ * activée, elle a besoin de la caméra, et c'est justement à un malvoyant qu'elle sert le plus.
+ * On ne la lui retire pas.
  */
-export function cameraDOffice({malvoyance = false, detection = false} = {}) {
+export function cameraDOffice({malvoyance = false, detection = false, demandee = true} = {}) {
+  if (!demandee) return false;
   return !malvoyance || detection;
 }
