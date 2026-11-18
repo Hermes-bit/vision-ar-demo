@@ -49,9 +49,6 @@ const MAN_ICON = {left: "corner-up-left", right: "corner-up-right", slight_left:
   uturn: "uturn", straight: "arrow-up", depart: "navigation", arrive: "flag"};
 const PROFILE = {manual_wheelchair: "Profil PMR", electric_wheelchair: "Profil PMR", cane_or_walker: "Mobilité réduite",
   low_vision: "Malvoyance", hard_of_hearing: "Malentendance", pedestrian: "Piéton"};
-// Libelles du badge de profil, mot pour mot ceux des maquettes du 18/11/2026.
-const BADGE_PROFIL = {manual_wheelchair: "Fauteuil manuel", electric_wheelchair: "Fauteuil électrique",
-  cane_or_walker: "Canne ou déambulateur", low_vision: "Malvoyance", hard_of_hearing: "Malentendant"};
 const REPORT_KINDS = [["works", "Travaux", "construction"], ["step", "Marche", "stairs"], ["street_furniture", "Mobilier urbain", "lamp-floor"],
   ["narrow_sidewalk", "Trottoir étroit", "narrow"], ["elevator_out", "Ascenseur en panne", "elevator"], ["parked_vehicle", "Véhicule garé", "car"],
   ["other", "Autre obstacle", "circle-alert"]];
@@ -753,23 +750,6 @@ function dessinerDiag(montrer) {
     images: imagesParSec, lecture: mesLecture, preparation: mesPrep, relances: relancesCamera,
   }).map(l => `<div class="${l.alerte ? "on" : ""}">${esc(l.texte)}</div>`).join("");
 }
-// Panneau de profil, posé à la place du dôme. Le contenu vient de l'appli (js/panneau.js
-// décide des sections) ; ici on ne fait que l'écrire quand il a changé, une fois par seconde
-// au plus — le reconstruire à chaque image coûterait pour rien.
-let panneauAt = 0, panneauDernier = null;
-function dessinerPanneau(s) {
-  const box = root?.querySelector(".ar-profil");
-  if (!box) return;
-  const t = performance.now();
-  if (panneauDernier !== null && t - panneauAt < 1000) return;
-  panneauAt = t;
-  const html = mapFull ? "" : (s.panneau?.() || "");
-  if (html === panneauDernier) return;
-  panneauDernier = html;
-  box.innerHTML = html;
-  box.hidden = !html;
-  root.classList.toggle("avec-panneau", !!html);
-}
 let lastFrameAt = 0;
 function frame() {
   raf = requestAnimationFrame(frame);
@@ -814,7 +794,6 @@ function frame() {
     if (s.detect && !noCamera) { runDetection(s); if (s.detectDebug) drawDetections(); else drawCorridorMarks(); }
   }
   compterImages();
-  dessinerPanneau(s);
   dessinerDiag(!!s.diag);
   renderUi(s, heading, compass);
 }
@@ -948,8 +927,7 @@ function renderUi(s, heading, compass) {
       <div class="chips">${chip("c-steps", "stairs", "Marches", r.steps_count)}${chip("c-eta", "clock", st.arrived ? "Arrivée" : `Arrivée ${eta}`, st.arrived ? eta : minsLeft)}${chip("c-dist", "route", "Distance", dist(st.remaining))}</div>
       <div class="bubble"><i class="bubble-ic">${icon(manIcon)}</i>
         <div class="bubble-txt"><b>${esc(title)}</b><span>${esc(subText)}</span>
-          ${BADGE_PROFIL[s.mobility] ? `<span class="pan-badge">Profil : ${esc(BADGE_PROFIL[s.mobility])}</span>` : ""}
-    ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
+        ${nativeOn && !nativeLocalized() && !st.arrived ? `<em class="arrow-note">${icon("camera")} ${esc(nativeStatus?.message || "Localisation précise en cours : filmez les façades et la rue autour de vous.")}</em>` : ""}
         ${!nativeOn && recal && !st.arrived ? `<em class="arrow-note">${icon("locate-fixed")} Recalage en cours : gardez le téléphone devant vous</em>` : ""}
         ${!nativeOn && !recal && compass && !compassOk() && !st.arrived ? `<em class="arrow-note">${icon("compass")} Boussole à calibrer : décrivez un 8 avec le téléphone</em>` : ""}
         ${!nativeOn && !recal && compass && compassOk() && (acc === null || acc > 25) && !st.arrived ? `<em class="arrow-note">${icon("volume-2")} Position imprécise${acc !== null ? ` (à ${Math.round(acc)} m près)` : ""} : tracé et repères masqués, suivez la voix</em>` : ""}
@@ -1175,7 +1153,7 @@ export async function openAR(options) {
   api = options;
   const mob = api.state()?.mobility || "";
   camHeight = mob.includes("wheelchair") ? PHONE_HEIGHT_M.wheelchair : PHONE_HEIGHT_M.standing;
-  view = null; mapFull = false; sheet = null; lastUi = ""; panneauDernier = null; flecheA = 0; recal = null; obs = null; labelSmooth.clear();
+  view = null; mapFull = false; sheet = null; lastUi = ""; flecheA = 0; recal = null; obs = null; labelSmooth.clear();
   tracker.reset(); annState = {}; lastMovePos = null;
   Object.values(F).forEach(f => f.reset()); fusion.reset(); drawnH = null;
   sensors = {heading: null, pitch: null, roll: 0};
@@ -1186,7 +1164,7 @@ export async function openAR(options) {
     <div class="dome"><div class="dome-map"></div>
       <svg class="ring" preserveAspectRatio="none" aria-hidden="true"><path class="ring-arc"/><g class="ring-ticks"></g></svg>
       <button class="dome-grip" aria-label="Agrandir la carte" aria-expanded="false"><span></span></button></div>
-    <div class="ar-ui"></div><div class="ar-profil" hidden></div><div class="ar-diag" hidden></div>
+    <div class="ar-ui"></div><div class="ar-diag" hidden></div>
     <div class="ar-live sr-only" aria-live="polite"></div>`;
   video = root.querySelector("video");
   canvas = root.querySelector("canvas");
